@@ -19,7 +19,6 @@ class Order(Base):
     customer_telegram_id: Mapped[int] = mapped_column(BigInteger)
     customer_username: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    # Нужно для отправки сообщений покупателю через Telegram Business
     business_connection_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
     product_id: Mapped[int] = mapped_column(BigInteger)
@@ -67,7 +66,6 @@ class Supplier(Base):
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True)
     name: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    # Например: Telegram, WhatsApp, Google, Instagram
     service_name: Mapped[str] = mapped_column(String)
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
