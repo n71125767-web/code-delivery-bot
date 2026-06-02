@@ -450,5 +450,16 @@ async def main():
     )
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+@dp.message(commands=["start"])
+async def handle_start(message: Message):
+    user_id = message.from_user.id
+
+    # Проверяем, есть ли у нас заказы, которые ждут этого пользователя
+    async with SessionLocal() as session:
+        orders = await get_orders_waiting_user(session, user_id)
+        for order in orders:
+            await bot.send_message(
+                user_id,
+                f"Ваш заказ #{order.operation_id} принят ✅"
+            )
+            await mark_order_as_notified(session, order)
