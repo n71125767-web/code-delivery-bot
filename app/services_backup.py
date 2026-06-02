@@ -1,7 +1,7 @@
 from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models import Order, SupplierRequest, Supplier
+from app.models import Order, SupplierRequest
 
 
 async def create_order_from_purchase(session: AsyncSession, data: dict) -> Order:
@@ -120,53 +120,3 @@ async def close_supplier_request(
         request.answered_at = datetime.utcnow()
 
     await session.commit()
-    # --- Управление поставщиками ---
-async def add_supplier(session, telegram_id: int, service_name: str, name: str | None = None):
-    existing = await session.scalar(
-        select(Supplier).where(Supplier.telegram_id == telegram_id)
-    )
-    if existing:
-        existing.service_name = service_name
-        existing.name = name
-        existing.is_active = True
-        await session.commit()
-        await session.refresh(existing)
-        return existing
-    supplier = Supplier(
-        telegram_id=telegram_id,
-        service_name=service_name,
-        name=name,
-        is_active=True
-    )
-    session.add(supplier)
-    await session.commit()
-    await session.refresh(supplier)
-    return supplier
-
-
-async def delete_supplier(session, telegram_id: int):
-    supplier = await session.scalar(
-        select(Supplier).where(Supplier.telegram_id == telegram_id)
-    )
-    if not supplier:
-        return False
-    supplier.is_active = False
-    await session.commit()
-    return True
-
-
-async def get_supplier_for_service(session, service_name: str):
-    suppliers = await session.scalars(
-        select(Supplier).where(Supplier.is_active == True)
-    )
-    for supplier in suppliers.all():
-        if supplier.service_name.strip().lower() == service_name.strip().lower():
-            return supplier
-    return None
-
-
-async def list_suppliers(session):
-    result = await session.scalars(
-        select(Supplier).where(Supplier.is_active == True)
-    )
-    return list(result.all())

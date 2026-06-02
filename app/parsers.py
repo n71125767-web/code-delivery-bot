@@ -2,11 +2,7 @@ import re
 
 
 def extract_purchase_data(text: str) -> dict | None:
-    """
-    Парсит сообщение покупки.
-    """
-
-    if "Статус: PAID" not in text:
+    if "Статус: PAID" not in text and "Статус:PAID" not in text:
         return None
 
     operation_id = search_int(r"ID операции:\s*(\d+)", text)
@@ -42,10 +38,6 @@ def extract_purchase_data(text: str) -> dict | None:
 
 
 def extract_phone(text: str) -> str | None:
-    """
-    Поставщик может написать что угодно.
-    Бот достаёт только номер.
-    """
     clean = text.replace(" ", "")
     match = re.search(r"\+?\d{8,15}", clean)
 
@@ -56,10 +48,6 @@ def extract_phone(text: str) -> str | None:
 
 
 def extract_code(text: str) -> str | None:
-    """
-    Поставщик может написать что угодно.
-    Бот достаёт только цифровой код.
-    """
     clean = text.replace(" ", "")
     matches = re.findall(r"\d{4,12}", clean)
 
