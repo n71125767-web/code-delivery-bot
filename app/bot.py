@@ -378,5 +378,77 @@ async def main():
     await dp.start_polling(bot)
 
 
+SHOP_BOT_USERNAME = "MrvlShopXBot"
+
+
+@dp.business_message(F.text)
+async def business_text_handler(message: Message):
+    sender = message.from_user
+    text = message.text or ""
+
+    if not sender:
+        return
+
+    # Проверяем, что сообщение пришло именно от шоп-бота
+    if sender.username != SHOP_BOT_USERNAME:
+        return
+
+    async with SessionLocal() as session:
+        purchase_data = extract_purchase_data(text)
+
+        if not purchase_data:
+            for admin_id in ADMIN_IDS:
+                await bot.send_message(
+                    admin_id,
+                    "⚠️ Получил business-сообщение от шоп-бота, но не смог распарсить покупку.\n\n"
+                    f"Текст:\n{text}"
+                )
+            return
+
+        order = await create_order_from_purchase(session, purchase_data)
+
+        for admin_id in ADMIN_IDS:
+            await bot.send_message(
+                admin_id,
+                f"✅ Покупка из Business обработана.\n\n"
+                f"Заказ: #{order.operation_id}\n"
+                f"Покупатель: {order.customer_username or order.customer_telegram_id}\n"
+                f"Товар: {order.product_name}\n\n"
+                f"Статус: ждём сервис от покупателя."
+            )
+
+        try:
+            await bot.send_message(
+                order.customer_telegram_id,
+                "Оплата получена ✅\n\n"
+                "Напишите, для какого сервиса нужен номер.\n"
+                "Например: Telegram, WhatsApp, Google."
+            )
+        except Exception as e:
+            for admin_id in ADMIN_IDS:
+                await bot.send_message(
+                    admin_id,
+                    "⚠️ Не смог написать покупателю в личку.\n"
+                    "Покупатель должен сначала нажать /start в боте.\n\n"
+                    f"Заказ: #{order.operation_id}\n"
+                    f"Ошибка: {e}"
+                )
+
+
+async def main():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    await dp.start_polling(
+        bot,
+        allowed_updates=[
+            "message",
+            "callback_query",
+            "business_connection",
+            "business_message",
+        ],
+    )
+
+
 if __name__ == "__main__":
     asyncio.run(main())
