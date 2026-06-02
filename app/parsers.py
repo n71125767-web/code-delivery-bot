@@ -73,3 +73,124 @@ def search_text(pattern: str, text: str) -> str | None:
         return None
 
     return match.group(1).strip()
+    from datetime import datetime, timedelta
+from sqlalchemy import select
+from app.models import Order
+
+
+def normalize_username(username: str | None) -> str | None:
+    if not username:
+        return None
+
+    username = username.strip().lower()
+
+    if username.startswith("@"):
+        username = username[1:]
+
+    return username or None
+
+
+async def find_waiting_service_order_by_id_or_username_today(
+    session,
+    customer_telegram_id: int,
+    customer_username: str | None,
+    hours: int = 24,
+) -> Order | None:
+    """
+    Ищем заказ за последние N часов.
+
+    Сначала ищем по Telegram ID.
+    Если не нашли — ищем по username.
+    """
+
+    time_limit = datetime.utcnow() - timedelta(hours=hours)
+
+    # 1. Сначала ищем по Telegram ID — это самый надёжный вариант.
+    result = await session.scalars(
+        select(Order)
+        .where(Order.customer_telegram_id == customer_telegram_id)
+        .where(Order.status == "waiting_service")
+        .where(Order.created_at >= time_limit)
+        .order_by(Order.id.desc())
+    )
+
+    order = result.first()
+
+    if order:
+        return order
+
+    # 2. Если по ID не нашли — пробуем по username.
+    username_clean = normalize_username(customer_username)
+
+    if not username_clean:
+        return None
+
+    result = await session.scalars(
+        select(Order)
+        .where(Order.customer_username.is_not(None))
+        .where(Order.status == "waiting_service")
+        .where(Order.created_at >= time_limit)
+        .order_by(Order.id.desc())
+    )
+
+    orders = list(result.all())
+
+    for order in orders:
+        order_username = normalize_username(order.customer_username)
+
+        if order_username == username_clean:
+            return order
+
+    return None
+
+
+async def find_number_sent_order_by_id_or_username_today(
+    session,
+    customer_telegram_id: int,
+    customer_username: str | None,
+    hours: int = 24,
+) -> Order | None:
+    """
+    Ищем заказ за последние N часов, где покупателю уже выдали номер.
+    Нужно для сообщения 'код отправлен'.
+    """
+
+    time_limit = datetime.utcnow() - timedelta(hours=hours)
+
+    # 1. Сначала по Telegram ID.
+    result = await session.scalars(
+        select(Order)
+        .where(Order.customer_telegram_id == customer_telegram_id)
+        .where(Order.status == "number_sent_to_customer")
+        .where(Order.created_at >= time_limit)
+        .order_by(Order.id.desc())
+    )
+
+    order = result.first()
+
+    if order:
+        return order
+
+    # 2. Потом по username.
+    username_clean = normalize_username(customer_username)
+
+    if not username_clean:
+        return None
+
+    result = await session.scalars(
+        select(Order)
+        .where(Order.customer_username.is_not(None))
+        .where(Order.status == "number_sent_to_customer")
+        .where(Order.created_at >= time_limit)
+        .order_by(Order.id.desc())
+    )
+
+    orders = list(result.all())
+
+    for order in orders:
+        order_username = normalize_username(order.customer_username)
+
+        if order_username == username_clean:
+            return order
+
+    return None
