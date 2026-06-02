@@ -1,5 +1,6 @@
 from datetime import datetime
-from sqlalchemy import BigInteger, String, DateTime, Text, ForeignKey, Numeric
+
+from sqlalchemy import BigInteger, String, DateTime, Text, ForeignKey, Numeric, Boolean
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -18,6 +19,9 @@ class Order(Base):
     customer_telegram_id: Mapped[int] = mapped_column(BigInteger)
     customer_username: Mapped[str | None] = mapped_column(String, nullable=True)
 
+    # Нужно для отправки сообщений покупателю через Telegram Business
+    business_connection_id: Mapped[str | None] = mapped_column(String, nullable=True)
+
     product_id: Mapped[int] = mapped_column(BigInteger)
     product_name: Mapped[str] = mapped_column(String)
 
@@ -32,6 +36,8 @@ class Order(Base):
     status: Mapped[str] = mapped_column(String, default="waiting_service")
 
     raw_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    timeout_notified: Mapped[bool] = mapped_column(Boolean, default=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -51,3 +57,19 @@ class SupplierRequest(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     answered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class Supplier(Base):
+    __tablename__ = "suppliers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True)
+    name: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # Например: Telegram, WhatsApp, Google, Instagram
+    service_name: Mapped[str] = mapped_column(String)
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
