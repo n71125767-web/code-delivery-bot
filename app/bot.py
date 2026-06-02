@@ -380,129 +380,147 @@ async def business_text_handler(message: Message):
         )
 
 
-@dp.message(F.text)
-async def text_handler(message: Message):
+@dp.business_message(F.text)
+async def business_text_handler(message: Message):
     """
-    Обычные сообщения обычному боту.
+    Сообщения, которые приходят на обычный Telegram-аккаунт
+    с подключённым Business-ботом.
 
-    Здесь работают:
-    - админ;
-    - поставщик;
-    - ручной тест покупки от админа.
+    Тут ловим:
+    1. сообщения от шоп-бота;
+    2. сообщения от покупателя;
+    3. любые business-сообщения для диагностики.
     """
 
-    user_id = message.from_user.id
+    sender = message.from_user
     text = message.text or ""
 
+    if not sender:
+        await send_to_admins(
+            "⚠️ Получил business-сообщение, но sender пустой.\n\n"
+            f"Текст:\n{text}"
+        )
+        return
+
+    business_connection_id = getattr(message, "business_connection_id", None)
+
+    # ВАЖНО: диагностический лог.
+    # Теперь админ будет видеть, кто именно написал в Business-аккаунт.
+    await send_to_admins(
+        "📩 Получено Business-сообщение.\n\n"
+        f"От ID: {sender.id}\n"
+        f"Username: @{sender.username if sender.username else '-'}\n"
+        f"Имя: {sender.full_name}\n"
+        f"Business connection: {business_connection_id or '-'}\n\n"
+        f"Текст:\n{text[:1500]}"
+    )
+
     async with SessionLocal() as session:
+        # 1. Сначала пробуем понять, это покупка от шоп-бота или нет.
         purchase_data = extract_purchase_data(text)
 
-        if purchase_data and is_admin(user_id):
+        if purchase_data:
+            purchase_data["business_connection_id"] = business_connection_id
+
             order = await create_order_from_purchase(session, purchase_data)
 
-            await message.answer(
-                f"✅ Покупка обработана вручную.\n\n"
+            await send_to_admins(
+                "✅ Покупка из Business обработана.\n\n"
                 f"Заказ: #{order.operation_id}\n"
                 f"Покупатель: {order.customer_username or order.customer_telegram_id}\n"
                 f"Товар: {order.product_name}\n\n"
                 f"Статус: ждём сервис от покупателя."
             )
-            return
 
-        db_supplier = await get_active_supplier_by_user_id(session, user_id)
-        is_supplier = db_supplier is not None or is_supplier_from_env(user_id)
-
-        if is_supplier:
-            order_for_number = await find_order_waiting_supplier_number(session, user_id)
-
-            if order_for_number:
-                phone = extract_phone(text)
-
-                if not phone:
-                    await message.answer(
-                        "Не нашёл номер в сообщении.\n"
-                        "Можно прислать любой текст, но в нём должен быть номер.\n"
-                        "Пример: номер +79990000000"
-                    )
-                    return
-
-                order_for_number.phone_number = phone
-                order_for_number.status = "number_sent_to_customer"
-
-                await close_supplier_request(
-                    session=session,
-                    order=order_for_number,
-                    supplier_telegram_id=user_id,
-                    request_type="number",
-                )
-
-                await session.commit()
-
-                await send_to_customer(
-                    order_for_number,
-                    f"Ваш номер для сервиса {order_for_number.service_name}:\n\n"
-                    f"{phone}\n\n"
-                    f"Введите этот номер в сервисе.\n"
-                    f"Когда сервис отправит код, нажмите кнопку ниже или напишите: Код отправлен.",
-                    reply_markup=code_sent_keyboard(order_for_number.id),
-                )
-
-                await message.answer(
-                    f"✅ Номер принят и отправлен покупателю.\n"
-                    f"Заказ #{order_for_number.operation_id}"
-                )
-                return
-
-            order_for_code = await find_order_waiting_supplier_code(session, user_id)
-
-            if order_for_code:
-                code = extract_code(text)
-
-                if not code:
-                    await message.answer(
-                        "Не нашёл код в сообщении.\n"
-                        "Можно прислать любой текст, но в нём должны быть цифры кода.\n"
-                        "Пример: код 123456"
-                    )
-                    return
-
-                order_for_code.verification_code = code
-                order_for_code.status = "code_sent_to_customer"
-
-                await close_supplier_request(
-                    session=session,
-                    order=order_for_code,
-                    supplier_telegram_id=user_id,
-                    request_type="code",
-                )
-
-                await session.commit()
-
-                await send_to_customer(
-                    order_for_code,
-                    f"Ваш код:\n\n{code}\n\n"
-                    f"Введите его в сервисе.\n"
-                    f"После успешной привязки нажмите кнопку ниже.",
-                    reply_markup=confirm_keyboard(order_for_code.id),
-                )
-
-                await message.answer(
-                    f"✅ Код принят и отправлен покупателю.\n"
-                    f"Заказ #{order_for_code.operation_id}"
-                )
-                return
-
-            await message.answer(
-                "Вы поставщик, но сейчас нет активного запроса на номер или код."
+            await send_to_customer(
+                order,
+                "Оплата получена ✅\n\n"
+                "Напишите, для какого сервиса нужен номер.\n"
+                "Например: Telegram, WhatsApp, Google."
             )
             return
 
-        await message.answer(
-            "Не понял сообщение.\n\n"
-            "Если вы поставщик — дождитесь запроса от бота.\n"
-            "Если вы админ — используйте /status или /suppliers."
+        # 2. Если это не покупка, значит это может быть сообщение покупателя с сервисом.
+        order = await find_waiting_service_order(session, sender.id)
+
+        if order:
+            service_name = text.strip()
+
+            if len(service_name) < 2:
+                await message.answer("Напишите название сервиса, например: Telegram")
+                return
+
+            order.service_name = service_name
+            order.business_connection_id = business_connection_id
+            order.status = "waiting_supplier_number"
+            await session.commit()
+
+            supplier = await get_supplier_for_service(session, service_name)
+
+            if not supplier:
+                order.status = "problem"
+                await session.commit()
+
+                await message.answer(
+                    "⚠️ Сейчас нет поставщика для этого сервиса.\n"
+                    "Администратор уже получил уведомление."
+                )
+
+                await send_to_admins(
+                    f"⚠️ Нет поставщика для сервиса: {service_name}\n"
+                    f"Заказ: #{order.operation_id}\n"
+                    f"Покупатель: {order.customer_username or order.customer_telegram_id}"
+                )
+                return
+
+            supplier_id = supplier.telegram_id
+
+            await create_supplier_request(
+                session=session,
+                order=order,
+                supplier_telegram_id=supplier_id,
+                request_type="number",
+            )
+
+            await bot.send_message(
+                supplier_id,
+                f"📦 Новый заказ #{order.operation_id}\n\n"
+                f"Товар: {order.product_name}\n"
+                f"Покупатель: {order.customer_username or order.customer_telegram_id}\n"
+                f"Сервис: {service_name}\n\n"
+                f"Нужен номер для получения кода.\n"
+                f"Можете прислать сообщение в любом формате — "
+                f"бот отправит покупателю только номер."
+            )
+
+            await message.answer(
+                "Принято ✅\n\n"
+                "Запрос поставщику отправлен.\n"
+                "Скоро пришлю номер."
+            )
+            return
+
+        # 3. Если покупатель пишет "код отправлен" текстом.
+        lower_text = text.lower().strip()
+
+        if lower_text in ["код отправлен", "отправил код", "код пришел", "код пришёл"]:
+            await message.answer(
+                "Не нашёл активный заказ с выданным номером.\n"
+                "Если номер уже был выдан, напишите администратору."
+            )
+            return
+
+        # 4. Если сообщение пришло, но бот его не понял.
+        await send_to_admins(
+            "⚠️ Business-сообщение пришло, но бот не понял его как покупку или сервис.\n\n"
+            f"От: @{sender.username if sender.username else sender.id}\n"
+            f"Текст:\n{text}"
         )
 
+        await message.answer(
+            "Сообщение получено ✅\n\n"
+            "Если вы уже оплатили заказ, дождитесь обработки покупки."
+        )
 
 @dp.callback_query(F.data.startswith("customer_code_sent:"))
 async def customer_code_sent_handler(callback: CallbackQuery):
