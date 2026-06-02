@@ -73,44 +73,55 @@ async def send_to_admins(text: str) -> None:
             logging.error("Не смог отправить админу %s сообщение: %s", admin_id, e)
 
 
-async def send_to_customer(order: Order, text: str, reply_markup=None) -> None:
+async def send_to_customer(order: Order, text: str, reply_markup=None) -> bool:
     """
-    Отправка покупателю.
+    Отправка покупателю через Telegram Business.
 
-    Если есть business_connection_id, пробуем писать через Telegram Business.
-    Если aiogram не поддержит этот параметр, пробуем обычную отправку.
+    ВАЖНО:
+    Нельзя писать покупателю, пока он сам не написал
+    в ваш Telegram-аккаунт с подключённым Business-ботом.
+
+    Если business_connection_id пустой — бот НЕ пытается писать как обычный бот,
+    потому что это вызывает ошибку chat not found.
     """
+
+    if not order.business_connection_id:
+        await send_to_admins(
+            "⚠️ Не могу написать покупателю через Business.\n\n"
+            f"Заказ: #{order.operation_id}\n"
+            f"Покупатель: {order.customer_username or order.customer_telegram_id}\n\n"
+            "Причина: покупатель ещё не написал в ваш Telegram-аккаунт, "
+            "поэтому нет business_connection_id покупателя."
+        )
+        return False
 
     try:
-        if order.business_connection_id:
-            await bot.send_message(
-                chat_id=order.customer_telegram_id,
-                text=text,
-                reply_markup=reply_markup,
-                business_connection_id=order.business_connection_id,
-            )
-        else:
-            await bot.send_message(
-                chat_id=order.customer_telegram_id,
-                text=text,
-                reply_markup=reply_markup,
-            )
-
-    except TypeError:
         await bot.send_message(
             chat_id=order.customer_telegram_id,
             text=text,
             reply_markup=reply_markup,
+            business_connection_id=order.business_connection_id,
         )
+        return True
+
+    except TypeError:
+        await send_to_admins(
+            "⚠️ Установленная версия aiogram не поддерживает business_connection_id.\n\n"
+            "Выполни локально:\n"
+            "pip install -U aiogram\n\n"
+            "Потом обнови requirements.txt и залей на GitHub."
+        )
+        return False
 
     except Exception as e:
         await send_to_admins(
-            "⚠️ Не смог отправить сообщение покупателю.\n\n"
+            "⚠️ Не смог отправить сообщение покупателю через Business.\n\n"
             f"Заказ: #{order.operation_id}\n"
             f"Покупатель: {order.customer_username or order.customer_telegram_id}\n"
+            f"business_connection_id: {order.business_connection_id}\n"
             f"Ошибка: {e}"
         )
-
+        return False
 
 @dp.message(Command("start"))
 async def start_handler(message: Message):
@@ -256,12 +267,12 @@ async def list_suppliers_handler(message: Message):
 @dp.business_message(F.text)
 async def business_text_handler(message: Message):
     """
-    Сообщения, которые приходят на обычный Telegram-аккаунт
+    Все сообщения, которые приходят в ваш обычный Telegram-аккаунт
     с подключённым Business-ботом.
 
     Тут обрабатываем:
     1. сообщение о покупке от шоп-бота;
-    2. сообщение покупателя с названием сервиса;
+    2. сообщение покупателя с сервисом;
     3. сообщение покупателя "код отправлен".
     """
 
@@ -269,45 +280,67 @@ async def business_text_handler(message: Message):
     text = message.text or ""
 
     if not sender:
+        await send_to_admins(
+            "⚠️ Получил Business-сообщение, но sender пустой.\n\n"
+            f"Текст:\n{text}"
+        )
         return
 
     business_connection_id = getattr(message, "business_connection_id", None)
 
+    await send_to_admins(
+        "📩 Business-сообщение получено.\n\n"
+        f"От ID: {sender.id}\n"
+        f"Username: @{sender.username if sender.username else '-'}\n"
+        f"Имя: {sender.full_name}\n"
+        f"Business connection: {business_connection_id or '-'}\n\n"
+        f"Текст:\n{text[:1500]}"
+    )
+
     async with SessionLocal() as session:
+        # 1. Сначала проверяем: это сообщение о покупке от шоп-бота?
         purchase_data = extract_purchase_data(text)
 
         if purchase_data:
-            purchase_data["business_connection_id"] = business_connection_id
+            # ВАЖНО:
+            # Это business_connection_id шоп-бота, НЕ покупателя.
+            # Поэтому в заказ его НЕ сохраняем как buyer connection.
+            purchase_data["business_connection_id"] = None
 
             order = await create_order_from_purchase(session, purchase_data)
 
             await send_to_admins(
-                "✅ Покупка из Business обработана.\n\n"
+                "✅ Покупка от шоп-бота обработана.\n\n"
                 f"Заказ: #{order.operation_id}\n"
                 f"Покупатель: {order.customer_username or order.customer_telegram_id}\n"
+                f"Telegram ID покупателя: {order.customer_telegram_id}\n"
                 f"Товар: {order.product_name}\n\n"
-                f"Статус: ждём сервис от покупателя."
+                "Теперь покупатель должен написать в ваш Telegram-аккаунт, "
+                "например: Telegram / WhatsApp / Google."
             )
 
-            await send_to_customer(
-                order,
-                "Оплата получена ✅\n\n"
-                "Напишите, для какого сервиса нужен номер.\n"
-                "Например: Telegram, WhatsApp, Google."
-            )
+            # НЕ ПИШЕМ покупателю тут.
+            # Потому что пока покупатель сам не написал в ваш аккаунт,
+            # у нас нет его business_connection_id.
             return
 
+        # 2. Проверяем, есть ли заказ, который ждёт сервис от этого покупателя.
         order = await find_waiting_service_order(session, sender.id)
 
         if order:
+            order.business_connection_id = business_connection_id
+
             service_name = text.strip()
 
             if len(service_name) < 2:
-                await message.answer("Напишите название сервиса, например: Telegram")
+                await bot.send_message(
+                    chat_id=sender.id,
+                    text="Напишите название сервиса, например: Telegram",
+                    business_connection_id=business_connection_id,
+                )
                 return
 
             order.service_name = service_name
-            order.business_connection_id = business_connection_id
             order.status = "waiting_supplier_number"
             await session.commit()
 
@@ -317,9 +350,13 @@ async def business_text_handler(message: Message):
                 order.status = "problem"
                 await session.commit()
 
-                await message.answer(
-                    "⚠️ Сейчас нет поставщика для этого сервиса.\n"
-                    "Администратор уже получил уведомление."
+                await bot.send_message(
+                    chat_id=sender.id,
+                    text=(
+                        "⚠️ Сейчас нет поставщика для этого сервиса.\n"
+                        "Администратор уже получил уведомление."
+                    ),
+                    business_connection_id=business_connection_id,
                 )
 
                 await send_to_admins(
@@ -338,47 +375,144 @@ async def business_text_handler(message: Message):
                 request_type="number",
             )
 
+            try:
+                await bot.send_message(
+                    supplier_id,
+                    f"📦 Новый заказ #{order.operation_id}\n\n"
+                    f"Товар: {order.product_name}\n"
+                    f"Покупатель: {order.customer_username or order.customer_telegram_id}\n"
+                    f"Сервис: {service_name}\n\n"
+                    f"Нужен номер для получения кода.\n"
+                    f"Можете прислать сообщение в любом формате — "
+                    f"бот отправит покупателю только номер."
+                )
+            except Exception as e:
+                order.status = "problem"
+                await session.commit()
+
+                await bot.send_message(
+                    chat_id=sender.id,
+                    text=(
+                        "⚠️ Не смог отправить запрос поставщику.\n"
+                        "Администратор уже получил уведомление."
+                    ),
+                    business_connection_id=business_connection_id,
+                )
+
+                await send_to_admins(
+                    "⚠️ Не смог написать поставщику.\n\n"
+                    f"Поставщик ID: {supplier_id}\n"
+                    f"Заказ: #{order.operation_id}\n"
+                    f"Ошибка: {e}\n\n"
+                    "Поставщик должен сначала открыть обычного бота и нажать /start."
+                )
+                return
+
             await bot.send_message(
-                supplier_id,
-                f"📦 Новый заказ #{order.operation_id}\n\n"
-                f"Товар: {order.product_name}\n"
-                f"Покупатель: {order.customer_username or order.customer_telegram_id}\n"
-                f"Сервис: {service_name}\n\n"
-                f"Нужен номер для получения кода.\n"
-                f"Можете прислать сообщение в любом формате — "
-                f"бот отправит покупателю только номер."
-            )
-
-            await message.answer(
-                "Принято ✅\n\n"
-                "Запрос поставщику отправлен.\n"
-                "Скоро пришлю номер."
+                chat_id=sender.id,
+                text=(
+                    "Принято ✅\n\n"
+                    "Запрос поставщику отправлен.\n"
+                    "Скоро пришлю номер."
+                ),
+                business_connection_id=business_connection_id,
             )
             return
 
-        active_order = await find_waiting_service_order(session, sender.id)
-
-        if active_order:
-            await message.answer(
-                "Ваш заказ уже в обработке ✅\n\n"
-                f"Текущий статус: {active_order.status}"
-            )
-            return
-
+        # 3. Покупатель написал "код отправлен" текстом.
         lower_text = text.lower().strip()
 
         if lower_text in ["код отправлен", "отправил код", "код пришел", "код пришёл"]:
-            await message.answer(
-                "Не нашёл активный заказ с выданным номером.\n"
-                "Если номер уже был выдан, напишите администратору."
+            from sqlalchemy import select
+
+            result = await session.scalars(
+                select(Order)
+                .where(Order.customer_telegram_id == sender.id)
+                .where(Order.status == "number_sent_to_customer")
+                .order_by(Order.id.desc())
+            )
+
+            order = result.first()
+
+            if not order:
+                await bot.send_message(
+                    chat_id=sender.id,
+                    text=(
+                        "Не нашёл активный заказ с выданным номером.\n"
+                        "Если номер уже был выдан, напишите администратору."
+                    ),
+                    business_connection_id=business_connection_id,
+                )
+                return
+
+            order.business_connection_id = business_connection_id
+            order.status = "waiting_supplier_code"
+            await session.commit()
+
+            supplier = await get_supplier_for_service(session, order.service_name or "")
+
+            if not supplier:
+                order.status = "problem"
+                await session.commit()
+
+                await bot.send_message(
+                    chat_id=sender.id,
+                    text=(
+                        "⚠️ Сейчас нет поставщика для этого сервиса.\n"
+                        "Администратор уже получил уведомление."
+                    ),
+                    business_connection_id=business_connection_id,
+                )
+
+                await send_to_admins(
+                    f"⚠️ Нет поставщика для сервиса: {order.service_name}\n"
+                    f"Заказ: #{order.operation_id}"
+                )
+                return
+
+            await create_supplier_request(
+                session=session,
+                order=order,
+                supplier_telegram_id=supplier.telegram_id,
+                request_type="code",
+            )
+
+            await bot.send_message(
+                supplier.telegram_id,
+                f"📩 По заказу #{order.operation_id} покупатель отправил код на номер:\n\n"
+                f"{order.phone_number}\n\n"
+                f"Выдайте код.\n"
+                f"Можно прислать любой текст, покупателю уйдут только цифры."
+            )
+
+            await bot.send_message(
+                chat_id=sender.id,
+                text=(
+                    "Принято ✅\n\n"
+                    "Сообщил поставщику, что код отправлен.\n"
+                    "Жду код."
+                ),
+                business_connection_id=business_connection_id,
             )
             return
 
-        await message.answer(
-            "Не нашёл активный заказ.\n\n"
-            "Если вы уже оплатили, подождите сообщение от системы."
+        # 4. Сообщение пришло, но заказа под этого покупателя нет.
+        await bot.send_message(
+            chat_id=sender.id,
+            text=(
+                "Сообщение получено ✅\n\n"
+                "Но я не нашёл активный заказ на ваш Telegram ID.\n"
+                "Если вы уже оплатили, дождитесь сообщения о покупке или напишите администратору."
+            ),
+            business_connection_id=business_connection_id,
         )
 
+        await send_to_admins(
+            "⚠️ Business-сообщение пришло, но активный заказ не найден.\n\n"
+            f"От ID: {sender.id}\n"
+            f"Username: @{sender.username if sender.username else '-'}\n"
+            f"Текст:\n{text}"
+        )
 
 @dp.business_message(F.text)
 async def business_text_handler(message: Message):
