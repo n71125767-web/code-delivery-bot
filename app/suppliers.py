@@ -55,4 +55,5 @@ async def send_supplier_request(
         bot=bot,
         chat_id=supplier_id,
         text=text,
+        business_connection_id=buyer_business_connection_id,
     )

@@ -20,7 +20,6 @@ async def main():
         await conn.run_sync(Base.metadata.create_all)
 
     register_handlers(dp, bot)
-
     logger.info("Bot started")
 
     await dp.start_polling(
