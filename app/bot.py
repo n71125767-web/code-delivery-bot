@@ -11,7 +11,7 @@ from app.handlers import register_handlers
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-bot = Bot(token=8285811919:AAEMFDESHQzJLnBeXDDJkdmgCJGW7kkMmvc)
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 
