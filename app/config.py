@@ -22,16 +22,15 @@ ADMIN_IDS = parse_ids(os.getenv("ADMIN_IDS", ""))
 SUPPLIER_IDS = parse_ids(os.getenv("SUPPLIER_IDS", ""))
 
 SHOP_BOT_USERNAME = os.getenv("SHOP_BOT_USERNAME", "MrvlShopXBot").replace("@", "").strip().lower()
+ADMIN_BUSINESS_CONNECTION_ID = os.getenv("ADMIN_BUSINESS_CONNECTION_ID")
 
-# Если True, бот будет игнорировать сообщения от самого себя и других ботов,
-# кроме SHOP_BOT_USERNAME.
 IGNORE_OTHER_BOTS = os.getenv("IGNORE_OTHER_BOTS", "1").strip() == "1"
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is missing in .env")
-
 if not ADMIN_IDS:
     raise RuntimeError("ADMIN_IDS is missing in .env")
-
 if not SUPPLIER_IDS:
     raise RuntimeError("SUPPLIER_IDS is missing in .env")
+if not ADMIN_BUSINESS_CONNECTION_ID:
+    raise RuntimeError("ADMIN_BUSINESS_CONNECTION_ID is missing in .env")

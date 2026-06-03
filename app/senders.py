@@ -1,6 +1,6 @@
 import logging
-from aiogram import Bot
-from aiogram.types import Message
+from aiogram import Bot, types
+from app.config import ADMIN_BUSINESS_CONNECTION_ID
 
 logger = logging.getLogger(__name__)
 
@@ -12,6 +12,11 @@ async def safe_send_message(
     business_connection_id: str | None = None,
     reply_markup=None,
 ) -> bool:
+    # Не отправляем сообщение самому себе
+    if chat_id == bot.id:
+        logger.info("Попытка написать себе, пропускаем")
+        return False
+
     try:
         if business_connection_id:
             await bot.send_message(
@@ -27,10 +32,6 @@ async def safe_send_message(
                 reply_markup=reply_markup,
             )
         return True
-    except TypeError:
-        # На случай старой версии aiogram, где нет business_connection_id.
-        logger.exception("aiogram не принял business_connection_id. Обнови aiogram.")
-        return False
     except Exception:
         logger.exception("Не смог отправить сообщение chat_id=%s", chat_id)
         return False
@@ -38,7 +39,7 @@ async def safe_send_message(
 
 async def answer_message(
     bot: Bot,
-    message: Message,
+    message: types.Message,
     text: str,
     business_connection_id: str | None = None,
     reply_markup=None,
@@ -53,6 +54,10 @@ async def answer_message(
         )
 
     try:
+        # Не отвечаем самому себе
+        if message.from_user and message.from_user.id == bot.id:
+            logger.info("Попытка ответить самому себе, пропускаем")
+            return False
         await message.answer(text, reply_markup=reply_markup)
         return True
     except Exception:
