@@ -23,7 +23,8 @@ async def main() -> None:
     dp = Dispatcher()
     dp.include_router(router)
 
-    logger.info("Bot started")
+    me = await bot.me()
+    logger.info("Bot started: @%s id=%s", me.username, me.id)
 
     await dp.start_polling(
         bot,
