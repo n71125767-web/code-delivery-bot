@@ -1,36 +1,75 @@
 import re
+from decimal import Decimal
+
+
+def search_int(pattern: str, text: str) -> int | None:
+    match = re.search(pattern, text, flags=re.IGNORECASE)
+    if not match:
+        return None
+
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def search_str(pattern: str, text: str) -> str | None:
+    match = re.search(pattern, text, flags=re.IGNORECASE)
+    if not match:
+        return None
+
+    value = match.group(1).strip()
+    return value if value else None
 
 
 def extract_purchase_data(text: str) -> dict | None:
-    if "Статус: PAID" not in text and "Статус:PAID" not in text:
+    """
+    Парсит сообщение о покупке от shop-бота.
+
+    Главное:
+    - заказ принимаем только если есть PAID
+    - достаём ID операции
+    - достаём ID пользователя
+    - достаём username
+    - достаём товар
+    """
+
+    if "PAID" not in text.upper():
         return None
 
     operation_id = search_int(r"ID операции:\s*(\d+)", text)
+    external_id = search_str(r"Внешний ID:\s*([^\n]+)", text)
+
     customer_telegram_id = search_int(r"ID пользователя:\s*(\d+)", text)
+
+    customer_username = search_str(r"Пользователь:\s*@?([A-Za-z0-9_]+)", text)
+
     product_id = search_int(r"ID товара:\s*(\d+)", text)
 
-    external_id = search_text(r"Внешний ID:\s*([^\n]+)", text)
-    username = search_text(r"Пользователь:\s*(@\w+)", text)
-    product_name = search_text(r"Купил:\s*(.+)", text)
+    product_name = search_str(r"Купил:\s*(.+)", text)
+    if product_name:
+        product_name = product_name.strip()
 
+    amount_raw = search_str(r"Сумма:\s*([\d.,]+)", text)
     amount = None
-    currency = None
+    if amount_raw:
+        try:
+            amount = Decimal(amount_raw.replace(",", "."))
+        except Exception:
+            amount = None
 
-    amount_match = re.search(r"Сумма:\s*([\d.]+)\s*([A-Z]+)", text)
-    if amount_match:
-        amount = float(amount_match.group(1))
-        currency = amount_match.group(2)
+    currency = search_str(r"Сумма:\s*[\d.,]+\s*([A-ZА-Яа-я]+)", text)
 
-    if not operation_id or not customer_telegram_id or not product_id or not product_name:
+    if not operation_id:
         return None
 
     return {
         "operation_id": operation_id,
         "external_id": external_id,
         "customer_telegram_id": customer_telegram_id,
-        "customer_username": username,
+        "customer_username": customer_username,
         "product_id": product_id,
-        "product_name": product_name,
+        "product_name": product_name or "Без названия",
         "amount": amount,
         "currency": currency,
         "raw_message": text,
@@ -38,159 +77,45 @@ def extract_purchase_data(text: str) -> dict | None:
 
 
 def extract_phone(text: str) -> str | None:
-    clean = text.replace(" ", "")
-    match = re.search(r"\+?\d{8,15}", clean)
+    """
+    Достаёт номер телефона из сообщения поставщика.
+    Примеры:
+    +79990000000
+    79990000000
+    Номер: +7 999 000 00 00
+    """
 
+    match = re.search(r"(\+?\d[\d\s\-\(\)]{8,}\d)", text)
     if not match:
         return None
 
-    return match.group(0)
+    phone = match.group(1)
+    phone = re.sub(r"[^\d+]", "", phone)
+
+    if phone.startswith("++"):
+        phone = phone.replace("++", "+")
+
+    if len(re.sub(r"\D", "", phone)) < 9:
+        return None
+
+    return phone
 
 
 def extract_code(text: str) -> str | None:
-    clean = text.replace(" ", "")
-    matches = re.findall(r"\d{4,12}", clean)
-
-    if not matches:
-        return None
-
-    return matches[-1]
-
-
-def search_int(pattern: str, text: str) -> int | None:
-    match = re.search(pattern, text)
-
-    if not match:
-        return None
-
-    return int(match.group(1))
-
-
-def search_text(pattern: str, text: str) -> str | None:
-    match = re.search(pattern, text)
-
-    if not match:
-        return None
-
-    return match.group(1).strip()
-    from datetime import datetime, timedelta
-from sqlalchemy import select
-from app.models import Order
-
-
-def normalize_username(username: str | None) -> str | None:
-    if not username:
-        return None
-
-    username = username.strip().lower()
-
-    if username.startswith("@"):
-        username = username[1:]
-
-    return username or None
-
-
-async def find_waiting_service_order_by_id_or_username_today(
-    session,
-    customer_telegram_id: int,
-    customer_username: str | None,
-    hours: int = 24,
-) -> Order | None:
     """
-    Ищем заказ за последние N часов.
-
-    Сначала ищем по Telegram ID.
-    Если не нашли — ищем по username.
+    Достаёт код из сообщения поставщика.
+    Берёт цифровой код 4-8 цифр.
     """
 
-    time_limit = datetime.utcnow() - timedelta(hours=hours)
+    patterns = [
+        r"код[:\s\-]*([0-9]{4,8})",
+        r"code[:\s\-]*([0-9]{4,8})",
+        r"\b([0-9]{4,8})\b",
+    ]
 
-    # 1. Сначала ищем по Telegram ID — это самый надёжный вариант.
-    result = await session.scalars(
-        select(Order)
-        .where(Order.customer_telegram_id == customer_telegram_id)
-        .where(Order.status == "waiting_service")
-        .where(Order.created_at >= time_limit)
-        .order_by(Order.id.desc())
-    )
-
-    order = result.first()
-
-    if order:
-        return order
-
-    # 2. Если по ID не нашли — пробуем по username.
-    username_clean = normalize_username(customer_username)
-
-    if not username_clean:
-        return None
-
-    result = await session.scalars(
-        select(Order)
-        .where(Order.customer_username.is_not(None))
-        .where(Order.status == "waiting_service")
-        .where(Order.created_at >= time_limit)
-        .order_by(Order.id.desc())
-    )
-
-    orders = list(result.all())
-
-    for order in orders:
-        order_username = normalize_username(order.customer_username)
-
-        if order_username == username_clean:
-            return order
-
-    return None
-
-
-async def find_number_sent_order_by_id_or_username_today(
-    session,
-    customer_telegram_id: int,
-    customer_username: str | None,
-    hours: int = 24,
-) -> Order | None:
-    """
-    Ищем заказ за последние N часов, где покупателю уже выдали номер.
-    Нужно для сообщения 'код отправлен'.
-    """
-
-    time_limit = datetime.utcnow() - timedelta(hours=hours)
-
-    # 1. Сначала по Telegram ID.
-    result = await session.scalars(
-        select(Order)
-        .where(Order.customer_telegram_id == customer_telegram_id)
-        .where(Order.status == "number_sent_to_customer")
-        .where(Order.created_at >= time_limit)
-        .order_by(Order.id.desc())
-    )
-
-    order = result.first()
-
-    if order:
-        return order
-
-    # 2. Потом по username.
-    username_clean = normalize_username(customer_username)
-
-    if not username_clean:
-        return None
-
-    result = await session.scalars(
-        select(Order)
-        .where(Order.customer_username.is_not(None))
-        .where(Order.status == "number_sent_to_customer")
-        .where(Order.created_at >= time_limit)
-        .order_by(Order.id.desc())
-    )
-
-    orders = list(result.all())
-
-    for order in orders:
-        order_username = normalize_username(order.customer_username)
-
-        if order_username == username_clean:
-            return order
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
 
     return None

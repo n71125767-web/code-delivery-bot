@@ -1,28 +1,54 @@
 from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models import Order, SupplierRequest, Supplier
+from app.models import Order, SupplierRequest
 
 
-async def create_order_from_purchase(session: AsyncSession, data: dict) -> Order:
-    existing = await session.scalar(
-        select(Order).where(Order.operation_id == data["operation_id"])
+ACTIVE_CUSTOMER_STATUSES = [
+    "waiting_service",
+    "number_sent_to_customer",
+    "code_sent_to_customer",
+]
+
+
+async def get_order_by_operation_id(session: AsyncSession, operation_id: int) -> Order | None:
+    result = await session.execute(
+        select(Order).where(Order.operation_id == operation_id)
     )
+    return result.scalars().first()
+
+
+async def create_or_update_order_from_purchase(session: AsyncSession, data: dict) -> Order:
+    existing = await get_order_by_operation_id(session, data["operation_id"])
 
     if existing:
+        existing.external_id = data.get("external_id")
+        existing.customer_telegram_id = data.get("customer_telegram_id")
+        existing.customer_username = data.get("customer_username")
+        existing.product_id = data.get("product_id")
+        existing.product_name = data.get("product_name")
+        existing.amount = data.get("amount")
+        existing.currency = data.get("currency")
+        existing.raw_message = data.get("raw_message")
+        existing.updated_at = datetime.utcnow()
+
+        await session.commit()
+        await session.refresh(existing)
         return existing
 
     order = Order(
         operation_id=data["operation_id"],
         external_id=data.get("external_id"),
-        customer_telegram_id=data["customer_telegram_id"],
+        customer_telegram_id=data.get("customer_telegram_id"),
         customer_username=data.get("customer_username"),
-        product_id=data["product_id"],
-        product_name=data["product_name"],
+        product_id=data.get("product_id"),
+        product_name=data.get("product_name"),
         amount=data.get("amount"),
         currency=data.get("currency"),
         status="waiting_service",
         raw_message=data.get("raw_message"),
+        paid_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
     )
 
     session.add(order)
@@ -32,62 +58,84 @@ async def create_order_from_purchase(session: AsyncSession, data: dict) -> Order
     return order
 
 
-async def find_waiting_service_order(
+async def find_waiting_service_order_for_customer(
     session: AsyncSession,
-    customer_telegram_id: int,
+    telegram_id: int,
+    username: str | None,
 ) -> Order | None:
-    return await session.scalar(
+    result = await session.execute(
         select(Order)
-        .where(Order.customer_telegram_id == customer_telegram_id)
+        .where(Order.customer_telegram_id == telegram_id)
         .where(Order.status == "waiting_service")
-        .order_by(Order.id.desc())
+        .order_by(Order.created_at.desc())
     )
+    order = result.scalars().first()
+
+    if order:
+        return order
+
+    if username:
+        clean_username = username.replace("@", "").lower()
+
+        result = await session.execute(
+            select(Order)
+            .where(Order.customer_username.is_not(None))
+            .where(Order.status == "waiting_service")
+            .order_by(Order.created_at.desc())
+        )
+
+        orders = result.scalars().all()
+
+        for item in orders:
+            if item.customer_username and item.customer_username.replace("@", "").lower() == clean_username:
+                return item
+
+    return None
 
 
-async def find_order_waiting_supplier_number(
+async def find_active_order_for_customer(
     session: AsyncSession,
-    supplier_telegram_id: int,
+    telegram_id: int,
+    username: str | None,
 ) -> Order | None:
-    request = await session.scalar(
-        select(SupplierRequest)
-        .where(SupplierRequest.supplier_telegram_id == supplier_telegram_id)
-        .where(SupplierRequest.request_type == "number")
-        .where(SupplierRequest.status == "sent")
-        .order_by(SupplierRequest.id.desc())
+    result = await session.execute(
+        select(Order)
+        .where(Order.customer_telegram_id == telegram_id)
+        .where(Order.status.in_(ACTIVE_CUSTOMER_STATUSES))
+        .order_by(Order.created_at.desc())
     )
+    order = result.scalars().first()
 
-    if not request:
-        return None
+    if order:
+        return order
 
-    return await session.get(Order, request.order_id)
+    if username:
+        clean_username = username.replace("@", "").lower()
 
+        result = await session.execute(
+            select(Order)
+            .where(Order.customer_username.is_not(None))
+            .where(Order.status.in_(ACTIVE_CUSTOMER_STATUSES))
+            .order_by(Order.created_at.desc())
+        )
 
-async def find_order_waiting_supplier_code(
-    session: AsyncSession,
-    supplier_telegram_id: int,
-) -> Order | None:
-    request = await session.scalar(
-        select(SupplierRequest)
-        .where(SupplierRequest.supplier_telegram_id == supplier_telegram_id)
-        .where(SupplierRequest.request_type == "code")
-        .where(SupplierRequest.status == "sent")
-        .order_by(SupplierRequest.id.desc())
-    )
+        orders = result.scalars().all()
 
-    if not request:
-        return None
+        for item in orders:
+            if item.customer_username and item.customer_username.replace("@", "").lower() == clean_username:
+                return item
 
-    return await session.get(Order, request.order_id)
+    return None
 
 
 async def create_supplier_request(
     session: AsyncSession,
-    order: Order,
+    order_id: int,
     supplier_telegram_id: int,
     request_type: str,
 ) -> SupplierRequest:
     request = SupplierRequest(
-        order_id=order.id,
+        order_id=order_id,
         supplier_telegram_id=supplier_telegram_id,
         request_type=request_type,
         status="sent",
@@ -100,73 +148,35 @@ async def create_supplier_request(
     return request
 
 
-async def close_supplier_request(
+async def find_waiting_supplier_request(
     session: AsyncSession,
-    order: Order,
     supplier_telegram_id: int,
     request_type: str,
-) -> None:
-    request = await session.scalar(
+) -> SupplierRequest | None:
+    result = await session.execute(
         select(SupplierRequest)
-        .where(SupplierRequest.order_id == order.id)
         .where(SupplierRequest.supplier_telegram_id == supplier_telegram_id)
         .where(SupplierRequest.request_type == request_type)
         .where(SupplierRequest.status == "sent")
-        .order_by(SupplierRequest.id.desc())
+        .order_by(SupplierRequest.created_at.asc())
     )
 
-    if request:
-        request.status = "answered"
-        request.answered_at = datetime.utcnow()
+    return result.scalars().first()
 
-    await session.commit()
-    # --- Управление поставщиками ---
-async def add_supplier(session, telegram_id: int, service_name: str, name: str | None = None):
-    existing = await session.scalar(
-        select(Supplier).where(Supplier.telegram_id == telegram_id)
+
+async def get_order_by_id(session: AsyncSession, order_id: int) -> Order | None:
+    result = await session.execute(
+        select(Order).where(Order.id == order_id)
     )
-    if existing:
-        existing.service_name = service_name
-        existing.name = name
-        existing.is_active = True
-        await session.commit()
-        await session.refresh(existing)
-        return existing
-    supplier = Supplier(
+    return result.scalars().first()
+
+async def find_waiting_service_order_by_id_or_username_today(
+    session: AsyncSession,
+    telegram_id: int,
+    username: str | None,
+) -> Order | None:
+    return await find_waiting_service_order_for_customer(
+        session=session,
         telegram_id=telegram_id,
-        service_name=service_name,
-        name=name,
-        is_active=True
+        username=username,
     )
-    session.add(supplier)
-    await session.commit()
-    await session.refresh(supplier)
-    return supplier
-
-
-async def delete_supplier(session, telegram_id: int):
-    supplier = await session.scalar(
-        select(Supplier).where(Supplier.telegram_id == telegram_id)
-    )
-    if not supplier:
-        return False
-    supplier.is_active = False
-    await session.commit()
-    return True
-
-
-async def get_supplier_for_service(session, service_name: str):
-    suppliers = await session.scalars(
-        select(Supplier).where(Supplier.is_active == True)
-    )
-    for supplier in suppliers.all():
-        if supplier.service_name.strip().lower() == service_name.strip().lower():
-            return supplier
-    return None
-
-
-async def list_suppliers(session):
-    result = await session.scalars(
-        select(Supplier).where(Supplier.is_active == True)
-    )
-    return list(result.all())
