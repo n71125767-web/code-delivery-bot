@@ -11,7 +11,6 @@ class Order(Base):
     __tablename__ = "orders"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-
     operation_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     external_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
@@ -39,6 +38,7 @@ class Order(Base):
     verification_code: Mapped[str | None] = mapped_column(String, nullable=True)
 
     status: Mapped[str] = mapped_column(String, default="waiting_buyer_message", index=True)
+    timeout_notified: Mapped[bool] = mapped_column(Boolean, default=False)
 
     raw_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -54,7 +54,6 @@ class SupplierRequest(Base):
     __tablename__ = "supplier_requests"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-
     order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), index=True)
     supplier_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
     supplier_username: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -73,11 +72,9 @@ class ProcessedMessage(Base):
     __tablename__ = "processed_messages"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-
     message_key: Mapped[str] = mapped_column(String, unique=True, index=True)
     source: Mapped[str] = mapped_column(String)
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -85,9 +82,7 @@ class OrderAction(Base):
     __tablename__ = "order_actions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-
     order_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id"), nullable=True, index=True)
     action: Mapped[str] = mapped_column(String)
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
-
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

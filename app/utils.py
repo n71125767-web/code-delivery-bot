@@ -53,13 +53,10 @@ async def safe_send_message(
 
     except TelegramBadRequest as e:
         err = str(e).lower()
-
         if "chat not found" in err:
             return False, f"chat not found: {e}"
-
         if "message is not modified" in err:
             return False, f"message is not modified: {e}"
-
         return False, f"bad request: {e}"
 
     except TelegramRetryAfter as e:
