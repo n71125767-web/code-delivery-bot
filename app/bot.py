@@ -22,7 +22,7 @@ async def main() -> None:
 
     dp = Dispatcher()
 
-    # Без Router. Ловим все Update напрямую.
+    # Ловим ВСЕ апдейты напрямую, без Router
     dp.update.register(handle_any_update)
 
     me = await bot.me()
