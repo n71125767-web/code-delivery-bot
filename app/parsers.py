@@ -23,49 +23,91 @@ def search_str(pattern: str, text: str) -> str | None:
 
 
 def extract_purchase_data(text: str) -> dict | None:
+    """
+    Парсит сообщение от Admaker/shop-бота.
+
+    Поддерживает форматы:
+    - PAID
+    - оплатил
+    - оплачено
+    - новая покупка через cryptobot
+    """
+
     upper = text.upper()
 
-    if "PAID" not in upper and "ОПЛАЧЕН" not in upper and "ОПЛАТ" not in upper:
+    paid_markers = [
+        "PAID",
+        "ОПЛАТИЛ",
+        "ОПЛАТИЛА",
+        "ОПЛАЧЕН",
+        "ОПЛАЧЕНО",
+        "НОВАЯ ПОКУПКА",
+        "НОВАЯ ПОКУПКА ЧЕРЕЗ CRYPTOBOT",
+    ]
+
+    if not any(marker in upper for marker in paid_markers):
         return None
 
     operation_id = (
         search_int(r"ID операции:\s*(\d+)", text)
+        or search_int(r"Операция:\s*#?(\d+)", text)
         or search_int(r"Заказ[:\s#]*(\d+)", text)
         or search_int(r"ORDER[:\s#]*(\d+)", text)
+        or search_int(r"сч[её]т\s*#?[A-ZА-Я]*?(\d+)", text)
     )
 
-    external_id = search_str(r"Внешний ID:\s*([^\n]+)", text)
+    external_id = (
+        search_str(r"Внешний ID:\s*([^\n]+)", text)
+        or search_str(r"External ID:\s*([^\n]+)", text)
+    )
 
     customer_telegram_id = (
         search_int(r"ID пользователя:\s*(\d+)", text)
         or search_int(r"Покупатель ID:\s*(\d+)", text)
         or search_int(r"Telegram ID:\s*(\d+)", text)
+        or search_int(r"🆔\s*ID:\s*(\d+)", text)
+        or search_int(r"\bID:\s*(\d{5,})", text)
     )
 
     customer_username = (
         search_str(r"Пользователь:\s*@?([A-Za-z0-9_]+)", text)
         or search_str(r"Покупатель:\s*@?([A-Za-z0-9_]+)", text)
         or search_str(r"Username:\s*@?([A-Za-z0-9_]+)", text)
+        or search_str(r"👤\s*Пользователь:\s*@?([A-Za-z0-9_]+)", text)
+        or search_str(r"@([A-Za-z0-9_]{3,})", text)
     )
 
-    product_id = search_int(r"ID товара:\s*(\d+)", text)
+    product_id = (
+        search_int(r"ID товара:\s*(\d+)", text)
+        or search_int(r"Товар ID:\s*(\d+)", text)
+    )
 
     product_name = (
         search_str(r"Купил:\s*(.+)", text)
+        or search_str(r"📦\s*Купил:\s*(.+)", text)
         or search_str(r"Товар:\s*(.+)", text)
         or search_str(r"Product:\s*(.+)", text)
     )
 
-    amount_raw = search_str(r"Сумма:\s*([\d.,]+)", text)
-    amount = None
+    if product_name:
+        product_name = product_name.strip()
 
+    amount_raw = (
+        search_str(r"Сумма:\s*([\d.,]+)", text)
+        or search_str(r"💵\s*Сумма:\s*([\d.,]+)", text)
+    )
+
+    amount = None
     if amount_raw:
         try:
             amount = Decimal(amount_raw.replace(",", "."))
         except Exception:
             amount = None
 
-    currency = search_str(r"Сумма:\s*[\d.,]+\s*([A-ZА-Яа-я]+)", text)
+    currency = (
+        search_str(r"Сумма:\s*[\d.,]+\s*([A-ZА-Яа-я]+)", text)
+        or search_str(r"💵\s*Сумма:\s*[\d.,]+\s*([A-ZА-Яа-я]+)", text)
+    )
 
     if not operation_id:
         return None
