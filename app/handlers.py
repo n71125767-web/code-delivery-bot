@@ -1,10 +1,8 @@
-# handlers.py - исправленный UTF-8 для Telegram Business Bot
-import logging
+﻿import logging
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message
-from sqlalchemy import select, func
 
 from app.config import ADMIN_IDS, SUPPLIER_IDS, SHOP_BOT_USERNAME
 from app.database import SessionLocal
@@ -30,16 +28,14 @@ from app.utils import make_message_key, normalize_username, safe_send_message
 
 logger = logging.getLogger(__name__)
 
-# --- вспомогательные функции ---
+
 def is_admin(user_id: int | None) -> bool:
     return bool(user_id and user_id in ADMIN_IDS)
+
 
 def is_supplier(user_id: int | None) -> bool:
     return bool(user_id and user_id in SUPPLIER_IDS)
 
-async def notify_admins(bot: Bot, text: str) -> None:
-    for admin_id in ADMIN_IDS:
-        await safe_send_message(bot=bot, chat_id=admin_id, text=text)
 
 def looks_like_own_bot_message(text: str) -> bool:
     clean = (text or "").strip().lower()
@@ -66,66 +62,67 @@ def looks_like_own_bot_message(text: str) -> bool:
     ]
     return any(clean.startswith(x) for x in own_starts)
 
-# --- команды /status, /ping и т.д. ---
-async def get_status_text() -> str:
-    async with SessionLocal() as session:
-        total = await session.scalar(select(func.count(Order.id)))
-        waiting_buyer = await session.scalar(select(func.count(Order.id)).where(Order.status == "waiting_buyer_message"))
-        waiting_supplier = await session.scalar(select(func.count(Order.id)).where(Order.status == "waiting_supplier"))
-        supplier_answered = await session.scalar(select(func.count(Order.id)).where(Order.status == "supplier_answered"))
-        delivered = await session.scalar(select(func.count(Order.id)).where(Order.status == "delivered"))
-        completed = await session.scalar(select(func.count(Order.id)).where(Order.status == "completed"))
-        error = await session.scalar(select(func.count(Order.id)).where(Order.status == "error"))
-        old_waiting_service = await session.scalar(select(func.count(Order.id)).where(Order.status == "waiting_service"))
-        old_waiting_number = await session.scalar(select(func.count(Order.id)).where(Order.status == "waiting_supplier_number"))
-        old_waiting_code = await session.scalar(select(func.count(Order.id)).where(Order.status == "waiting_supplier_code"))
-    return (
-        "📊 Статус бота\n\n"
-        f"Всего заказов: {total or 0}\n"
-        f"Ждут покупателя: {waiting_buyer or 0}\n"
-        f"Ждут поставщика: {waiting_supplier or 0}\n"
-        f"Поставщик ответил: {supplier_answered or 0}\n"
-        f"Выданы: {delivered or 0}\n"
-        f"Завершены: {completed or 0}\n"
-        f"Ошибки: {error or 0}\n\n"
-        "Старые статусы:\n"
-        f"waiting_service: {old_waiting_service or 0}\n"
-        f"waiting_supplier_number: {old_waiting_number or 0}\n"
-        f"waiting_supplier_code: {old_waiting_code or 0}"
-    )
-
-# --- функции для покупателей и поставщиков ---
-async def handle_buyer_message(bot: Bot, message: Message, business_connection_id: str | None = None):
-    # Логика обработки сообщений покупателя
-    pass  # сюда вставляй код из последнего ответа, с проверкой статуса и отправкой поставщику
-
-async def handle_supplier_answer(bot: Bot, message: Message, business_connection_id: str | None = None):
-    # Логика обработки ответов поставщика
-    pass
-
-async def process_admaker_message(bot: Bot, message: Message):
-    # Логика парсинга сообщений shop-бота
-    pass
 
 async def answer_message(bot: Bot, message: Message, text: str, business_connection_id: str | None = None):
-    ok, err = await safe_send_message(bot=bot, chat_id=message.chat.id, text=text, business_connection_id=business_connection_id)
+    ok, err = await safe_send_message(
+        bot=bot, chat_id=message.chat.id, text=text, business_connection_id=business_connection_id
+    )
     if not ok:
         logger.error("Failed to answer message: %s", err)
 
-# --- регистрация всех обработчиков ---
+
 def register_handlers(dp: Dispatcher, bot: Bot):
     @dp.message(Command("start"))
     async def start_handler(message: Message):
         await answer_message(bot, message, "Бот работает ✅")
 
+    @dp.message(Command("ping"))
+    async def ping_handler(message: Message):
+        await answer_message(bot, message, "pong OK")
+
+    @dp.message(Command("status"))
+    async def status_handler(message: Message):
+        from app.handlers import get_status_text
+        await answer_message(bot, message, await get_status_text())
+
+    @dp.message(Command("last_orders"))
+    async def last_orders_handler(message: Message):
+        from app.handlers import get_last_orders_text
+        await answer_message(bot, message, await get_last_orders_text())
+
     @dp.business_message(F.text)
-    async def business_message_router(message: Message):
+    async def business_router(message: Message):
         sender = message.from_user
-        if sender and not sender.is_bot:
-            text = message.text or ""
-            if looks_like_own_bot_message(text):
-                return
-            if sender.id in SUPPLIER_IDS:
-                await handle_supplier_answer(bot, message, getattr(message, "business_connection_id", None))
-            else:
-                await handle_buyer_message(bot, message, getattr(message, "business_connection_id", None))
+        if not sender or sender.is_bot:
+            return
+
+        text = message.text or ""
+        business_connection_id = getattr(message, "business_connection_id", None)
+        sender_username = normalize_username(sender.username)
+        shop_username = normalize_username(SHOP_BOT_USERNAME)
+
+        # Игнор своих сообщений
+        if looks_like_own_bot_message(text):
+            return
+
+        # Команды
+        if text.startswith("/"):
+            from app.handlers import process_command_message
+            await process_command_message(bot, message, business_connection_id)
+            return
+
+        # Сообщение от Shop-бота
+        if sender_username == shop_username:
+            from app.handlers import process_admaker_message
+            await process_admaker_message(bot, message)
+            return
+
+        # Поставщик
+        if is_supplier(sender.id):
+            from app.handlers import handle_supplier_answer
+            await handle_supplier_answer(bot, message, business_connection_id)
+            return
+
+        # Покупатель
+        from app.handlers import handle_buyer_message
+        await handle_buyer_message(bot, message, business_connection_id)
