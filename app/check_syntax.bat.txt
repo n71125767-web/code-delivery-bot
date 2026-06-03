@@ -1,0 +1,12 @@
+@echo off
+setlocal
+
+set DIR=%CD%\app
+
+for %%G in (bot.py config.py database.py handlers.py parsers.py services.py suppliers.py utils.py models.py) do (
+    echo Проверка %%G
+    python -m py_compile "%DIR%\%%G"
+)
+
+echo Проверка синтаксиса завершена.
+pause

@@ -11,5 +11,4 @@ app.router.add_get("/", health)
 app.router.add_get("/health", health)
 
 port = int(os.environ.get("PORT", 10000))
-
 web.run_app(app, host="0.0.0.0", port=port)

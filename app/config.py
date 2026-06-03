@@ -3,20 +3,35 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
 def parse_ids(value: str) -> list[int]:
     if not value:
         return []
-    return [int(x.strip()) for x in value.split(",") if x.strip()]
+    result: list[int] = []
+    for item in value.split(","):
+        item = item.strip()
+        if item:
+            result.append(int(item))
+    return result
+
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///bot.db").strip()
+
 ADMIN_IDS = parse_ids(os.getenv("ADMIN_IDS", ""))
 SUPPLIER_IDS = parse_ids(os.getenv("SUPPLIER_IDS", ""))
-SHOP_BOT_USERNAME = os.getenv("SHOP_BOT_USERNAME", "MrvlShopXBot").replace("@", "").strip()
+
+SHOP_BOT_USERNAME = os.getenv("SHOP_BOT_USERNAME", "MrvlShopXBot").replace("@", "").strip().lower()
+
+# Если True, бот будет игнорировать сообщения от самого себя и других ботов,
+# кроме SHOP_BOT_USERNAME.
+IGNORE_OTHER_BOTS = os.getenv("IGNORE_OTHER_BOTS", "1").strip() == "1"
 
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is missing")
+    raise RuntimeError("BOT_TOKEN is missing in .env")
+
 if not ADMIN_IDS:
-    raise RuntimeError("ADMIN_IDS is missing")
+    raise RuntimeError("ADMIN_IDS is missing in .env")
+
 if not SUPPLIER_IDS:
-    raise RuntimeError("SUPPLIER_IDS is missing")
+    raise RuntimeError("SUPPLIER_IDS is missing in .env")
