@@ -132,13 +132,46 @@ async def handle_supplier_answer(bot: Bot, message: Message, business_connection
         if ok:
             await mark_order_delivered(session, order)
 
+def looks_like_own_bot_message(text: str) -> bool:
+    """
+    Защита от цикла.
+    Бот не должен заново обрабатывать сообщения, которые сам же отправил
+    поставщику, покупателю или админу.
+    """
+    clean = (text or "").strip().lower()
+
+    own_starts = [
+        "новый заказ:",
+        "✅ заказ найден",
+        "заказ найден",
+        "передал запрос поставщику",
+        "пожалуйста, выдайте товар",
+        "📨 покупатель найден",
+        "✅ оплата сохранена",
+        "⚠️ покупатель написал",
+        "❌ не удалось",
+        "✅ ответ принят",
+        "нет активного заказа",
+        "не нашёл оплаченный заказ",
+        "бот работает",
+        "📊 статус бота",
+        "📦 последние заказы",
+        "🔍 активные заказы",
+        "pong",
+    ]
+
+    return any(clean.startswith(x) for x in own_starts)
+
+
 def register_handlers(dp: Dispatcher, bot: Bot) -> None:
     """
-    Важно:
-    1. Обычные команды работают в личке с ботом.
-    2. Business-команды работают в Business-чате.
-    3. Исходящие сообщения твоего Business-аккаунта игнорируются, чтобы не было цикла.
-    4. Сообщения от ботов игнорируются, кроме Admaker/shop-бота.
+    Команды и обычные сообщения обрабатываются и в личке бота,
+    и через Telegram Business.
+
+    ВАЖНО:
+    Не игнорируем ADMIN_IDS полностью, потому что из-за Business это может
+    случайно отключить команды и сообщения покупателей.
+    Вместо этого игнорируем только тексты, похожие на сообщения самого бота.
     """
 
     @dp.message(Command("start"))
@@ -178,54 +211,53 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         sender = message.from_user
         text = message.text or ""
 
+        business_connection_id = getattr(message, "business_connection_id", None)
+
         if not sender:
+            logger.info("Business message ignored: no sender")
             return
 
-        business_connection_id = getattr(message, "business_connection_id", None)
         sender_username = normalize_username(sender.username)
         shop_username = normalize_username(SHOP_BOT_USERNAME)
 
         logger.info(
-            "Business message received: from_id=%s username=%s is_bot=%s text=%s",
+            "BUSINESS ROUTER: from_id=%s username=%s is_bot=%s chat_id=%s text=%s",
             sender.id,
             sender_username,
             getattr(sender, "is_bot", False),
-            text[:300],
+            message.chat.id if message.chat else None,
+            text[:500],
         )
 
-        # 1. Команды обрабатываем отдельно.
-        # Это нужно, чтобы /status и /ping работали даже через Business.
+        # 1. Команды должны работать всегда, даже если пишет админ/владелец Business.
         if text.strip().startswith("/"):
             await process_command_message(bot, message, business_connection_id)
             return
 
-        # 2. Admaker/shop-бот НЕ игнорируем, даже если он bot.
+        # 2. Admaker/shop-бот принимаем даже если это bot.
         if sender_username and sender_username == shop_username:
             await process_admaker_message(bot, message)
             return
 
-        # 3. Игнорируем любые сообщения от ботов.
-        # Иначе бот может читать ответы других ботов и зациклиться.
+        # 3. Игнорируем сообщения от ботов, кроме shop-бота.
         if getattr(sender, "is_bot", False):
-            logger.info("Ignored business message from bot: %s", sender_username)
+            logger.info("Ignored business message from bot: username=%s", sender_username)
             return
 
-        # 4. КРИТИЧНО: игнорируем исходящие сообщения владельца Business-аккаунта.
-        # Обычно Telegram присылает исходящие сообщения как business_message от твоего аккаунта.
-        # Если их не игнорировать, бот читает свои же отправленные сообщения и повторяет их.
-        if sender.id in ADMIN_IDS:
-            logger.info(
-                "Ignored own outgoing business message from admin/business owner: %s",
-                sender.id,
-            )
+        # 4. Защита от цикла по тексту.
+        # Не по ADMIN_IDS, потому что это ломает Business-сообщения.
+        if looks_like_own_bot_message(text):
+            logger.info("Ignored own/generated business text: %s", text[:200])
             return
 
         # 5. Сообщение от поставщика.
         if is_supplier(sender.id):
+            logger.info("Business message routed as supplier answer")
             await handle_supplier_answer(bot, message, business_connection_id)
             return
 
         # 6. Сообщение от покупателя.
+        logger.info("Business message routed as buyer message")
         await handle_buyer_message(bot, message, business_connection_id)
 
     @dp.message(F.text)
@@ -234,30 +266,39 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         text = message.text or ""
 
         if not sender:
+            logger.info("Normal message ignored: no sender")
             return
 
         logger.info(
-            "Normal message received: from_id=%s username=%s is_bot=%s text=%s",
+            "NORMAL ROUTER: from_id=%s username=%s is_bot=%s chat_id=%s text=%s",
             sender.id,
             sender.username,
             getattr(sender, "is_bot", False),
-            text[:300],
+            message.chat.id if message.chat else None,
+            text[:500],
         )
 
-        # 1. Игнорируем сообщения от ботов.
-        if getattr(sender, "is_bot", False):
-            logger.info("Ignored normal message from bot: %s", sender.username)
-            return
-
-        # 2. Команды.
+        # 1. Команды.
         if text.strip().startswith("/"):
             await process_command_message(bot, message, None)
             return
 
-        # 3. Поставщик.
+        # 2. Игнорируем ботов.
+        if getattr(sender, "is_bot", False):
+            logger.info("Ignored normal message from bot: username=%s", sender.username)
+            return
+
+        # 3. Защита от цикла по тексту.
+        if looks_like_own_bot_message(text):
+            logger.info("Ignored own/generated normal text: %s", text[:200])
+            return
+
+        # 4. Поставщик.
         if is_supplier(sender.id):
+            logger.info("Normal message routed as supplier answer")
             await handle_supplier_answer(bot, message, None)
             return
 
-        # 4. Покупатель.
+        # 5. Покупатель.
+        logger.info("Normal message routed as buyer message")
         await handle_buyer_message(bot, message, None)
