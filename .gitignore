@@ -3,3 +3,4 @@
 __pycache__/
 *.pyc
 bot.db
+current_project_code.txt
