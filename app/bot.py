@@ -6,7 +6,7 @@ from aiogram.client.default import DefaultBotProperties
 
 from app.config import BOT_TOKEN
 from app.database import init_db
-from app.handlers import router
+from app.handlers import handle_any_update
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -21,7 +21,9 @@ async def main() -> None:
     )
 
     dp = Dispatcher()
-    dp.include_router(router)
+
+    # Без Router. Ловим все Update напрямую.
+    dp.update.register(handle_any_update)
 
     me = await bot.me()
     logger.info("Bot started: @%s id=%s", me.username, me.id)
