@@ -23,42 +23,35 @@ def search_str(pattern: str, text: str) -> str | None:
 
 
 def extract_purchase_data(text: str) -> dict | None:
-    upper = text.upper()
+    """
+    Парсит сообщение о покупке от shop-бота.
 
-    if "PAID" not in upper and "ОПЛАЧЕН" not in upper and "ОПЛАТ" not in upper:
+    Главное:
+    - заказ принимаем только если есть PAID
+    - достаём ID операции
+    - достаём ID пользователя
+    - достаём username
+    - достаём товар
+    """
+
+    if "PAID" not in text.upper():
         return None
 
-    operation_id = (
-        search_int(r"ID операции:\s*(\d+)", text)
-        or search_int(r"Заказ[:\s#]*(\d+)", text)
-        or search_int(r"ORDER[:\s#]*(\d+)", text)
-    )
-
+    operation_id = search_int(r"ID операции:\s*(\d+)", text)
     external_id = search_str(r"Внешний ID:\s*([^\n]+)", text)
 
-    customer_telegram_id = (
-        search_int(r"ID пользователя:\s*(\d+)", text)
-        or search_int(r"Покупатель ID:\s*(\d+)", text)
-        or search_int(r"Telegram ID:\s*(\d+)", text)
-    )
+    customer_telegram_id = search_int(r"ID пользователя:\s*(\d+)", text)
 
-    customer_username = (
-        search_str(r"Пользователь:\s*@?([A-Za-z0-9_]+)", text)
-        or search_str(r"Покупатель:\s*@?([A-Za-z0-9_]+)", text)
-        or search_str(r"Username:\s*@?([A-Za-z0-9_]+)", text)
-    )
+    customer_username = search_str(r"Пользователь:\s*@?([A-Za-z0-9_]+)", text)
 
     product_id = search_int(r"ID товара:\s*(\d+)", text)
 
-    product_name = (
-        search_str(r"Купил:\s*(.+)", text)
-        or search_str(r"Товар:\s*(.+)", text)
-        or search_str(r"Product:\s*(.+)", text)
-    )
+    product_name = search_str(r"Купил:\s*(.+)", text)
+    if product_name:
+        product_name = product_name.strip()
 
     amount_raw = search_str(r"Сумма:\s*([\d.,]+)", text)
     amount = None
-
     if amount_raw:
         try:
             amount = Decimal(amount_raw.replace(",", "."))
@@ -83,28 +76,15 @@ def extract_purchase_data(text: str) -> dict | None:
     }
 
 
-def extract_clean_product_answer(text: str) -> str:
-    text = text.strip()
-
-    prefixes = [
-        "товар:",
-        "код:",
-        "номер:",
-        "ответ:",
-        "держи:",
-        "выдача:",
-    ]
-
-    lower = text.lower()
-
-    for prefix in prefixes:
-        if lower.startswith(prefix):
-            return text[len(prefix):].strip()
-
-    return text
-
-
 def extract_phone(text: str) -> str | None:
+    """
+    Достаёт номер телефона из сообщения поставщика.
+    Примеры:
+    +79990000000
+    79990000000
+    Номер: +7 999 000 00 00
+    """
+
     match = re.search(r"(\+?\d[\d\s\-\(\)]{8,}\d)", text)
     if not match:
         return None
@@ -122,10 +102,15 @@ def extract_phone(text: str) -> str | None:
 
 
 def extract_code(text: str) -> str | None:
+    """
+    Достаёт код из сообщения поставщика.
+    Берёт цифровой код 4-8 цифр.
+    """
+
     patterns = [
-        r"код[:\s\-]*([0-9]{4,12})",
-        r"code[:\s\-]*([0-9]{4,12})",
-        r"\b([0-9]{4,12})\b",
+        r"код[:\s\-]*([0-9]{4,8})",
+        r"code[:\s\-]*([0-9]{4,8})",
+        r"\b([0-9]{4,8})\b",
     ]
 
     for pattern in patterns:
