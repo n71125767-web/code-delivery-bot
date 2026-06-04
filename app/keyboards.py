@@ -1,6 +1,5 @@
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-
 from app.services import format_service_label
 
 
