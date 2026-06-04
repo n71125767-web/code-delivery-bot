@@ -24,6 +24,7 @@ from app.keyboards import (
     service_keyboard_from_services,
     admin_panel_keyboard,
     supplier_panel_keyboard,
+    supplier_reply_keyboard,
     supplier_orders_keyboard,
 )
 from app.parsers import extract_purchase_data, extract_phone, extract_code
@@ -310,6 +311,7 @@ async def process_admin_command(bot: Bot, message: Message, business_connection_
 
         async with SessionLocal() as session:
             supplier = await add_supplier(session, supplier_id, name)
+        await safe_send_message(bot, supplier_id, "Вы добавлены как поставщик. Откройте панель кнопкой ниже.", reply_markup=supplier_reply_keyboard())
 
         await answer_message(bot, message, f"OK. Поставщик добавлен.\nID: {supplier.telegram_id}\nИмя: {supplier.name}", business_connection_id)
         return True
@@ -378,6 +380,17 @@ async def is_supplier_user(user_id: int) -> bool:
         return result.scalars().first() is not None
 
 
+
+
+async def send_supplier_reply_buttons(bot: Bot, supplier_id: int) -> None:
+    await safe_send_message(
+        bot,
+        supplier_id,
+        "Кнопки поставщика включены ниже.",
+        reply_markup=supplier_reply_keyboard(),
+    )
+
+
 async def process_supplier_command(bot: Bot, message: Message, business_connection_id: str | None) -> bool:
     if not message.from_user:
         return False
@@ -385,7 +398,7 @@ async def process_supplier_command(bot: Bot, message: Message, business_connecti
         return False
 
     text = (message.text or "").strip()
-    if text in {"/supplier", "/work", "/pending"}:
+    if text in {"/supplier", "/work", "/pending", "🚚 Панель поставщика", "⏳ Заявки в ожидании"}:
         async with SessionLocal() as session:
             pending_text, max_page = await supplier_pending_text(session, message.from_user.id, 0, SUPPLIER_PAGE_SIZE)
             rows, max_page = await get_supplier_pending_rows(session, message.from_user.id, 0, SUPPLIER_PAGE_SIZE)
@@ -538,7 +551,7 @@ async def send_supplier_request_for_order(bot: Bot, order, business_connection_i
         "Пример: +79990000000"
     )
 
-    ok = await safe_send_message(bot, supplier.telegram_id, supplier_text, actual_business_id)
+    ok = await safe_send_message(bot, supplier.telegram_id, supplier_text, actual_business_id, reply_markup=supplier_reply_keyboard())
     if not ok:
         ok = await safe_send_message(bot, supplier.telegram_id, supplier_text)
 
@@ -744,7 +757,7 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
             await answer_message(bot, message, "OK. Код отправлен покупателю.", business_connection_id)
             return
 
-    await answer_message(bot, message, "Нет активного запроса для вас.", business_connection_id)
+    await answer_message(bot, message, "Нет активного запроса для вас. Откройте панель кнопкой ниже.", business_connection_id, reply_markup=supplier_reply_keyboard())
 
 
 async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
@@ -830,7 +843,7 @@ async def resend_problem_to_supplier(bot: Bot, order, problem_type: str) -> None
             "Панель поставщика: /supplier"
         )
 
-    ok = await safe_send_message(bot, supplier.telegram_id, supplier_text, order.business_connection_id)
+    ok = await safe_send_message(bot, supplier.telegram_id, supplier_text, order.business_connection_id, reply_markup=supplier_reply_keyboard())
     if not ok:
         ok = await safe_send_message(bot, supplier.telegram_id, supplier_text)
 

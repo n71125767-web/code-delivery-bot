@@ -1,4 +1,4 @@
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.services import format_service_label
@@ -101,3 +101,15 @@ def supplier_orders_keyboard(rows, page: int = 0, max_page: int = 0) -> InlineKe
     kb.button(text="🔄 Обновить", callback_data=f"supplier:pending:{page}")
     kb.adjust(1)
     return kb.as_markup()
+
+
+def supplier_reply_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🚚 Панель поставщика")],
+            [KeyboardButton(text="⏳ Заявки в ожидании")],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="Откройте панель или отправьте номер/код",
+    )
