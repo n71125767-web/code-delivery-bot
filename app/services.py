@@ -1286,3 +1286,262 @@ async def create_bug_report(
     await session.commit()
     await session.refresh(report)
     return report
+
+
+# ---------------- Full shop visual services patch v15 ----------------
+# Единый визуал текстов профилей/статистики/заказов.
+# Эти функции переопределяют старые def выше.
+
+
+def _fmt_money(value) -> str:
+    try:
+        num = float(value or 0)
+    except Exception:
+        num = 0.0
+    if num.is_integer():
+        return f"{int(num)} RUB"
+    return f"{num:.2f} RUB"
+
+
+def _fmt_int(value) -> int:
+    try:
+        return int(value or 0)
+    except Exception:
+        return 0
+
+
+async def _buyer_money_stats(session: AsyncSession, user_id: int, username: str | None):
+    clean_username = (username or "").replace("@", "").lower()
+    base_filter = (Order.customer_telegram_id == user_id) | (Order.buyer_chat_id == user_id)
+    if clean_username:
+        base_filter = base_filter | (func.lower(Order.customer_username) == clean_username)
+
+    total_orders = await session.scalar(select(func.count(Order.id)).where(base_filter)) or 0
+    total_sum = await session.scalar(select(func.coalesce(func.sum(Order.amount), 0)).where(base_filter)) or 0
+    avg_sum = await session.scalar(select(func.coalesce(func.avg(Order.amount), 0)).where(base_filter)) or 0
+    max_sum = await session.scalar(select(func.coalesce(func.max(Order.amount), 0)).where(base_filter)) or 0
+
+    now = datetime.utcnow()
+    sum_7 = await session.scalar(select(func.coalesce(func.sum(Order.amount), 0)).where(base_filter, Order.created_at >= now - timedelta(days=7))) or 0
+    sum_30 = await session.scalar(select(func.coalesce(func.sum(Order.amount), 0)).where(base_filter, Order.created_at >= now - timedelta(days=30))) or 0
+    sum_180 = await session.scalar(select(func.coalesce(func.sum(Order.amount), 0)).where(base_filter, Order.created_at >= now - timedelta(days=180))) or 0
+
+    return total_orders, total_sum, avg_sum, max_sum, sum_7, sum_30, sum_180
+
+
+async def buyer_profile_text(session: AsyncSession, user_id: int, username: str | None) -> str:
+    active_order = await find_active_order_for_customer(session, user_id, username)
+    total_orders, total_sum, avg_sum, max_sum, sum_7, sum_30, sum_180 = await _buyer_money_stats(session, user_id, username)
+
+    text = (
+        "👤 › Профиль покупателя\n\n"
+        "Здесь вы можете посмотреть информацию о вашем аккаунте и покупках в магазине.\n\n"
+        f"Telegram ID — {user_id}\n"
+        f"Username — @{username or 'нет'}\n\n"
+        f"Всего {total_orders} заказов на сумму {_fmt_money(total_sum)}\n"
+        f"├ Средний — {_fmt_money(avg_sum)}\n"
+        f"├ Рекордный — {_fmt_money(max_sum)}\n"
+        f"├ За 7 дней — {_fmt_money(sum_7)}\n"
+        f"├ За 30 дней — {_fmt_money(sum_30)}\n"
+        f"└ За 180 дней — {_fmt_money(sum_180)}\n\n"
+    )
+
+    if active_order:
+        text += (
+            "📦 Активный заказ\n"
+            f"├ Заказ — #{active_order.operation_id}\n"
+            f"├ Статус — {order_status_label(active_order.status)}\n"
+            f"├ Товар — {active_order.product_name or 'нет'}\n"
+            f"└ Сервис — {active_order.service_name or 'не выбран'}"
+        )
+    else:
+        text += "📦 Активный заказ\n└ Сейчас активного заказа нет"
+
+    return text
+
+
+async def buyer_orders_text(session: AsyncSession, user_id: int, username: str | None, limit: int = 10) -> str:
+    orders = await get_buyer_order_rows(session, user_id, username, limit)
+    if not orders:
+        return (
+            "🧾 › Мои заказы\n\n"
+            "У вас пока нет заказов.\n\n"
+            "Когда появится покупка, она будет отображаться в этом разделе."
+        )
+
+    lines = ["🧾 › Мои заказы", "", "Последние покупки:", ""]
+    for index, order in enumerate(orders, start=1):
+        last = index == len(orders)
+        prefix = "└" if last else "├"
+        lines.append(f"{prefix} #{order.operation_id} — {order_status_label(order.status)}")
+        lines.append(f"   Товар — {order.product_name or 'нет'}")
+        lines.append(f"   Сервис — {order.service_name or 'не выбран'}")
+        if order.amount:
+            lines.append(f"   Сумма — {_fmt_money(order.amount)}")
+    return "\n".join(lines)
+
+
+def buyer_order_card_text(order: Order | None) -> str:
+    if not order:
+        return "🧾 › Заказ не найден."
+    return (
+        "🧾 › Карточка заказа\n\n"
+        f"Заказ — #{order.operation_id}\n"
+        f"Статус — {order_status_label(order.status)}\n\n"
+        "Детали\n"
+        f"├ Товар — {order.product_name or 'нет'}\n"
+        f"├ Сервис — {order.service_name or 'не выбран'}\n"
+        f"├ Номер — {order.phone_number or 'ещё нет'}\n"
+        f"└ Код — {order.verification_code or 'ещё нет'}\n\n"
+        "Доступные действия показаны кнопками ниже."
+    )
+
+
+async def supplier_profile_text(session: AsyncSession, supplier_id: int, username: str | None) -> str:
+    active_count = await session.scalar(
+        select(func.count(SupplierRequest.id)).where(
+            SupplierRequest.supplier_telegram_id == supplier_id,
+            SupplierRequest.status.in_(["sent", "selected", "in_progress", "waiting_buyer_confirm"]),
+        )
+    ) or 0
+    done_count = await session.scalar(
+        select(func.count(SupplierRequest.id)).where(
+            SupplierRequest.supplier_telegram_id == supplier_id,
+            SupplierRequest.status == "answered",
+        )
+    ) or 0
+    wait_ok = await session.scalar(
+        select(func.count(SupplierRequest.id)).where(
+            SupplierRequest.supplier_telegram_id == supplier_id,
+            SupplierRequest.status == "waiting_buyer_confirm",
+        )
+    ) or 0
+    number_count = await session.scalar(
+        select(func.count(SupplierRequest.id)).where(
+            SupplierRequest.supplier_telegram_id == supplier_id,
+            SupplierRequest.request_type == "number",
+            SupplierRequest.status.in_(["sent", "selected", "in_progress"]),
+        )
+    ) or 0
+    code_count = await session.scalar(
+        select(func.count(SupplierRequest.id)).where(
+            SupplierRequest.supplier_telegram_id == supplier_id,
+            SupplierRequest.request_type == "code",
+            SupplierRequest.status.in_(["sent", "selected", "in_progress"]),
+        )
+    ) or 0
+    return (
+        "🚚 › Профиль поставщика\n\n"
+        "Здесь отображается ваша текущая нагрузка и выполненные заявки.\n\n"
+        f"Telegram ID — {supplier_id}\n"
+        f"Username — @{username or 'нет'}\n\n"
+        f"Всего выполнено — {_fmt_int(done_count)}\n"
+        f"├ Активные заявки — {_fmt_int(active_count)}\n"
+        f"├ Ждут номер — {_fmt_int(number_count)}\n"
+        f"├ Ждут код — {_fmt_int(code_count)}\n"
+        f"└ Ждут OK покупателя — {_fmt_int(wait_ok)}"
+    )
+
+
+async def admin_profile_text(session: AsyncSession, admin_id: int, username: str | None) -> str:
+    total_orders = await session.scalar(select(func.count(Order.id))) or 0
+    problem_orders = await session.scalar(select(func.count(Order.id)).where(Order.status == "problem")) or 0
+    active_suppliers = await session.scalar(select(func.count(Supplier.id)).where(Supplier.is_active == True)) or 0
+    active_admins = await session.scalar(select(func.count(AdminUser.id)).where(AdminUser.is_active == True)) or 0
+    return (
+        "👮 › Профиль админа\n\n"
+        "Служебная информация по управлению магазином.\n\n"
+        f"Telegram ID — {admin_id}\n"
+        f"Username — @{username or 'нет'}\n\n"
+        "Система\n"
+        f"├ Всего заказов — {_fmt_int(total_orders)}\n"
+        f"├ Проблемные — {_fmt_int(problem_orders)}\n"
+        f"├ Активные поставщики — {_fmt_int(active_suppliers)}\n"
+        f"└ Доп. админы — {_fmt_int(active_admins)}"
+    )
+
+
+async def admin_stats_text(session: AsyncSession) -> str:
+    total = await session.scalar(select(func.count(Order.id))) or 0
+    confirmed = await session.scalar(select(func.count(Order.id)).where(Order.status == "confirmed")) or 0
+    problem = await session.scalar(select(func.count(Order.id)).where(Order.status == "problem")) or 0
+    waiting_number = await session.scalar(select(func.count(Order.id)).where(Order.status == "waiting_supplier_number")) or 0
+    waiting_code = await session.scalar(select(func.count(Order.id)).where(Order.status == "waiting_supplier_code")) or 0
+    code_sent = await session.scalar(select(func.count(Order.id)).where(Order.status == "code_sent_to_customer")) or 0
+
+    result = await session.execute(
+        select(ServiceOption.name, ServiceOption.usage_count)
+        .where(ServiceOption.is_active == True)
+        .order_by(ServiceOption.usage_count.desc())
+        .limit(5)
+    )
+    top_services = result.fetchall()
+
+    lines = [
+        "📈 › Статистика магазина",
+        "",
+        "Заказы",
+        f"├ Всего — {_fmt_int(total)}",
+        f"├ Успешные — {_fmt_int(confirmed)}",
+        f"├ Проблемные — {_fmt_int(problem)}",
+        f"├ Ждут номер — {_fmt_int(waiting_number)}",
+        f"├ Ждут код — {_fmt_int(waiting_code)}",
+        f"└ Ждут OK покупателя — {_fmt_int(code_sent)}",
+        "",
+        "🔥 Популярные сервисы",
+    ]
+    if not top_services:
+        lines.append("└ Пока нет данных")
+    else:
+        for i, (name, count) in enumerate(top_services, start=1):
+            prefix = "└" if i == len(top_services) else "├"
+            lines.append(f"{prefix} {name} — {count}")
+    return "\n".join(lines)
+
+
+async def list_admin_users_text(session: AsyncSession, env_admin_ids: list[int]) -> str:
+    result = await session.execute(select(AdminUser).order_by(AdminUser.created_at.desc()))
+    admins = result.scalars().all()
+    lines = ["👮 › Админы", "", "Главные админы из Render ADMIN_IDS:"]
+    if env_admin_ids:
+        for i, item in enumerate(env_admin_ids, start=1):
+            prefix = "└" if i == len(env_admin_ids) and not admins else "├"
+            lines.append(f"{prefix} {item}")
+    else:
+        lines.append("└ не заданы")
+    lines.append("")
+    lines.append("Доп. админы из базы:")
+    if not admins:
+        lines.append("└ пока нет")
+    else:
+        for i, admin in enumerate(admins, start=1):
+            prefix = "└" if i == len(admins) else "├"
+            state = "активен" if admin.is_active else "выключен"
+            lines.append(f"{prefix} {admin.telegram_id} — {admin.name or 'без имени'} — {state}")
+    return "\n".join(lines)
+
+
+def supplier_section_title(mode: str) -> str:
+    return {
+        "pending": "⏳ › Ожидающие заявки",
+        "active": "📊 › Все активные заявки",
+        "number": "📞 › Ждут номер",
+        "code": "🔑 › Ждут код",
+    }.get(mode, "📋 › Заявки")
+
+
+def supplier_section_text(mode: str, rows_count: int, page: int, max_page: int) -> str:
+    title = supplier_section_title(mode)
+    if rows_count == 0:
+        return (
+            f"{title}\n\n"
+            "В этом разделе сейчас нет заявок.\n\n"
+            "Кнопками ниже можно вернуться назад или открыть другой раздел."
+        )
+    return (
+        f"{title}\n\n"
+        f"Страница — {page + 1}/{max_page + 1}\n"
+        f"Найдено на странице — {rows_count}\n\n"
+        "Выберите конкретную заявку кнопкой ниже."
+    )
+# --------------------------------------------------
