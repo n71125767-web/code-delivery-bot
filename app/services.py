@@ -3,7 +3,7 @@ from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import POPULAR_SERVICE_THRESHOLD, PROBLEM_COOLDOWN_SECONDS
-from app.models import Order, SupplierRequest, Supplier, SupplierProduct, ServiceOption, TextTemplate, Cooldown
+from app.models import Order, SupplierRequest, Supplier, SupplierProduct, ServiceOption, ServiceList, ServiceListItem, TextTemplate, Cooldown
 
 
 ACTIVE_CUSTOMER_STATUSES = [
@@ -554,3 +554,99 @@ async def check_cooldown(session: AsyncSession, user_id: int, action: str, secon
 
     await session.commit()
     return True, 0
+
+
+# ---------- Supplier panel and service lists ----------
+
+async def supplier_pending_text(session: AsyncSession, supplier_id: int, page: int, page_size: int) -> tuple[str, int]:
+    total = await session.scalar(
+        select(func.count(SupplierRequest.id)).where(
+            SupplierRequest.supplier_telegram_id == supplier_id,
+            SupplierRequest.status == "sent",
+        )
+    )
+    total = total or 0
+    max_page = max((total - 1) // page_size, 0)
+    page = max(0, min(page, max_page))
+
+    result = await session.execute(
+        select(SupplierRequest, Order)
+        .join(Order, SupplierRequest.order_id == Order.id)
+        .where(SupplierRequest.supplier_telegram_id == supplier_id, SupplierRequest.status == "sent")
+        .order_by(SupplierRequest.created_at.asc())
+        .offset(page * page_size)
+        .limit(page_size)
+    )
+    rows = result.fetchall()
+
+    if not rows:
+        return "Ожидающих заявок нет.", max_page
+
+    lines = [f"Заявки в ожидании — страница {page + 1}/{max_page + 1}\n"]
+    for request, order in rows:
+        request_label = "номер" if request.request_type == "number" else "код"
+        lines.append(
+            f"Заявка ID: {request.id}\n"
+            f"Нужно: {request_label}\n"
+            f"Заказ: #{order.operation_id}\n"
+            f"ID в базе: {order.id}\n"
+            f"Товар: {order.product_name}\n"
+            f"Сервис: {order.service_name or 'не указан'}\n"
+            f"Номер: {order.phone_number or 'ещё нет'}\n"
+            "Ответьте сообщением сюда: номер или код.\n"
+            "--------------------"
+        )
+
+    return "\n".join(lines), max_page
+
+
+async def add_service_list(session: AsyncSession, name: str) -> str:
+    name = name.strip()
+    if not name:
+        return "Название листа пустое."
+
+    result = await session.execute(select(ServiceList).where(ServiceList.name == name))
+    item = result.scalars().first()
+    if item:
+        item.is_active = True
+    else:
+        session.add(ServiceList(name=name, is_active=True))
+
+    await session.commit()
+    return f"OK. Лист создан/включён: {name}"
+
+
+async def add_service_to_list(session: AsyncSession, list_name: str, service_name: str) -> str:
+    list_name = list_name.strip()
+    service_name = service_name.strip()
+
+    if not list_name or not service_name:
+        return "Формат: /list_add_service Лист | Сервис"
+
+    await add_service_list(session, list_name)
+    await add_service(session, service_name)
+
+    result = await session.execute(
+        select(ServiceListItem).where(ServiceListItem.list_name == list_name, ServiceListItem.service_name == service_name)
+    )
+    exists = result.scalars().first()
+    if not exists:
+        session.add(ServiceListItem(list_name=list_name, service_name=service_name))
+        await session.commit()
+
+    return f"OK. Сервис {service_name} добавлен в лист {list_name}"
+
+
+async def lists_text(session: AsyncSession) -> str:
+    result = await session.execute(select(ServiceList).where(ServiceList.is_active == True).order_by(ServiceList.name.asc()))
+    lists = result.scalars().all()
+    if not lists:
+        return "Листов пока нет."
+
+    lines = ["Листы сервисов:\n"]
+    for item in lists:
+        result_items = await session.execute(select(ServiceListItem.service_name).where(ServiceListItem.list_name == item.name))
+        services = [row[0] for row in result_items.fetchall()]
+        lines.append(f"{item.name}: {', '.join(services) if services else 'пусто'}")
+
+    return "\n".join(lines)

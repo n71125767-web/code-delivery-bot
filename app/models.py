@@ -91,6 +91,27 @@ class ServiceOption(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class ServiceList(Base):
+    __tablename__ = "service_lists"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String, unique=True, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ServiceListItem(Base):
+    __tablename__ = "service_list_items"
+    __table_args__ = (
+        UniqueConstraint("list_name", "service_name", name="uq_list_service"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    list_name: Mapped[str] = mapped_column(String, index=True)
+    service_name: Mapped[str] = mapped_column(String, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class TextTemplate(Base):
     __tablename__ = "text_templates"
 

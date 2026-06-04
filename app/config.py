@@ -26,6 +26,10 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///bot.db").strip()
 
 ADMIN_IDS = parse_ids(os.getenv("ADMIN_IDS", ""))
 
+# Общий чат/ЛС для алертов админам. Не обязательно.
+ADMIN_ALERT_CHAT_ID = os.getenv("ADMIN_ALERT_CHAT_ID", "").strip()
+ADMIN_ALERT_CHAT_ID = int(ADMIN_ALERT_CHAT_ID) if ADMIN_ALERT_CHAT_ID else None
+
 # Старый SUPPLIER_IDS оставляем как стартовый список.
 # Новых поставщиков можно добавлять через /add_supplier.
 SUPPLIER_IDS = parse_ids(os.getenv("SUPPLIER_IDS", ""))
@@ -45,6 +49,7 @@ SERVICE_OPTIONS = parse_words(
 )
 
 SERVICE_PAGE_SIZE = int(os.getenv("SERVICE_PAGE_SIZE", "8"))
+SUPPLIER_PAGE_SIZE = int(os.getenv("SUPPLIER_PAGE_SIZE", "5"))
 PROBLEM_COOLDOWN_SECONDS = int(os.getenv("PROBLEM_COOLDOWN_SECONDS", "600"))
 POPULAR_SERVICE_THRESHOLD = int(os.getenv("POPULAR_SERVICE_THRESHOLD", "3"))
 

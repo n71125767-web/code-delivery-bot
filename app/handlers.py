@@ -8,10 +8,12 @@ from aiogram.types import Message, CallbackQuery
 
 from app.config import (
     ADMIN_IDS,
+    ADMIN_ALERT_CHAT_ID,
     SHOP_BOT_USERNAME,
     IGNORE_OTHER_BOTS,
     ADMIN_BUSINESS_CONNECTION_ID,
     SERVICE_PAGE_SIZE,
+    SUPPLIER_PAGE_SIZE,
     PROBLEM_COOLDOWN_SECONDS,
 )
 from app.database import SessionLocal
@@ -21,6 +23,7 @@ from app.keyboards import (
     service_keyboard,
     service_keyboard_from_services,
     admin_panel_keyboard,
+    supplier_panel_keyboard,
 )
 from app.parsers import extract_purchase_data, extract_phone, extract_code
 from app.senders import safe_send_message, answer_message
@@ -52,6 +55,10 @@ from app.services import (
     set_text,
     texts_text,
     check_cooldown,
+    supplier_pending_text,
+    add_service_list,
+    add_service_to_list,
+    lists_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,22 +95,28 @@ def contains_forbidden_contact(text: str) -> bool:
 def admin_panel_text() -> str:
     return (
         "Админ-панель\n\n"
-        "Выберите действие кнопкой ниже.\n\n"
+        "Панель динамическая: кнопки стараются менять старое сообщение, а не кидать новое.\n"
+        "Цвет inline-кнопок Telegram менять не даёт, поэтому различие сделано эмодзи.\n\n"
         "Команды:\n"
-        "/status — статус\n"
-        "/last_orders — последние заказы\n"
-        "/suppliers — поставщики\n"
-        "/services — сервисы\n"
-        "/texts — тексты\n\n"
+        "/status\n/last_orders\n/suppliers\n/services\n/lists\n/texts\n\n"
         "/add_supplier TELEGRAM_ID Имя\n"
-        "/bind_supplier TELEGRAM_ID товар_или_ID\n"
+        "/bind_supplier TELEGRAM_ID товар_или_лист\n"
         "/remove_supplier TELEGRAM_ID\n"
-        "/unbind_supplier TELEGRAM_ID товар_или_ID\n\n"
-        "/add_service Название\n"
-        "/remove_service Название\n"
+        "/unbind_supplier TELEGRAM_ID товар_или_лист\n\n"
+        "/add_service Название\n/remove_service Название\n"
         "/set_service_emoji Название | 🔥\n"
+        "/add_list Название\n"
+        "/list_add_service Лист | Сервис\n"
         "/set_text ключ | новый текст"
     )
+
+
+async def update_or_send(callback: CallbackQuery, text: str, reply_markup=None) -> None:
+    if callback.message:
+        try:
+            await callback.message.edit_text(text, reply_markup=reply_markup)
+        except Exception:
+            await callback.message.answer(text, reply_markup=reply_markup)
 
 
 async def delete_later(bot: Bot, chat_id: int, message_id: int, delay: int = 20) -> None:
@@ -124,6 +137,8 @@ async def maybe_delete_message(bot: Bot, message: Message, delay: int = 20) -> N
 async def notify_admins(bot: Bot, text: str) -> None:
     for admin_id in ADMIN_IDS:
         await safe_send_message(bot, admin_id, text)
+    if ADMIN_ALERT_CHAT_ID:
+        await safe_send_message(bot, ADMIN_ALERT_CHAT_ID, text)
 
 
 async def send_service_keyboard(
@@ -134,6 +149,11 @@ async def send_service_keyboard(
     page: int = 0,
 ) -> None:
     async with SessionLocal() as session:
+        order = await get_order_by_id(session, order_id)
+        if not order or order.status != "waiting_service":
+            closed_text = await get_text(session, "order_closed", "Заказ уже закрыт или уже в обработке.")
+            await answer_message(bot, message, closed_text, business_connection_id)
+            return
         services, max_page = await get_services_page(session, page, SERVICE_PAGE_SIZE)
         text = await get_text(session, "service_select", "Выберите сервис кнопкой ниже или напишите название из списка.")
 
@@ -170,6 +190,33 @@ async def process_admin_command(bot: Bot, message: Message, business_connection_
     if text == "/texts":
         async with SessionLocal() as session:
             result = await texts_text(session)
+        await answer_message(bot, message, result, business_connection_id)
+        return True
+
+    if text == "/lists":
+        async with SessionLocal() as session:
+            result = await lists_text(session)
+        await answer_message(bot, message, result, business_connection_id)
+        return True
+
+    if text.startswith("/add_list"):
+        name = text.replace("/add_list", "", 1).strip()
+        if not name:
+            await answer_message(bot, message, "Формат:\n/add_list Название\n\nПример:\n/add_list numbers", business_connection_id)
+            return True
+        async with SessionLocal() as session:
+            result = await add_service_list(session, name)
+        await answer_message(bot, message, result, business_connection_id)
+        return True
+
+    if text.startswith("/list_add_service"):
+        payload = text.replace("/list_add_service", "", 1).strip()
+        if "|" not in payload:
+            await answer_message(bot, message, "Формат:\n/list_add_service Лист | Сервис", business_connection_id)
+            return True
+        list_name, service_name = [x.strip() for x in payload.split("|", 1)]
+        async with SessionLocal() as session:
+            result = await add_service_to_list(session, list_name, service_name)
         await answer_message(bot, message, result, business_connection_id)
         return True
 
@@ -319,6 +366,29 @@ async def process_admin_command(bot: Bot, message: Message, business_connection_
     return False
 
 
+async def is_supplier_user(user_id: int) -> bool:
+    async with SessionLocal() as session:
+        from app.models import Supplier
+        from sqlalchemy import select
+        result = await session.execute(select(Supplier).where(Supplier.telegram_id == user_id, Supplier.is_active == True))
+        return result.scalars().first() is not None
+
+
+async def process_supplier_command(bot: Bot, message: Message, business_connection_id: str | None) -> bool:
+    if not message.from_user:
+        return False
+    if not await is_supplier_user(message.from_user.id):
+        return False
+
+    text = (message.text or "").strip()
+    if text in {"/supplier", "/work", "/pending"}:
+        async with SessionLocal() as session:
+            pending_text, max_page = await supplier_pending_text(session, message.from_user.id, 0, SUPPLIER_PAGE_SIZE)
+        await answer_message(bot, message, pending_text, business_connection_id, reply_markup=supplier_panel_keyboard(0, max_page))
+        return True
+    return False
+
+
 async def process_command_message(bot: Bot, message: Message, business_connection_id: str | None) -> None:
     if not message.from_user:
         return
@@ -330,12 +400,21 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
     if await process_admin_command(bot, message, business_connection_id):
         return
 
+    if await process_supplier_command(bot, message, business_connection_id):
+        return
+
     if text == "/start":
         async with SessionLocal() as session:
             order = await find_active_order_for_customer(session, user_id, username)
 
         if order and order.status == "waiting_service":
             await send_service_keyboard(bot, message, order.id, business_connection_id, page=0)
+            return
+
+        if await is_supplier_user(user_id):
+            async with SessionLocal() as session:
+                pending_text, max_page = await supplier_pending_text(session, user_id, 0, SUPPLIER_PAGE_SIZE)
+            await answer_message(bot, message, pending_text, business_connection_id, reply_markup=supplier_panel_keyboard(0, max_page))
             return
 
         await answer_message(bot, message, "Бот работает.\n\nПроверка: /ping\nАдмин-панель: /admin", business_connection_id)
@@ -466,6 +545,12 @@ async def accept_service_for_order(bot: Bot, message: Message | None, order_id: 
         if order.status != "waiting_service":
             if message:
                 await answer_message(bot, message, "Этот заказ уже в обработке или закрыт.", business_connection_id or order.business_connection_id)
+            return
+
+        if order.status != "waiting_service":
+            if message:
+                closed_text = await get_text(session, "order_closed", "Заказ уже закрыт или уже в обработке.")
+                await answer_message(bot, message, closed_text, business_connection_id or order.business_connection_id)
             return
 
         order.service_name = service_name
@@ -688,6 +773,49 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
     await handle_buyer_message(bot, message, business_connection_id)
 
 
+async def resend_problem_to_supplier(bot: Bot, order, problem_type: str) -> None:
+    async with SessionLocal() as session:
+        supplier = await find_supplier_for_order(session, order)
+
+    if not supplier:
+        await notify_admins(bot, f"Проблема по заказу #{order.operation_id}, но поставщик не найден.")
+        return
+
+    if problem_type == "code":
+        request_type = "code"
+        supplier_text = (
+            "Проблема: код не работает.\n\n"
+            f"Заказ: #{order.operation_id}\n"
+            f"ID в базе: {order.id}\n"
+            f"Товар: {order.product_name}\n"
+            f"Сервис: {order.service_name}\n"
+            f"Номер: {order.phone_number or 'нет'}\n"
+            f"Старый код: {order.verification_code or 'нет'}\n\n"
+            "Проверьте цифры и пришлите новый/правильный код.\n"
+            "Панель поставщика: /supplier"
+        )
+    else:
+        request_type = "number"
+        supplier_text = (
+            "Проблема: номер не работает.\n\n"
+            f"Заказ: #{order.operation_id}\n"
+            f"ID в базе: {order.id}\n"
+            f"Товар: {order.product_name}\n"
+            f"Сервис: {order.service_name}\n"
+            f"Старый номер: {order.phone_number or 'нет'}\n\n"
+            "Пришлите новый номер.\n"
+            "Панель поставщика: /supplier"
+        )
+
+    ok = await safe_send_message(bot, supplier.telegram_id, supplier_text, order.business_connection_id)
+    if not ok:
+        ok = await safe_send_message(bot, supplier.telegram_id, supplier_text)
+
+    if ok:
+        async with SessionLocal() as session:
+            await create_supplier_request(session, order.id, supplier.telegram_id, request_type)
+
+
 async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
     if not callback.from_user or not is_admin(callback.from_user.id):
         return False
@@ -695,48 +823,49 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
     data = callback.data or ""
 
     if data == "admin:panel":
-        if callback.message:
-            await callback.message.answer(admin_panel_text(), reply_markup=admin_panel_keyboard())
+        await update_or_send(callback, admin_panel_text(), reply_markup=admin_panel_keyboard())
         await callback.answer()
         return True
 
     if data == "admin:status":
         async with SessionLocal() as session:
             text = await get_status_text(session)
-        if callback.message:
-            await callback.message.answer(text, reply_markup=admin_panel_keyboard())
+        await update_or_send(callback, text, reply_markup=admin_panel_keyboard())
         await callback.answer()
         return True
 
     if data == "admin:last_orders":
         async with SessionLocal() as session:
             text = await get_last_orders_text(session)
-        if callback.message:
-            await callback.message.answer(text, reply_markup=admin_panel_keyboard())
+        await update_or_send(callback, text, reply_markup=admin_panel_keyboard())
         await callback.answer()
         return True
 
     if data == "admin:suppliers":
         async with SessionLocal() as session:
             text = await list_suppliers_text(session)
-        if callback.message:
-            await callback.message.answer(text, reply_markup=admin_panel_keyboard())
+        await update_or_send(callback, text, reply_markup=admin_panel_keyboard())
         await callback.answer()
         return True
 
     if data == "admin:services":
         async with SessionLocal() as session:
             text = await services_text(session)
-        if callback.message:
-            await callback.message.answer(text, reply_markup=admin_panel_keyboard())
+        await update_or_send(callback, text, reply_markup=admin_panel_keyboard())
         await callback.answer()
         return True
 
     if data == "admin:texts":
         async with SessionLocal() as session:
             text = await texts_text(session)
-        if callback.message:
-            await callback.message.answer(text, reply_markup=admin_panel_keyboard())
+        await update_or_send(callback, text, reply_markup=admin_panel_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "admin:lists":
+        async with SessionLocal() as session:
+            text = await lists_text(session)
+        await update_or_send(callback, text, reply_markup=admin_panel_keyboard())
         await callback.answer()
         return True
 
@@ -745,13 +874,29 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         "admin:bind_supplier_help": "Привязать товар:\n/bind_supplier TELEGRAM_ID товар_или_ID\n\nПример:\n/bind_supplier 123456789 proxy",
         "admin:add_service_help": "Добавить сервис:\n/add_service Название\n\nПример:\n/add_service Telegram",
         "admin:service_emoji_help": "Эмодзи сервиса:\n/set_service_emoji Название | эмодзи\n\nПример:\n/set_service_emoji Telegram | 🔥",
-        "admin:set_text_help": "Изменить текст:\n/set_text ключ | новый текст\n\nКлючи:\nthank_you\nservice_accepted\nservice_select\norder_not_found\ncontact_forbidden",
+        "admin:set_text_help": "Изменить текст:\n/set_text ключ | новый текст\n\nКлючи:\nthank_you\nservice_accepted\nservice_select\norder_not_found\ncontact_forbidden\norder_closed\nproblem_sent",
+        "admin:list_help": "Листы сервисов:\n/add_list Название\n/list_add_service Лист | Сервис\n\nПоставщика можно привязать к листу:\n/bind_supplier TELEGRAM_ID НазваниеЛиста",
         "admin:commands": admin_panel_text(),
     }
 
     if data in help_texts:
-        if callback.message:
-            await callback.message.answer(help_texts[data], reply_markup=admin_panel_keyboard())
+        await update_or_send(callback, help_texts[data], reply_markup=admin_panel_keyboard())
+        await callback.answer()
+        return True
+
+    return False
+
+
+async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
+    if not callback.from_user or not await is_supplier_user(callback.from_user.id):
+        return False
+
+    data = callback.data or ""
+    if data.startswith("supplier:pending:"):
+        page = int(data.split(":")[2])
+        async with SessionLocal() as session:
+            text, max_page = await supplier_pending_text(session, callback.from_user.id, page, SUPPLIER_PAGE_SIZE)
+        await update_or_send(callback, text, reply_markup=supplier_panel_keyboard(page, max_page))
         await callback.answer()
         return True
 
@@ -774,16 +919,16 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         order_id = int(order_id_raw)
         page = int(page_raw)
 
-        if callback.message and order_id:
-            async with SessionLocal() as session:
-                services, max_page = await get_services_page(session, page, SERVICE_PAGE_SIZE)
-                text = await get_text(session, "service_select", "Выберите сервис кнопкой ниже или напишите название из списка.")
+        async with SessionLocal() as session:
+            order = await get_order_by_id(session, order_id) if order_id else None
+            if not order or order.status != "waiting_service":
+                closed_text = await get_text(session, "order_closed", "Заказ уже закрыт или уже в обработке.")
+                await callback.answer(closed_text, show_alert=True)
+                return
+            services, max_page = await get_services_page(session, page, SERVICE_PAGE_SIZE)
+            text = await get_text(session, "service_select", "Выберите сервис кнопкой ниже или напишите название из списка.")
 
-            await callback.message.answer(
-                f"{text}\n\nСтраница {page + 1}/{max_page + 1}",
-                reply_markup=service_keyboard_from_services(services, page, max_page, order_id),
-            )
-
+        await update_or_send(callback, f"{text}\n\nСтраница {page + 1}/{max_page + 1}", reply_markup=service_keyboard_from_services(services, page, max_page, order_id))
         await callback.answer()
         return
 
@@ -795,10 +940,14 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         async with SessionLocal() as session:
             service = await find_service_by_slug(session, service_slug)
             order = await get_order_by_id(session, order_id) if order_id else None
-            business_id = order.business_connection_id if order else None
+            if not order or order.status != "waiting_service":
+                closed_text = await get_text(session, "order_closed", "Заказ уже закрыт или уже в обработке.")
+                await callback.answer(closed_text, show_alert=True)
+                return
+            business_id = order.business_connection_id
 
-        if not service or not order:
-            await callback.answer("Сервис или заказ не найден", show_alert=True)
+        if not service:
+            await callback.answer("Сервис не найден", show_alert=True)
             return
 
         await accept_service_for_order(bot, message, order_id, service.name, business_id)
@@ -844,7 +993,8 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             f"Товар: {order.product_name}\n"
             f"Сервис: {order.service_name}\n"
             f"Номер: {order.phone_number}\n\n"
-            "Пришлите код. Пример: 123456"
+            "Пришлите код. Пример: 123456\n"
+            "Панель поставщика: /supplier"
         )
 
         ok = await safe_send_message(bot, supplier.telegram_id, supplier_text, order.business_connection_id)
