@@ -109,7 +109,7 @@ from app.services import (
 )
 
 logger = logging.getLogger(__name__)
-logger.info("FIX_MARKER_AUTODELETE_IGNORE_TEXT_BUTTONS=v2 loaded")
+logger.info("FIX_MARKER_BUTTONS_SAFE_SEND_AUTODELETE=v3 loaded")
 
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 
@@ -150,11 +150,52 @@ def admin_panel_text() -> str:
 
 
 async def update_or_send(callback: CallbackQuery, text: str, reply_markup=None) -> None:
-    if callback.message:
+    """
+    Пытается обновить старое сообщение с кнопками.
+    Если Telegram не разрешает edit_text — отправляет новое сообщение.
+    В логах видно, была ли клавиатура и какой callback её вызвал.
+    """
+    has_keyboard = reply_markup is not None
+    data = callback.data or ""
+
+    if not callback.message:
+        logger.warning("UPDATE_OR_SEND_NO_MESSAGE data=%s has_keyboard=%s", data, has_keyboard)
+        return
+
+    try:
+        await callback.message.edit_text(text, reply_markup=reply_markup)
+        logger.info(
+            "UPDATE_OR_SEND_EDIT_OK chat_id=%s message_id=%s data=%s has_keyboard=%s",
+            callback.message.chat.id,
+            callback.message.message_id,
+            data,
+            has_keyboard,
+        )
+    except Exception as exc:
+        logger.info(
+            "UPDATE_OR_SEND_EDIT_FAILED_SEND_NEW chat_id=%s message_id=%s data=%s has_keyboard=%s error=%s",
+            callback.message.chat.id,
+            callback.message.message_id,
+            data,
+            has_keyboard,
+            exc,
+        )
         try:
-            await callback.message.edit_text(text, reply_markup=reply_markup)
-        except Exception:
             await callback.message.answer(text, reply_markup=reply_markup)
+            logger.info(
+                "UPDATE_OR_SEND_NEW_OK chat_id=%s data=%s has_keyboard=%s",
+                callback.message.chat.id,
+                data,
+                has_keyboard,
+            )
+        except Exception as send_exc:
+            logger.exception(
+                "UPDATE_OR_SEND_NEW_FAILED chat_id=%s data=%s has_keyboard=%s error=%s",
+                callback.message.chat.id,
+                data,
+                has_keyboard,
+                send_exc,
+            )
 
 
 async def delete_later(bot: Bot, chat_id: int, message_id: int, delay: int | None = None) -> None:
@@ -170,6 +211,13 @@ async def delete_later(bot: Bot, chat_id: int, message_id: int, delay: int | Non
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
         logger.info("AUTO_DELETE_OK chat_id=%s message_id=%s", chat_id, message_id)
     except Exception as exc:
+        error_text = str(exc)
+        # Это обычная ситуация для Telegram Business: сообщение уже удалено,
+        # недоступно для удаления или Telegram не разрешил его удалить.
+        # Не считаем это ошибкой, чтобы логи не засорялись WARNING.
+        if "message to delete not found" in error_text.lower():
+            logger.info("AUTO_DELETE_SKIPPED_NOT_FOUND chat_id=%s message_id=%s", chat_id, message_id)
+            return
         logger.warning("AUTO_DELETE_FAILED chat_id=%s message_id=%s error=%s", chat_id, message_id, exc)
 
 
@@ -188,6 +236,16 @@ async def maybe_delete_sent(bot: Bot, sent_message, delay: int | None = None) ->
         return
 
     if not sent_message or not hasattr(sent_message, "chat") or not hasattr(sent_message, "message_id"):
+        return
+
+    # ВАЖНО: сообщения с inline-кнопками не удаляем автоматически,
+    # иначе покупатель/поставщик может не успеть увидеть кнопки.
+    if getattr(sent_message, "reply_markup", None):
+        logger.info(
+            "AUTO_DELETE_SKIP_BUTTON_MESSAGE chat_id=%s message_id=%s",
+            sent_message.chat.id,
+            sent_message.message_id,
+        )
         return
 
     try:

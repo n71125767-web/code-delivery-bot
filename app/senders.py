@@ -14,33 +14,63 @@ async def safe_send_message(
 ):
     """
     Возвращает Message при успехе или False при ошибке.
-    Это нужно для автоудаления исходящих сообщений.
+
+    Улучшение v3:
+    1. Логирует, есть ли inline/reply-кнопки.
+    2. Если отправка через business_connection_id не прошла,
+       пробует обычную отправку ботом как fallback.
     """
     me = await bot.me()
+    has_keyboard = reply_markup is not None
 
     if chat_id == me.id:
-        logger.info("SKIP SEND: chat_id is bot id=%s", chat_id)
+        logger.info("SKIP_SEND_TO_SELF chat_id=%s has_keyboard=%s", chat_id, has_keyboard)
         return False
 
-    try:
-        if business_connection_id:
-            return await bot.send_message(
+    if business_connection_id:
+        try:
+            msg = await bot.send_message(
                 chat_id=chat_id,
                 text=text,
                 business_connection_id=business_connection_id,
                 reply_markup=reply_markup,
             )
+            logger.info(
+                "SEND_OK_BUSINESS chat_id=%s message_id=%s business_connection_id=%s has_keyboard=%s",
+                chat_id,
+                getattr(msg, "message_id", None),
+                business_connection_id,
+                has_keyboard,
+            )
+            return msg
+        except Exception as exc:
+            logger.warning(
+                "SEND_FAILED_BUSINESS_TRY_NORMAL chat_id=%s business_connection_id=%s has_keyboard=%s error=%s",
+                chat_id,
+                business_connection_id,
+                has_keyboard,
+                exc,
+            )
 
-        return await bot.send_message(
+    try:
+        msg = await bot.send_message(
             chat_id=chat_id,
             text=text,
             reply_markup=reply_markup,
         )
+        logger.info(
+            "SEND_OK_NORMAL chat_id=%s message_id=%s has_keyboard=%s",
+            chat_id,
+            getattr(msg, "message_id", None),
+            has_keyboard,
+        )
+        return msg
     except Exception as exc:
         logger.exception(
-            "Send failed chat_id=%s business_connection_id=%s error=%s",
+            "SEND_FAILED_FINAL chat_id=%s business_connection_id=%s has_keyboard=%s error=%s",
             chat_id,
             business_connection_id,
+            has_keyboard,
             exc,
         )
         return False
