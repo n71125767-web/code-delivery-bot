@@ -2,8 +2,8 @@ import logging
 from sqlalchemy import text, select
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
-from app.config import DATABASE_URL, SUPPLIER_IDS, SERVICE_OPTIONS
-from app.models import Base, Supplier, ServiceOption, TextTemplate
+from app.config import DATABASE_URL, SUPPLIER_IDS, SERVICE_OPTIONS, ADMIN_IDS
+from app.models import Base, Supplier, ServiceOption, TextTemplate, AdminUser
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,7 @@ async def init_db() -> None:
             await _sqlite_migrations(conn)
 
     await seed_env_suppliers()
+    await seed_env_admins()
     await seed_services()
     await seed_text_templates()
 
@@ -60,6 +61,14 @@ async def _sqlite_migrations(conn) -> None:
             except Exception as exc:
                 logger.warning("Migration skipped: %s; error=%s", sql, exc)
 
+    admin_columns_result = await conn.execute(text("PRAGMA table_info(admin_users)"))
+    admin_columns = {row[1] for row in admin_columns_result.fetchall()}
+    # Таблица создаётся через Base.metadata.create_all. Этот блок оставлен для будущих SQLite-миграций.
+
+    bug_columns_result = await conn.execute(text("PRAGMA table_info(bug_reports)"))
+    bug_columns = {row[1] for row in bug_columns_result.fetchall()}
+    # Таблица создаётся через Base.metadata.create_all. Этот блок оставлен для будущих SQLite-миграций.
+
 
 async def seed_env_suppliers() -> None:
     if not SUPPLIER_IDS:
@@ -71,6 +80,21 @@ async def seed_env_suppliers() -> None:
             exists = result.scalars().first()
             if not exists:
                 session.add(Supplier(telegram_id=supplier_id, name=f"supplier_{supplier_id}", is_active=True))
+        await session.commit()
+
+
+async def seed_env_admins() -> None:
+    if not ADMIN_IDS:
+        return
+
+    async with SessionLocal() as session:
+        for admin_id in ADMIN_IDS:
+            result = await session.execute(select(AdminUser).where(AdminUser.telegram_id == admin_id))
+            exists = result.scalars().first()
+            if not exists:
+                session.add(AdminUser(telegram_id=admin_id, name=f"admin_{admin_id}", is_active=True, added_by=admin_id))
+            else:
+                exists.is_active = True
         await session.commit()
 
 
@@ -96,6 +120,8 @@ async def seed_text_templates() -> None:
         "contact_forbidden": "Нельзя отправлять контакты, username, ссылки или номера для связи.\n\nНапишите только название сервиса или выберите кнопку ниже.",
         "number_sent_supplier": "OK. Номер отправлен покупателю.",
         "code_sent_supplier": "OK. Код отправлен покупателю.",
+        "welcome_start": "Здравствуйте. Чтобы открыть меню и связать заказы, нажмите или отправьте команду /start.",
+        "bug_report_hint": "Опишите проблему так: /bug что случилось, на каком шаге, номер заказа если есть.",
     }
 
     async with SessionLocal() as session:

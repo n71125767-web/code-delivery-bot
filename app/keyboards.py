@@ -53,6 +53,7 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="🧩 Сервисы", callback_data="admin:services")
     kb.button(text="📚 Листы", callback_data="admin:lists")
     kb.button(text="✏️ Тексты", callback_data="admin:texts")
+    kb.button(text="👮 Админы", callback_data="admin:admins")
     kb.button(text="⚙️ Настройки", callback_data="admin:settings")
     kb.adjust(2)
     return kb.as_markup()
@@ -180,6 +181,49 @@ def admin_settings_keyboard() -> InlineKeyboardMarkup:
     kb.adjust(1)
     return kb.as_markup()
 
+
+
+
+def admin_admins_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📋 Список админов", callback_data="admin:admins_list")
+    kb.button(text="➕ Добавить админа", callback_data="admin:add_admin_prompt")
+    kb.button(text="➖ Удалить админа", callback_data="admin:remove_admin_list")
+    kb.button(text="⬅️ Назад", callback_data="admin:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_remove_admin_keyboard(admin_rows, env_admin_ids: list[int] | None = None) -> InlineKeyboardMarkup:
+    env_admin_ids = set(env_admin_ids or [])
+    kb = InlineKeyboardBuilder()
+
+    active_rows = [admin for admin in admin_rows if getattr(admin, "is_active", False)]
+    if active_rows:
+        for admin in active_rows:
+            name = (admin.name or "без имени").strip()
+            if len(name) > 24:
+                name = name[:23] + "…"
+            locked = " 🔒" if admin.telegram_id in env_admin_ids else ""
+            if admin.telegram_id in env_admin_ids:
+                kb.button(text=f"🔒 {admin.telegram_id} — {name}", callback_data="admin:remove_admin_env_locked")
+            else:
+                kb.button(text=f"🗑 {admin.telegram_id} — {name}{locked}", callback_data=f"admin:remove_admin:{admin.telegram_id}")
+    else:
+        kb.button(text="Доп. админов нет", callback_data="admin:noop")
+
+    kb.button(text="⬅️ Назад к админам", callback_data="admin:admins")
+    kb.button(text="🏠 Главное меню", callback_data="admin:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_add_admin_cancel_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="❌ Отмена", callback_data="admin:add_admin_cancel")
+    kb.button(text="⬅️ Назад к админам", callback_data="admin:admins")
+    kb.adjust(1)
+    return kb.as_markup()
 
 def _short_admin_button_text(value: str | None, limit: int = 28) -> str:
     text = (value or "Заказ").strip()

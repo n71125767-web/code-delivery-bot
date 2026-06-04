@@ -25,6 +25,8 @@ from app.config import (
     BUTTON_COOLDOWN_SECONDS,
     BUYER_ORDERS_LIMIT,
     BOT_TOKEN,
+    BUG_REPORT_CHAT_IDS,
+    SUPPLIER_IMMUNITY_SKIP_AUTODELETE,
 )
 from app.database import SessionLocal
 from app.keyboards import (
@@ -63,6 +65,9 @@ from app.keyboards import (
     admin_profile_keyboard,
     admin_order_card_keyboard,
     admin_orders_keyboard,
+    admin_admins_keyboard,
+    admin_remove_admin_keyboard,
+    admin_add_admin_cancel_keyboard,
 )
 from app.parsers import extract_purchase_data, extract_phone, extract_code
 from app.senders import safe_send_message, answer_message
@@ -123,12 +128,19 @@ from app.services import (
     get_problem_order_rows,
     mark_code_waiting_buyer_confirm,
     close_waiting_supplier_requests_for_order,
+    is_db_admin,
+    add_admin_user,
+    remove_admin_user,
+    list_admin_users_text,
+    create_bug_report,
+    get_admin_users,
 )
 
 logger = logging.getLogger(__name__)
-logger.info("FIX_MARKER_WAIT_BUYER_CONFIRM_DYNAMIC=v12 loaded")
+logger.info("FIX_MARKER_ADMIN_PANEL_BUTTONS=v14 loaded")
 
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
+ADMIN_ADD_ADMIN_WAIT: set[int] = set()
 
 # Динамические панели ролей: храним последнее inline-сообщение панели,
 # чтобы команды и callback-кнопки редактировали его, а не спамили новым сообщением.
@@ -450,6 +462,23 @@ def is_admin(user_id: int | None) -> bool:
     return bool(user_id and user_id in ADMIN_IDS)
 
 
+async def is_admin_user(user_id: int | None) -> bool:
+    if is_admin(user_id):
+        return True
+    if not user_id:
+        return False
+    async with SessionLocal() as session:
+        return await is_db_admin(session, user_id)
+
+
+async def get_user_role(user_id: int | None) -> str:
+    if await is_admin_user(user_id):
+        return "admin"
+    if user_id and await is_supplier_user(user_id):
+        return "supplier"
+    return "buyer"
+
+
 def get_business_id(message: Message | None, fallback: str | None = None) -> str | None:
     if message is None:
         return fallback or ADMIN_BUSINESS_CONNECTION_ID
@@ -608,7 +637,8 @@ async def temp_answer(
 ) -> None:
     sent = await answer_message(bot, message, text, business_connection_id, reply_markup=reply_markup)
     await maybe_delete_sent(bot, sent, delay)
-    await maybe_delete_message(bot, message, delay=5)
+    if not SUPPLIER_IMMUNITY_SKIP_AUTODELETE:
+                    await maybe_delete_message(bot, message, delay=5)
 
 
 async def send_buyer_menu(
@@ -680,6 +710,67 @@ async def send_service_keyboard(
 
 
 
+async def notify_bug_report_receivers(bot: Bot, text: str) -> None:
+    sent_to: set[int] = set()
+    for admin_id in ADMIN_IDS:
+        sent_to.add(admin_id)
+        await safe_send_message(bot, admin_id, text)
+    for chat_id in BUG_REPORT_CHAT_IDS:
+        if chat_id not in sent_to:
+            sent_to.add(chat_id)
+            await safe_send_message(bot, chat_id, text)
+    if ADMIN_ALERT_CHAT_ID and ADMIN_ALERT_CHAT_ID not in sent_to:
+        await safe_send_message(bot, ADMIN_ALERT_CHAT_ID, text)
+
+
+async def process_bug_report_command(bot: Bot, message: Message, business_connection_id: str | None) -> bool:
+    if not message.from_user:
+        return False
+
+    text = (message.text or "").strip()
+    if not (text == "/bug" or text.startswith("/bug ") or text.startswith("/report ")):
+        return False
+
+    payload = text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1)) > 1 else ""
+    if not payload:
+        async with SessionLocal() as session:
+            hint = await get_text(
+                session,
+                "bug_report_hint",
+                "Опишите проблему так: /bug что случилось, на каком шаге, номер заказа если есть.",
+            )
+        await answer_message(bot, message, hint, business_connection_id)
+        return True
+
+    role = await get_user_role(message.from_user.id)
+    async with SessionLocal() as session:
+        report = await create_bug_report(
+            session,
+            message.from_user.id,
+            message.from_user.username,
+            role,
+            payload,
+        )
+
+    report_text = (
+        "🐞 BUG REPORT\n\n"
+        f"ID отчёта: {report.id}\n"
+        f"Роль: {role}\n"
+        f"От: {message.from_user.id} | @{message.from_user.username or 'нет'}\n"
+        f"Business: {business_connection_id or 'нет'}\n"
+        f"Chat ID: {message.chat.id}\n\n"
+        f"Текст:\n{payload}"
+    )
+    await notify_bug_report_receivers(bot, report_text)
+    await answer_message(
+        bot,
+        message,
+        f"OK. Баг-репорт #{report.id} отправлен админам.",
+        business_connection_id,
+    )
+    return True
+
+
 async def handle_unknown_buyer(
     bot: Bot,
     message: Message,
@@ -707,6 +798,13 @@ async def handle_unknown_buyer(
         )
 
     if IGNORE_NON_BUYERS:
+        async with SessionLocal() as session:
+            welcome_text = await get_text(
+                session,
+                "welcome_start",
+                "Здравствуйте. Чтобы открыть меню и связать заказы, нажмите или отправьте команду /start.",
+            )
+        await temp_answer(bot, message, welcome_text, business_connection_id)
         return
 
     async with SessionLocal() as session:
@@ -720,15 +818,59 @@ async def handle_unknown_buyer(
 
 
 async def process_admin_pending_input(bot: Bot, message: Message, business_connection_id: str | None) -> bool:
-    if not message.from_user or not is_admin(message.from_user.id):
+    if not message.from_user or not await is_admin_user(message.from_user.id):
         return False
 
     admin_id = message.from_user.id
+    text = (message.text or "").strip()
+
+    if admin_id in ADMIN_ADD_ADMIN_WAIT:
+        if text.lower() in {"отмена", "cancel", "/cancel"}:
+            ADMIN_ADD_ADMIN_WAIT.discard(admin_id)
+            await temp_answer(bot, message, "Добавление админа отменено.", business_connection_id, reply_markup=admin_admins_keyboard())
+            return True
+
+        parts = text.split(maxsplit=1)
+        if not parts:
+            await temp_answer(
+                bot,
+                message,
+                "Пришлите Telegram ID и имя. Пример:\n123456789 Иван",
+                business_connection_id,
+                reply_markup=admin_add_admin_cancel_keyboard(),
+            )
+            return True
+        try:
+            new_admin_id = int(parts[0])
+        except ValueError:
+            await temp_answer(
+                bot,
+                message,
+                "Telegram ID должен быть числом. Пример:\n123456789 Иван",
+                business_connection_id,
+                reply_markup=admin_add_admin_cancel_keyboard(),
+            )
+            return True
+
+        name = parts[1].strip() if len(parts) > 1 and parts[1].strip() else f"admin_{new_admin_id}"
+        async with SessionLocal() as session:
+            admin = await add_admin_user(session, new_admin_id, name, added_by=admin_id)
+            admins_text = await list_admin_users_text(session, ADMIN_IDS)
+
+        ADMIN_ADD_ADMIN_WAIT.discard(admin_id)
+        await temp_answer(
+            bot,
+            message,
+            f"✅ Доп.админ добавлен.\n\nID: {admin.telegram_id}\nИмя: {admin.name}\n\n{admins_text}",
+            business_connection_id,
+            reply_markup=admin_admins_keyboard(),
+        )
+        await safe_send_message(bot, new_admin_id, "Вы назначены дополнительным админом. Откройте /admin")
+        return True
+
     key = ADMIN_TEXT_EDIT_WAIT.get(admin_id)
     if not key:
         return False
-
-    text = (message.text or "").strip()
 
     if not text:
         await temp_answer(bot, message, "Пришлите новый текст сообщением.", business_connection_id)
@@ -756,7 +898,7 @@ async def process_admin_pending_input(bot: Bot, message: Message, business_conne
 
 
 async def process_admin_command(bot: Bot, message: Message, business_connection_id: str | None) -> bool:
-    if not message.from_user or not is_admin(message.from_user.id):
+    if not message.from_user or not await is_admin_user(message.from_user.id):
         return False
 
     text = (message.text or "").strip()
@@ -764,6 +906,48 @@ async def process_admin_command(bot: Bot, message: Message, business_connection_
 
     if text in {"/admin", "/panel", "/menu"}:
         await answer_message(bot, message, admin_panel_text(), business_connection_id, reply_markup=admin_panel_keyboard())
+        return True
+
+    if text == "/admins":
+        async with SessionLocal() as session:
+            result = await list_admin_users_text(session, ADMIN_IDS)
+        await answer_message(bot, message, result, business_connection_id, reply_markup=admin_admins_keyboard())
+        return True
+
+    if text.startswith("/add_admin"):
+        if not is_admin(message.from_user.id):
+            await answer_message(bot, message, "Только главный админ из ADMIN_IDS может добавлять доп.админов.", business_connection_id)
+            return True
+        if len(parts) < 2:
+            await answer_message(bot, message, "Формат:\n/add_admin TELEGRAM_ID Имя", business_connection_id)
+            return True
+        try:
+            admin_id = int(parts[1])
+        except ValueError:
+            await answer_message(bot, message, "TELEGRAM_ID должен быть числом.", business_connection_id)
+            return True
+        name = " ".join(parts[2:]).strip() or f"admin_{admin_id}"
+        async with SessionLocal() as session:
+            admin = await add_admin_user(session, admin_id, name, added_by=message.from_user.id)
+        await answer_message(bot, message, f"OK. Доп.админ добавлен.\nID: {admin.telegram_id}\nИмя: {admin.name}", business_connection_id)
+        await safe_send_message(bot, admin_id, "Вы назначены дополнительным админом. Откройте /admin")
+        return True
+
+    if text.startswith("/remove_admin"):
+        if not is_admin(message.from_user.id):
+            await answer_message(bot, message, "Только главный админ из ADMIN_IDS может выключать доп.админов.", business_connection_id)
+            return True
+        if len(parts) != 2:
+            await answer_message(bot, message, "Формат:\n/remove_admin TELEGRAM_ID", business_connection_id)
+            return True
+        try:
+            admin_id = int(parts[1])
+        except ValueError:
+            await answer_message(bot, message, "TELEGRAM_ID должен быть числом.", business_connection_id)
+            return True
+        async with SessionLocal() as session:
+            ok = await remove_admin_user(session, admin_id)
+        await answer_message(bot, message, "OK. Доп.админ выключен." if ok else "Доп.админ не найден.", business_connection_id)
         return True
 
     if text == "/services":
@@ -1173,6 +1357,9 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
     user_id = message.from_user.id
     username = message.from_user.username
 
+    if await process_bug_report_command(bot, message, business_connection_id):
+        return
+
     if await process_admin_command(bot, message, business_connection_id):
         return
 
@@ -1195,7 +1382,7 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
         return
 
     if text == "👤 Мой профиль" or text == "/profile":
-        if is_admin(user_id):
+        if await is_admin_user(user_id):
             async with SessionLocal() as session:
                 profile_text = await admin_profile_text(session, user_id, username)
             await answer_message(bot, message, profile_text, business_connection_id, reply_markup=admin_profile_keyboard())
@@ -1233,7 +1420,7 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
         return
 
     if text == "/status":
-        if not is_admin(user_id):
+        if not await is_admin_user(user_id):
             await answer_message(bot, message, "Команда только для админа.", business_connection_id)
             return
         async with SessionLocal() as session:
@@ -1242,7 +1429,7 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
         return
 
     if text == "/last_orders":
-        if not is_admin(user_id):
+        if not await is_admin_user(user_id):
             await answer_message(bot, message, "Команда только для админа.", business_connection_id)
             return
         async with SessionLocal() as session:
@@ -1251,7 +1438,7 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
         return
 
     if text.startswith("/set_customer"):
-        if not is_admin(user_id):
+        if not await is_admin_user(user_id):
             await answer_message(bot, message, "Команда только для админа.", business_connection_id)
             return
         parts = text.split()
@@ -1573,7 +1760,8 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
             sent = await send_supplier_role_panel(bot, message.chat.id, "OK. Номер отправлен покупателю.", reply_markup=supplier_inline_menu_keyboard(), business_connection_id=business_connection_id)
             try:
                 await maybe_delete_sent(bot, sent)
-                await maybe_delete_message(bot, message, delay=5)
+                if not SUPPLIER_IMMUNITY_SKIP_AUTODELETE:
+                    await maybe_delete_message(bot, message, delay=5)
             except NameError:
                 pass
             return
@@ -1652,7 +1840,8 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
             )
             try:
                 await maybe_delete_sent(bot, sent)
-                await maybe_delete_message(bot, message, delay=5)
+                if not SUPPLIER_IMMUNITY_SKIP_AUTODELETE:
+                    await maybe_delete_message(bot, message, delay=5)
             except NameError:
                 pass
             return
@@ -1697,7 +1886,7 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         logger.info("IGNORED: own bot message")
         return
 
-    if is_admin(user_id) and not text.startswith("/"):
+    if await is_admin_user(user_id) and not text.startswith("/"):
         if await process_admin_pending_input(bot, message, business_connection_id):
             return
         logger.info("IGNORED: admin non-command message to avoid self-cycle")
@@ -1786,10 +1975,85 @@ async def resend_problem_to_supplier(bot: Bot, order, problem_type: str) -> None
 
 
 async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
-    if not callback.from_user or not is_admin(callback.from_user.id):
+    if not callback.from_user or not await is_admin_user(callback.from_user.id):
         return False
 
     data = callback.data or ""
+
+    if data == "admin:noop":
+        await callback.answer()
+        return True
+
+    if data == "admin:admins":
+        async with SessionLocal() as session:
+            text = await list_admin_users_text(session, ADMIN_IDS)
+        await update_or_send(callback, text, reply_markup=admin_admins_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "admin:admins_list":
+        async with SessionLocal() as session:
+            text = await list_admin_users_text(session, ADMIN_IDS)
+        await update_or_send(callback, text, reply_markup=admin_admins_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "admin:add_admin_prompt":
+        if not is_admin(callback.from_user.id):
+            await callback.answer("Только главный админ из ADMIN_IDS может добавлять доп.админов", show_alert=True)
+            return True
+        ADMIN_ADD_ADMIN_WAIT.add(callback.from_user.id)
+        await update_or_send(
+            callback,
+            "➕ Добавление доп.админа\n\nПришлите одним сообщением Telegram ID и имя.\n\nПример:\n123456789 Иван\n\nДля отмены напишите: отмена",
+            reply_markup=admin_add_admin_cancel_keyboard(),
+        )
+        await callback.answer("Жду ID и имя")
+        return True
+
+    if data == "admin:add_admin_cancel":
+        ADMIN_ADD_ADMIN_WAIT.discard(callback.from_user.id)
+        async with SessionLocal() as session:
+            text = await list_admin_users_text(session, ADMIN_IDS)
+        await update_or_send(callback, text, reply_markup=admin_admins_keyboard())
+        await callback.answer("Отменено")
+        return True
+
+    if data == "admin:remove_admin_env_locked":
+        await callback.answer("Главный админ из ADMIN_IDS удаляется только через Render Environment", show_alert=True)
+        return True
+
+    if data == "admin:remove_admin_list":
+        if not is_admin(callback.from_user.id):
+            await callback.answer("Только главный админ из ADMIN_IDS может выключать доп.админов", show_alert=True)
+            return True
+        async with SessionLocal() as session:
+            rows = await get_admin_users(session, include_disabled=False)
+        text = "➖ Удаление доп.админа\n\nВыберите админа кнопкой ниже.\n\nГлавных админов из ADMIN_IDS нельзя удалить кнопкой — их нужно менять в Render Environment."
+        await update_or_send(callback, text, reply_markup=admin_remove_admin_keyboard(rows, ADMIN_IDS))
+        await callback.answer()
+        return True
+
+    if data.startswith("admin:remove_admin:"):
+        if not is_admin(callback.from_user.id):
+            await callback.answer("Только главный админ из ADMIN_IDS может выключать доп.админов", show_alert=True)
+            return True
+        try:
+            target_admin_id = int(data.split(":")[2])
+        except (ValueError, IndexError):
+            await callback.answer("Некорректный ID", show_alert=True)
+            return True
+        if target_admin_id in ADMIN_IDS:
+            await callback.answer("Главный админ из ADMIN_IDS удаляется только через Render Environment", show_alert=True)
+            return True
+        async with SessionLocal() as session:
+            ok = await remove_admin_user(session, target_admin_id)
+            rows = await get_admin_users(session, include_disabled=False)
+            text = await list_admin_users_text(session, ADMIN_IDS)
+        prefix = "✅ Доп.админ выключен.\n\n" if ok else "⚠️ Доп.админ не найден или уже выключен.\n\n"
+        await update_or_send(callback, prefix + text, reply_markup=admin_remove_admin_keyboard(rows, ADMIN_IDS))
+        await callback.answer("Готово" if ok else "Не найден")
+        return True
 
     if data == "admin:profile":
         async with SessionLocal() as session:
@@ -2377,7 +2641,8 @@ async def handle_buyer_callback(bot: Bot, callback: CallbackQuery) -> bool:
             "Помощь\n\n"
             "Если заказ активен — выберите сервис кнопкой или напишите название сервиса.\n"
             "После номера нажмите «Код отправлен».\n"
-            "Если номер или код не работает — нажмите кнопку проблемы под сообщением."
+            "Если номер или код не работает — нажмите кнопку проблемы под сообщением.\n"
+            "Если нашли баг — отправьте /bug описание проблемы."
         )
         await update_or_send(callback, text, reply_markup=buyer_back_keyboard())
         await callback.answer()

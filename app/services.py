@@ -3,7 +3,7 @@ from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import POPULAR_SERVICE_THRESHOLD, PROBLEM_COOLDOWN_SECONDS
-from app.models import Order, SupplierRequest, Supplier, SupplierProduct, ServiceOption, ServiceList, ServiceListItem, TextTemplate, Cooldown
+from app.models import Order, SupplierRequest, Supplier, SupplierProduct, ServiceOption, ServiceList, ServiceListItem, TextTemplate, Cooldown, AdminUser, BugReport
 
 
 ACTIVE_CUSTOMER_STATUSES = [
@@ -1202,3 +1202,87 @@ def supplier_section_text(mode: str, rows_count: int, page: int, max_page: int) 
         "Выберите конкретную заявку кнопкой ниже."
     )
 # -----------------------------------------------------
+
+
+# ---------- Extra admins + bug reports ----------
+
+async def is_db_admin(session: AsyncSession, telegram_id: int | None) -> bool:
+    if not telegram_id:
+        return False
+    result = await session.execute(
+        select(AdminUser).where(AdminUser.telegram_id == telegram_id, AdminUser.is_active == True)
+    )
+    return result.scalars().first() is not None
+
+
+async def add_admin_user(session: AsyncSession, telegram_id: int, name: str | None, added_by: int | None = None) -> AdminUser:
+    result = await session.execute(select(AdminUser).where(AdminUser.telegram_id == telegram_id))
+    admin = result.scalars().first()
+    if admin:
+        admin.name = name or admin.name
+        admin.is_active = True
+        admin.added_by = added_by or admin.added_by
+    else:
+        admin = AdminUser(telegram_id=telegram_id, name=name, is_active=True, added_by=added_by)
+        session.add(admin)
+    await session.commit()
+    await session.refresh(admin)
+    return admin
+
+
+async def remove_admin_user(session: AsyncSession, telegram_id: int) -> bool:
+    result = await session.execute(select(AdminUser).where(AdminUser.telegram_id == telegram_id))
+    admin = result.scalars().first()
+    if not admin:
+        return False
+    admin.is_active = False
+    await session.commit()
+    return True
+
+
+async def list_admin_users_text(session: AsyncSession, env_admin_ids: list[int]) -> str:
+    result = await session.execute(select(AdminUser).order_by(AdminUser.created_at.desc()))
+    admins = result.scalars().all()
+    lines = ["👮 Админы\n", "Главные админы из Render ADMIN_IDS:"]
+    if env_admin_ids:
+        lines.extend([f"- {item}" for item in env_admin_ids])
+    else:
+        lines.append("- не заданы")
+    lines.append("\nДоп. админы из базы:")
+    if not admins:
+        lines.append("- пока нет")
+    else:
+        for admin in admins:
+            lines.append(
+                f"- {admin.telegram_id} | {admin.name or 'без имени'} | "
+                f"{'active' if admin.is_active else 'disabled'}"
+            )
+    return "\n".join(lines)
+
+
+async def get_admin_users(session: AsyncSession, include_disabled: bool = False) -> list[AdminUser]:
+    query = select(AdminUser).order_by(AdminUser.created_at.desc())
+    if not include_disabled:
+        query = query.where(AdminUser.is_active == True)
+    result = await session.execute(query)
+    return list(result.scalars().all())
+
+
+async def create_bug_report(
+    session: AsyncSession,
+    reporter_id: int | None,
+    reporter_username: str | None,
+    role: str | None,
+    text: str,
+) -> BugReport:
+    report = BugReport(
+        reporter_id=reporter_id,
+        reporter_username=reporter_username,
+        role=role,
+        text=text,
+        status="new",
+    )
+    session.add(report)
+    await session.commit()
+    await session.refresh(report)
+    return report
