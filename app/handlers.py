@@ -24,6 +24,7 @@ from app.keyboards import (
     service_keyboard_from_services,
     admin_panel_keyboard,
     supplier_panel_keyboard,
+    supplier_orders_keyboard,
 )
 from app.parsers import extract_purchase_data, extract_phone, extract_code
 from app.senders import safe_send_message, answer_message
@@ -56,6 +57,9 @@ from app.services import (
     texts_text,
     check_cooldown,
     supplier_pending_text,
+    get_supplier_pending_rows,
+    select_supplier_request,
+    find_selected_supplier_request,
     add_service_list,
     add_service_to_list,
     lists_text,
@@ -384,7 +388,14 @@ async def process_supplier_command(bot: Bot, message: Message, business_connecti
     if text in {"/supplier", "/work", "/pending"}:
         async with SessionLocal() as session:
             pending_text, max_page = await supplier_pending_text(session, message.from_user.id, 0, SUPPLIER_PAGE_SIZE)
-        await answer_message(bot, message, pending_text, business_connection_id, reply_markup=supplier_panel_keyboard(0, max_page))
+            rows, max_page = await get_supplier_pending_rows(session, message.from_user.id, 0, SUPPLIER_PAGE_SIZE)
+        await answer_message(
+            bot,
+            message,
+            pending_text + "\n\nВыберите заявку кнопкой ниже, потом отправьте номер или код сообщением.",
+            business_connection_id,
+            reply_markup=supplier_orders_keyboard(rows, 0, max_page),
+        )
         return True
     return False
 
@@ -414,7 +425,14 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
         if await is_supplier_user(user_id):
             async with SessionLocal() as session:
                 pending_text, max_page = await supplier_pending_text(session, user_id, 0, SUPPLIER_PAGE_SIZE)
-            await answer_message(bot, message, pending_text, business_connection_id, reply_markup=supplier_panel_keyboard(0, max_page))
+                rows, max_page = await get_supplier_pending_rows(session, user_id, 0, SUPPLIER_PAGE_SIZE)
+            await answer_message(
+                bot,
+                message,
+                pending_text + "\n\nВыберите заявку кнопкой ниже, потом отправьте номер или код сообщением.",
+                business_connection_id,
+                reply_markup=supplier_orders_keyboard(rows, 0, max_page),
+            )
             return
 
         await answer_message(bot, message, "Бот работает.\n\nПроверка: /ping\nАдмин-панель: /admin", business_connection_id)
@@ -649,7 +667,10 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
     text = message.text or ""
 
     async with SessionLocal() as session:
-        number_request = await find_waiting_supplier_request(session, supplier_id, "number")
+        selected_request = await find_selected_supplier_request(session, supplier_id)
+        number_request = selected_request if selected_request and selected_request.request_type == "number" else None
+        if not number_request and not selected_request:
+            number_request = await find_waiting_supplier_request(session, supplier_id, "number")
 
         if number_request:
             phone = extract_phone(text)
@@ -685,7 +706,9 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
             await answer_message(bot, message, "OK. Номер отправлен покупателю.", business_connection_id)
             return
 
-        code_request = await find_waiting_supplier_request(session, supplier_id, "code")
+        code_request = selected_request if selected_request and selected_request.request_type == "code" else None
+        if not code_request and not selected_request:
+            code_request = await find_waiting_supplier_request(session, supplier_id, "code")
 
         if code_request:
             code = extract_code(text)
@@ -896,8 +919,42 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
         page = int(data.split(":")[2])
         async with SessionLocal() as session:
             text, max_page = await supplier_pending_text(session, callback.from_user.id, page, SUPPLIER_PAGE_SIZE)
-        await update_or_send(callback, text, reply_markup=supplier_panel_keyboard(page, max_page))
+            rows, max_page = await get_supplier_pending_rows(session, callback.from_user.id, page, SUPPLIER_PAGE_SIZE)
+        await update_or_send(
+            callback,
+            text + "\n\nВыберите заявку кнопкой ниже, потом отправьте номер или код сообщением.",
+            reply_markup=supplier_orders_keyboard(rows, page, max_page),
+        )
         await callback.answer()
+        return True
+
+    if data.startswith("supplier:req:"):
+        parts = data.split(":")
+        request_id = int(parts[2])
+        page = int(parts[3]) if len(parts) > 3 else 0
+        async with SessionLocal() as session:
+            ok, msg, request, order = await select_supplier_request(session, callback.from_user.id, request_id)
+            rows, max_page = await get_supplier_pending_rows(session, callback.from_user.id, page, SUPPLIER_PAGE_SIZE)
+
+        if not ok or not request or not order:
+            await callback.answer(msg, show_alert=True)
+            await update_or_send(callback, msg, reply_markup=supplier_orders_keyboard(rows, page, max_page))
+            return True
+
+        need_text = "номер" if request.request_type == "number" else "код"
+        icon = "📞" if request.request_type == "number" else "🔑"
+        selected_text = (
+            f"{icon} Заявка выбрана.\n\n"
+            f"Нужно отправить: {need_text}\n"
+            f"Заказ: #{order.operation_id}\n"
+            f"ID в базе: {order.id}\n"
+            f"Товар: {order.product_name}\n"
+            f"Сервис: {order.service_name or 'не указан'}\n"
+            f"Номер: {order.phone_number or 'ещё нет'}\n\n"
+            "Теперь отправьте ответ обычным сообщением в этот чат."
+        )
+        await update_or_send(callback, selected_text, reply_markup=supplier_orders_keyboard(rows, page, max_page))
+        await callback.answer("Заявка выбрана")
         return True
 
     return False
@@ -912,6 +969,13 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         if handled:
             return
         await callback.answer("Команда только для админа", show_alert=True)
+        return
+
+    if data.startswith("supplier:"):
+        handled = await handle_supplier_callback(bot, callback)
+        if handled:
+            return
+        await callback.answer("Команда только для поставщика", show_alert=True)
         return
 
     if data.startswith("svcpage:"):
@@ -1052,7 +1116,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
 
             if not ok_cd:
                 minutes = max(1, remaining // 60)
-                await callback.answer(f"Проблему можно отправлять раз в 10 минут. Осталось примерно {minutes} мин.", show_alert=True)
+                await callback.answer(f"Проблему можно отправлять раз в 1 минуту. Осталось примерно {minutes} мин.", show_alert=True)
                 return
 
             order = await get_order_by_id(session, order_id)
@@ -1068,10 +1132,22 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             order.updated_at = datetime.utcnow()
             await session.commit()
 
-        if callback.message:
-            await callback.message.answer("Понял. Передал админу проблему.")
+        problem_type = "code" if data.startswith("code_invalid:") else "number"
+        await resend_problem_to_supplier(bot, order, problem_type)
 
-        await notify_admins(bot, f"Покупатель сообщил о проблеме. Заказ ID в базе: {order_id}")
+        if callback.message:
+            await callback.message.answer("Понял. Передал проблему админу и поставщику.")
+
+        await notify_admins(
+            bot,
+            "Покупатель сообщил о проблеме.\n\n"
+            f"Тип: {'код' if problem_type == 'code' else 'номер'}\n"
+            f"Заказ ID в базе: {order_id}\n"
+            f"Сервис: {order.service_name or 'нет'}\n"
+            f"Номер: {order.phone_number or 'нет'}\n"
+            f"Код: {order.verification_code or 'нет'}\n\n"
+            "Запрос повторно отправлен поставщику."
+        )
         await callback.answer()
         return
 

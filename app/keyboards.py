@@ -75,3 +75,29 @@ def supplier_panel_keyboard(page: int = 0, max_page: int = 0) -> InlineKeyboardM
     kb.button(text="🔄 Обновить", callback_data=f"supplier:pending:{page}")
     kb.adjust(2)
     return kb.as_markup()
+
+
+def _short_button_text(value: str | None, limit: int = 24) -> str:
+    text = (value or "Товар").strip()
+    if len(text) > limit:
+        text = text[: limit - 1] + "…"
+    return text
+
+
+def supplier_orders_keyboard(rows, page: int = 0, max_page: int = 0) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+
+    for request, order in rows:
+        if request.request_type == "number":
+            label = f"📞 {_short_button_text(order.product_name)} — номер"
+        else:
+            label = f"🔑 {_short_button_text(order.product_name)} — код"
+        kb.button(text=label, callback_data=f"supplier:req:{request.id}:{page}")
+
+    if page > 0:
+        kb.button(text="⬅️ Назад", callback_data=f"supplier:pending:{page - 1}")
+    if page < max_page:
+        kb.button(text="➡️ Дальше", callback_data=f"supplier:pending:{page + 1}")
+    kb.button(text="🔄 Обновить", callback_data=f"supplier:pending:{page}")
+    kb.adjust(1)
+    return kb.as_markup()

@@ -600,6 +600,76 @@ async def supplier_pending_text(session: AsyncSession, supplier_id: int, page: i
     return "\n".join(lines), max_page
 
 
+async def get_supplier_pending_rows(session: AsyncSession, supplier_id: int, page: int, page_size: int):
+    total = await session.scalar(
+        select(func.count(SupplierRequest.id)).where(
+            SupplierRequest.supplier_telegram_id == supplier_id,
+            SupplierRequest.status == "sent",
+        )
+    )
+    total = total or 0
+    max_page = max((total - 1) // page_size, 0)
+    page = max(0, min(page, max_page))
+
+    result = await session.execute(
+        select(SupplierRequest, Order)
+        .join(Order, SupplierRequest.order_id == Order.id)
+        .where(
+            SupplierRequest.supplier_telegram_id == supplier_id,
+            SupplierRequest.status == "sent",
+        )
+        .order_by(SupplierRequest.created_at.asc())
+        .offset(page * page_size)
+        .limit(page_size)
+    )
+    return result.fetchall(), max_page
+
+
+async def find_selected_supplier_request(session: AsyncSession, supplier_id: int) -> SupplierRequest | None:
+    result = await session.execute(
+        select(SupplierRequest)
+        .where(
+            SupplierRequest.supplier_telegram_id == supplier_id,
+            SupplierRequest.status == "selected",
+        )
+        .order_by(SupplierRequest.created_at.asc())
+    )
+    return result.scalars().first()
+
+
+async def select_supplier_request(session: AsyncSession, supplier_id: int, request_id: int) -> tuple[bool, str, SupplierRequest | None, Order | None]:
+    result = await session.execute(
+        select(SupplierRequest, Order)
+        .join(Order, SupplierRequest.order_id == Order.id)
+        .where(
+            SupplierRequest.id == request_id,
+            SupplierRequest.supplier_telegram_id == supplier_id,
+            SupplierRequest.status == "sent",
+        )
+    )
+    row = result.first()
+    if not row:
+        return False, "Заявка не найдена или уже обработана.", None, None
+
+    request, order = row
+
+    result_selected = await session.execute(
+        select(SupplierRequest).where(
+            SupplierRequest.supplier_telegram_id == supplier_id,
+            SupplierRequest.status == "selected",
+        )
+    )
+    for selected in result_selected.scalars().all():
+        selected.status = "sent"
+
+    request.status = "selected"
+    await session.commit()
+    await session.refresh(request)
+    await session.refresh(order)
+
+    return True, "OK. Заявка выбрана.", request, order
+
+
 async def add_service_list(session: AsyncSession, name: str) -> str:
     name = name.strip()
     if not name:
