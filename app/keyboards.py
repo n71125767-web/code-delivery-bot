@@ -220,3 +220,28 @@ def admin_order_card_keyboard(order_id: int) -> InlineKeyboardMarkup:
 
     kb.adjust(1)
     return kb.as_markup()
+
+
+
+def service_confirm_keyboard(order_id: int, service_slug: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Подтвердить", callback_data=f"service_confirm:{order_id}:{service_slug}")
+    kb.button(text="🔄 Выбрать другой сервис", callback_data=f"svcpage:{order_id}:0")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+
+def supplier_request_actions_keyboard(request_id: int, request_type: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+
+    if request_type == "number":
+        kb.button(text="📞 Взять номер в работу", callback_data=f"supplier:take:{request_id}")
+        kb.button(text="✍️ Отправить номер", callback_data=f"supplier:answer:{request_id}")
+    else:
+        kb.button(text="🔑 Взять код в работу", callback_data=f"supplier:take:{request_id}")
+        kb.button(text="✍️ Отправить код", callback_data=f"supplier:answer:{request_id}")
+
+    kb.button(text="⏳ Все заявки", callback_data="supplier:pending:0")
+    kb.adjust(1)
+    return kb.as_markup()

@@ -816,3 +816,68 @@ async def admin_create_supplier_request_for_order(
 
     await create_supplier_request(session, order.id, supplier.telegram_id, request_type)
     return True, "OK. Запрос создан.", order, supplier
+
+
+async def get_supplier_request_by_id(session: AsyncSession, request_id: int) -> SupplierRequest | None:
+    result = await session.execute(select(SupplierRequest).where(SupplierRequest.id == request_id))
+    return result.scalars().first()
+
+
+async def get_supplier_request_order(session: AsyncSession, request_id: int) -> tuple[SupplierRequest | None, Order | None]:
+    request = await get_supplier_request_by_id(session, request_id)
+    if not request:
+        return None, None
+    order = await get_order_by_id(session, request.order_id)
+    return request, order
+
+
+async def mark_supplier_request_in_progress(session: AsyncSession, request_id: int) -> tuple[bool, str, SupplierRequest | None, Order | None]:
+    request, order = await get_supplier_request_order(session, request_id)
+    if not request or not order:
+        return False, "Заявка или заказ не найдены.", request, order
+
+    if request.status != "sent":
+        return False, "Эта заявка уже обработана или неактивна.", request, order
+
+    request.status = "in_progress"
+    order.updated_at = datetime.utcnow()
+    await session.commit()
+    await session.refresh(request)
+    await session.refresh(order)
+
+    return True, "OK. Заявка взята в работу.", request, order
+
+
+async def find_active_supplier_request(session: AsyncSession, supplier_telegram_id: int) -> SupplierRequest | None:
+    result = await session.execute(
+        select(SupplierRequest)
+        .where(SupplierRequest.supplier_telegram_id == supplier_telegram_id)
+        .where(SupplierRequest.status.in_(["in_progress", "sent"]))
+        .order_by(SupplierRequest.status.asc(), SupplierRequest.created_at.asc())
+    )
+    return result.scalars().first()
+
+
+async def supplier_pending_rows(session: AsyncSession, supplier_id: int, page: int, page_size: int):
+    result_total = await session.scalar(
+        select(func.count(SupplierRequest.id)).where(
+            SupplierRequest.supplier_telegram_id == supplier_id,
+            SupplierRequest.status.in_(["sent", "in_progress"]),
+        )
+    )
+    total = result_total or 0
+    max_page = max((total - 1) // page_size, 0)
+    page = max(0, min(page, max_page))
+
+    result = await session.execute(
+        select(SupplierRequest, Order)
+        .join(Order, SupplierRequest.order_id == Order.id)
+        .where(
+            SupplierRequest.supplier_telegram_id == supplier_id,
+            SupplierRequest.status.in_(["sent", "in_progress"]),
+        )
+        .order_by(SupplierRequest.created_at.asc())
+        .offset(page * page_size)
+        .limit(page_size)
+    )
+    return result.fetchall(), max_page

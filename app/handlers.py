@@ -27,8 +27,10 @@ from app.keyboards import (
     number_keyboard,
     service_keyboard,
     service_keyboard_from_services,
+    service_confirm_keyboard,
     admin_panel_keyboard,
     supplier_panel_keyboard,
+    supplier_request_actions_keyboard,
     supplier_reply_keyboard,
     supplier_orders_keyboard,
     admin_text_keys_keyboard,
@@ -79,6 +81,9 @@ from app.services import (
     add_service_to_list,
     lists_text,
     admin_create_supplier_request_for_order,
+    find_active_supplier_request,
+    mark_supplier_request_in_progress,
+    get_supplier_request_order,
     set_order_status,
     order_card_text,
     get_recent_order_rows,
@@ -796,7 +801,8 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
         selected_request = await find_selected_supplier_request(session, supplier_id)
         number_request = selected_request if selected_request and selected_request.request_type == "number" else None
         if not number_request and not selected_request:
-            number_request = await find_waiting_supplier_request(session, supplier_id, "number")
+            active_request = await find_active_supplier_request(session, supplier_id)
+        number_request = active_request if active_request and active_request.request_type == "number" else await find_waiting_supplier_request(session, supplier_id, "number")
 
         if number_request:
             phone = extract_phone(text)
@@ -836,7 +842,7 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
 
         code_request = selected_request if selected_request and selected_request.request_type == "code" else None
         if not code_request and not selected_request:
-            code_request = await find_waiting_supplier_request(session, supplier_id, "code")
+            code_request = active_request if active_request and active_request.request_type == "code" else await find_waiting_supplier_request(session, supplier_id, "code")
 
         if code_request:
             code = extract_code(text)
@@ -1243,6 +1249,77 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return False
 
     data = callback.data or ""
+
+    if data.startswith("supplier:take:"):
+        request_id = int(data.split(":")[2])
+
+        async with SessionLocal() as session:
+            ok, result, request, order = await mark_supplier_request_in_progress(session, request_id)
+
+        if not ok or not request or not order:
+            await callback.answer(result, show_alert=True)
+            return True
+
+        if request.request_type == "number":
+            buyer_text = "Номер уже в обработке. Ожидайте выдачи."
+            supplier_text = (
+                "📞 Заявка взята в работу.\n\n"
+                f"Заказ: #{order.operation_id}\n"
+                f"Товар: {order.product_name}\n"
+                f"Сервис: {order.service_name}\n\n"
+                "Теперь отправьте номер сообщением."
+            )
+        else:
+            buyer_text = "Код уже в обработке. Ожидайте выдачи."
+            supplier_text = (
+                "🔑 Заявка взята в работу.\n\n"
+                f"Заказ: #{order.operation_id}\n"
+                f"Товар: {order.product_name}\n"
+                f"Сервис: {order.service_name}\n"
+                f"Номер: {order.phone_number or 'нет'}\n\n"
+                "Теперь отправьте код сообщением."
+            )
+
+        target_chat_id = order.buyer_chat_id or order.customer_telegram_id
+        target_business_id = order.business_connection_id or ADMIN_BUSINESS_CONNECTION_ID
+        if target_chat_id:
+            await safe_send_message(bot, target_chat_id, buyer_text, business_connection_id=target_business_id)
+
+        await update_or_send(callback, supplier_text, reply_markup=supplier_request_actions_keyboard(request.id, request.request_type))
+        await callback.answer("Заявка в работе")
+        return True
+
+    if data.startswith("supplier:answer:"):
+        request_id = int(data.split(":")[2])
+
+        async with SessionLocal() as session:
+            ok, result, request, order = await mark_supplier_request_in_progress(session, request_id)
+
+        if not request or not order:
+            await callback.answer("Заявка не найдена", show_alert=True)
+            return True
+
+        if request.request_type == "number":
+            text = (
+                "✍️ Отправьте номер сообщением.\n\n"
+                f"Заказ: #{order.operation_id}\n"
+                f"Товар: {order.product_name}\n"
+                f"Сервис: {order.service_name}"
+            )
+        else:
+            text = (
+                "✍️ Отправьте код сообщением.\n\n"
+                f"Заказ: #{order.operation_id}\n"
+                f"Товар: {order.product_name}\n"
+                f"Сервис: {order.service_name}\n"
+                f"Номер: {order.phone_number or 'нет'}"
+            )
+
+        await update_or_send(callback, text, reply_markup=supplier_request_actions_keyboard(request.id, request.request_type))
+        await callback.answer("Жду сообщение")
+        return True
+
+
     if data.startswith("supplier:pending:"):
         page = int(data.split(":")[2])
         async with SessionLocal() as session:
@@ -1327,15 +1404,48 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
     if data.startswith("service:"):
         _, order_id_raw, service_slug = data.split(":", 2)
         order_id = int(order_id_raw)
+
+        async with SessionLocal() as session:
+            service = await find_service_by_slug(session, service_slug)
+            order = await get_order_by_id(session, order_id) if order_id else None
+
+            if not order or order.status != "waiting_service":
+                closed_text = await get_text(session, "order_closed", "Заказ уже закрыт или уже в обработке.")
+                await callback.answer(closed_text, show_alert=True)
+                return
+
+        if not service:
+            await callback.answer("Сервис не найден", show_alert=True)
+            return
+
+        confirm_text = (
+            "Подтвердите выбор сервиса\n\n"
+            f"Вы выбрали: {service.name}\n\n"
+            "После подтверждения заявка уйдёт поставщику."
+        )
+
+        await update_or_send(
+            callback,
+            confirm_text,
+            reply_markup=service_confirm_keyboard(order_id, service_slug),
+        )
+        await callback.answer("Подтвердите выбор")
+        return
+
+    if data.startswith("service_confirm:"):
+        _, order_id_raw, service_slug = data.split(":", 2)
+        order_id = int(order_id_raw)
         message = callback.message if isinstance(callback.message, Message) else None
 
         async with SessionLocal() as session:
             service = await find_service_by_slug(session, service_slug)
             order = await get_order_by_id(session, order_id) if order_id else None
+
             if not order or order.status != "waiting_service":
                 closed_text = await get_text(session, "order_closed", "Заказ уже закрыт или уже в обработке.")
                 await callback.answer(closed_text, show_alert=True)
                 return
+
             business_id = order.business_connection_id
 
         if not service:
@@ -1343,7 +1453,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             return
 
         await accept_service_for_order(bot, message, order_id, service.name, business_id)
-        await callback.answer("Сервис выбран")
+        await callback.answer("Сервис подтверждён")
         return
 
     if data.startswith("code_sent:"):
