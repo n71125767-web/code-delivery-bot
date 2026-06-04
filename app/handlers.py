@@ -73,8 +73,8 @@ from app.services import (
 )
 
 logger = logging.getLogger(__name__)
+logger.info("FIX_MARKER_AUTODELETE_IGNORE_TEXT_BUTTONS=v2 loaded")
 
-# admin_id -> text_key. Render WEB_CONCURRENCY=1, поэтому in-memory достаточно для короткого шага редактирования.
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 
 CONTACT_PATTERNS = [
@@ -144,8 +144,9 @@ async def delete_later(bot: Bot, chat_id: int, message_id: int, delay: int | Non
 
     try:
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        logger.info("AUTO_DELETE_OK chat_id=%s message_id=%s", chat_id, message_id)
     except Exception as exc:
-        logger.info("Message delete skipped chat_id=%s message_id=%s error=%s", chat_id, message_id, exc)
+        logger.warning("AUTO_DELETE_FAILED chat_id=%s message_id=%s error=%s", chat_id, message_id, exc)
 
 
 async def maybe_delete_message(bot: Bot, message: Message, delay: int | None = None) -> None:
@@ -227,6 +228,14 @@ async def handle_unknown_buyer(
     business_connection_id: str | None,
     text: str,
 ) -> None:
+    logger.info(
+        "UNKNOWN_BUYER_IGNORED from_id=%s username=%s chat_id=%s text=%s",
+        message.from_user.id if message.from_user else None,
+        message.from_user.username if message.from_user else None,
+        message.chat.id,
+        text[:200],
+    )
+
     if AUTO_DELETE_UNKNOWN_BUYERS:
         await maybe_delete_message(bot, message, delay=5)
 
@@ -262,6 +271,7 @@ async def process_admin_pending_input(bot: Bot, message: Message, business_conne
         return False
 
     text = (message.text or "").strip()
+
     if not text:
         await temp_answer(bot, message, "Пришлите новый текст сообщением.", business_connection_id)
         return True
@@ -275,6 +285,7 @@ async def process_admin_pending_input(bot: Bot, message: Message, business_conne
         result = await set_text(session, key, text)
 
     ADMIN_TEXT_EDIT_WAIT.pop(admin_id, None)
+
     await temp_answer(
         bot,
         message,
@@ -1002,7 +1013,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
     if data == "admin:set_text_help":
         await update_or_send(
             callback,
-            "Выберите, какой текст изменить.\n\nПосле выбора бот попросит прислать новый текст одним сообщением.",
+            "Выберите текст, который хотите изменить.\n\nПосле выбора пришлите новый текст одним сообщением.",
             reply_markup=admin_text_keys_keyboard(),
         )
         await callback.answer()
