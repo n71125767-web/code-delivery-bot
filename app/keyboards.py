@@ -45,22 +45,13 @@ def service_keyboard(order_id: int | None = None) -> InlineKeyboardMarkup:
 
 def admin_panel_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-
     kb.button(text="📊 Статус", callback_data="admin:status")
-    kb.button(text="🧾 Последние заказы", callback_data="admin:last_orders")
+    kb.button(text="🧾 Заказы", callback_data="admin:last_orders")
     kb.button(text="🚚 Поставщики", callback_data="admin:suppliers")
     kb.button(text="🧩 Сервисы", callback_data="admin:services")
     kb.button(text="📚 Листы", callback_data="admin:lists")
     kb.button(text="✏️ Тексты", callback_data="admin:texts")
-    kb.button(text="➕ Добавить поставщика", callback_data="admin:add_supplier_help")
-    kb.button(text="🔗 Привязать товар/лист", callback_data="admin:bind_supplier_help")
-    kb.button(text="➕ Добавить сервис", callback_data="admin:add_service_help")
-    kb.button(text="📚 Добавить лист", callback_data="admin:list_help")
-    kb.button(text="🔥 Эмодзи сервиса", callback_data="admin:service_emoji_help")
-    kb.button(text="✏️ Изменить текст", callback_data="admin:set_text_help")
-    kb.button(text="📖 Команды", callback_data="admin:commands")
-    kb.button(text="🔄 Обновить", callback_data="admin:panel")
-
+    kb.button(text="⚙️ Настройки", callback_data="admin:settings")
     kb.adjust(2)
     return kb.as_markup()
 
@@ -125,6 +116,63 @@ def admin_text_keys_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="🚫 Запрет контактов", callback_data="admin:edit_text:contact_forbidden")
     kb.button(text="🔒 Заказ закрыт", callback_data="admin:edit_text:order_closed")
     kb.button(text="⚠️ Проблема отправлена", callback_data="admin:edit_text:problem_sent")
+    kb.button(text="⬅️ Назад", callback_data="admin:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_back_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ Назад в главное меню", callback_data="admin:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_suppliers_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📋 Список поставщиков", callback_data="admin:suppliers_list")
+    kb.button(text="➕ Добавить поставщика", callback_data="admin:add_supplier_help")
+    kb.button(text="🔗 Привязать товар/лист", callback_data="admin:bind_supplier_help")
+    kb.button(text="🗑 Удалить поставщика", callback_data="admin:remove_supplier_help")
+    kb.button(text="⬅️ Назад", callback_data="admin:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_services_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📋 Список сервисов", callback_data="admin:services_list")
+    kb.button(text="➕ Добавить сервис", callback_data="admin:add_service_help")
+    kb.button(text="🗑 Удалить сервис", callback_data="admin:remove_service_help")
+    kb.button(text="🔥 Эмодзи сервиса", callback_data="admin:service_emoji_help")
+    kb.button(text="⬅️ Назад", callback_data="admin:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_lists_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📋 Список листов", callback_data="admin:lists_list")
+    kb.button(text="➕ Создать лист", callback_data="admin:list_help")
+    kb.button(text="➕ Добавить сервис в лист", callback_data="admin:list_add_service_help")
+    kb.button(text="⬅️ Назад", callback_data="admin:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_texts_menu_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📋 Список текстов", callback_data="admin:texts_list")
+    kb.button(text="✏️ Изменить текст", callback_data="admin:set_text_help")
+    kb.button(text="⬅️ Назад", callback_data="admin:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_settings_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📖 Команды", callback_data="admin:commands")
+    kb.button(text="🔄 Обновить меню", callback_data="admin:panel")
     kb.button(text="⬅️ Назад", callback_data="admin:panel")
     kb.adjust(1)
     return kb.as_markup()

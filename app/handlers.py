@@ -32,6 +32,12 @@ from app.keyboards import (
     supplier_reply_keyboard,
     supplier_orders_keyboard,
     admin_text_keys_keyboard,
+    admin_back_keyboard,
+    admin_suppliers_keyboard,
+    admin_services_keyboard,
+    admin_lists_keyboard,
+    admin_texts_menu_keyboard,
+    admin_settings_keyboard,
 )
 from app.parsers import extract_purchase_data, extract_phone, extract_code
 from app.senders import safe_send_message, answer_message
@@ -109,19 +115,7 @@ def contains_forbidden_contact(text: str) -> bool:
 def admin_panel_text() -> str:
     return (
         "Админ-панель\n\n"
-        "Панель динамическая: кнопки стараются менять старое сообщение, а не кидать новое.\n"
-        "Цвет inline-кнопок Telegram менять не даёт, поэтому различие сделано эмодзи.\n\n"
-        "Команды:\n"
-        "/status\n/last_orders\n/suppliers\n/services\n/lists\n/texts\n\n"
-        "/add_supplier TELEGRAM_ID Имя\n"
-        "/bind_supplier TELEGRAM_ID товар_или_лист\n"
-        "/remove_supplier TELEGRAM_ID\n"
-        "/unbind_supplier TELEGRAM_ID товар_или_лист\n\n"
-        "/add_service Название\n/remove_service Название\n"
-        "/set_service_emoji Название | 🔥\n"
-        "/add_list Название\n"
-        "/list_add_service Лист | Сервис\n"
-        "/set_text ключ | новый текст"
+        "Выберите раздел:"
     )
 
 
@@ -976,6 +970,66 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
     data = callback.data or ""
 
+    # Clean section navigation.
+    if data == "admin:panel":
+        await update_or_send(callback, admin_panel_text(), reply_markup=admin_panel_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "admin:suppliers":
+        await update_or_send(callback, "🚚 Поставщики\n\nВыберите действие:", reply_markup=admin_suppliers_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "admin:services":
+        await update_or_send(callback, "🧩 Сервисы\n\nВыберите действие:", reply_markup=admin_services_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "admin:lists":
+        await update_or_send(callback, "📚 Листы сервисов\n\nВыберите действие:", reply_markup=admin_lists_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "admin:texts":
+        await update_or_send(callback, "✏️ Тексты\n\nМожно посмотреть текущие тексты или выбрать текст для изменения.", reply_markup=admin_texts_menu_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "admin:settings":
+        await update_or_send(callback, "⚙️ Настройки\n\nВыберите действие:", reply_markup=admin_settings_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "admin:suppliers_list":
+        async with SessionLocal() as session:
+            text = await list_suppliers_text(session)
+        await update_or_send(callback, text, reply_markup=admin_suppliers_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "admin:services_list":
+        async with SessionLocal() as session:
+            text = await services_text(session)
+        await update_or_send(callback, text, reply_markup=admin_services_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "admin:lists_list":
+        async with SessionLocal() as session:
+            text = await lists_text(session)
+        await update_or_send(callback, text, reply_markup=admin_lists_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "admin:texts_list":
+        async with SessionLocal() as session:
+            text = await texts_text(session)
+        await update_or_send(callback, text, reply_markup=admin_texts_menu_keyboard())
+        await callback.answer()
+        return True
+
+
     if data == "admin:panel":
         await update_or_send(callback, admin_panel_text(), reply_markup=admin_panel_keyboard())
         await callback.answer()
@@ -984,28 +1038,28 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
     if data == "admin:status":
         async with SessionLocal() as session:
             text = await get_status_text(session)
-        await update_or_send(callback, text, reply_markup=admin_panel_keyboard())
+        await update_or_send(callback, text, reply_markup=admin_back_keyboard())
         await callback.answer()
         return True
 
     if data == "admin:last_orders":
         async with SessionLocal() as session:
             text = await get_last_orders_text(session)
-        await update_or_send(callback, text, reply_markup=admin_panel_keyboard())
+        await update_or_send(callback, text, reply_markup=admin_back_keyboard())
         await callback.answer()
         return True
 
     if data == "admin:suppliers":
         async with SessionLocal() as session:
             text = await list_suppliers_text(session)
-        await update_or_send(callback, text, reply_markup=admin_panel_keyboard())
+        await update_or_send(callback, text, reply_markup=admin_back_keyboard())
         await callback.answer()
         return True
 
     if data == "admin:services":
         async with SessionLocal() as session:
             text = await services_text(session)
-        await update_or_send(callback, text, reply_markup=admin_panel_keyboard())
+        await update_or_send(callback, text, reply_markup=admin_back_keyboard())
         await callback.answer()
         return True
 
@@ -1037,14 +1091,14 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
     if data == "admin:texts":
         async with SessionLocal() as session:
             text = await texts_text(session)
-        await update_or_send(callback, text, reply_markup=admin_panel_keyboard())
+        await update_or_send(callback, text, reply_markup=admin_back_keyboard())
         await callback.answer()
         return True
 
     if data == "admin:lists":
         async with SessionLocal() as session:
             text = await lists_text(session)
-        await update_or_send(callback, text, reply_markup=admin_panel_keyboard())
+        await update_or_send(callback, text, reply_markup=admin_back_keyboard())
         await callback.answer()
         return True
 
@@ -1059,7 +1113,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
     }
 
     if data in help_texts:
-        await update_or_send(callback, help_texts[data], reply_markup=admin_panel_keyboard())
+        await update_or_send(callback, help_texts[data], reply_markup=admin_back_keyboard())
         await callback.answer()
         return True
 
