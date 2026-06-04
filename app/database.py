@@ -1,9 +1,9 @@
 import logging
-from sqlalchemy import text
+from sqlalchemy import text, select
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
-from app.config import DATABASE_URL, SUPPLIER_IDS
-from app.models import Base, Supplier
+from app.config import DATABASE_URL, SUPPLIER_IDS, SERVICE_OPTIONS
+from app.models import Base, Supplier, ServiceOption, TextTemplate
 
 logger = logging.getLogger(__name__)
 
@@ -17,11 +17,6 @@ SessionLocal = async_sessionmaker(
 
 
 async def init_db() -> None:
-    """
-    Создаёт таблицы.
-    Для SQLite мягко добавляет новые колонки в старые таблицы.
-    Новые таблицы suppliers и supplier_products создаются автоматически.
-    """
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
@@ -29,6 +24,8 @@ async def init_db() -> None:
             await _sqlite_migrations(conn)
 
     await seed_env_suppliers()
+    await seed_services()
+    await seed_text_templates()
 
 
 async def _sqlite_migrations(conn) -> None:
@@ -65,23 +62,48 @@ async def _sqlite_migrations(conn) -> None:
 
 
 async def seed_env_suppliers() -> None:
-    """
-    Старые SUPPLIER_IDS из Render Environment автоматически добавляются в базу,
-    чтобы после обновления бот не потерял текущих поставщиков.
-    """
     if not SUPPLIER_IDS:
         return
 
-    from sqlalchemy import select
-
     async with SessionLocal() as session:
         for supplier_id in SUPPLIER_IDS:
-            result = await session.execute(
-                select(Supplier).where(Supplier.telegram_id == supplier_id)
-            )
+            result = await session.execute(select(Supplier).where(Supplier.telegram_id == supplier_id))
             exists = result.scalars().first()
             if not exists:
                 session.add(Supplier(telegram_id=supplier_id, name=f"supplier_{supplier_id}", is_active=True))
+        await session.commit()
+
+
+async def seed_services() -> None:
+    if not SERVICE_OPTIONS:
+        return
+
+    async with SessionLocal() as session:
+        for service in SERVICE_OPTIONS:
+            result = await session.execute(select(ServiceOption).where(ServiceOption.name == service))
+            exists = result.scalars().first()
+            if not exists:
+                session.add(ServiceOption(name=service, emoji=None, is_active=True))
+        await session.commit()
+
+
+async def seed_text_templates() -> None:
+    defaults = {
+        "thank_you": "Спасибо за покупку!",
+        "service_accepted": "OK. Сервис принят. Ожидайте номер.",
+        "service_select": "Выберите сервис кнопкой ниже или напишите название из списка.",
+        "order_not_found": "Заказ не найден.\n\nЕсли вы уже оплатили, напишите админу.",
+        "contact_forbidden": "Нельзя отправлять контакты, username, ссылки или номера для связи.\n\nНапишите только название сервиса или выберите кнопку ниже.",
+        "number_sent_supplier": "OK. Номер отправлен покупателю.",
+        "code_sent_supplier": "OK. Код отправлен покупателю.",
+    }
+
+    async with SessionLocal() as session:
+        for key, value in defaults.items():
+            result = await session.execute(select(TextTemplate).where(TextTemplate.key == key))
+            exists = result.scalars().first()
+            if not exists:
+                session.add(TextTemplate(key=key, value=value))
         await session.commit()
 
 

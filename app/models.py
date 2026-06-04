@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import BigInteger, String, DateTime, Text, ForeignKey, Numeric, Boolean, UniqueConstraint
+from sqlalchemy import BigInteger, String, DateTime, Text, ForeignKey, Numeric, Boolean, UniqueConstraint, Integer
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -78,3 +78,35 @@ class SupplierProduct(Base):
     supplier_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
     product_key: Mapped[str] = mapped_column(String, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ServiceOption(Base):
+    __tablename__ = "service_options"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String, unique=True, index=True)
+    emoji: Mapped[str | None] = mapped_column(String, nullable=True)
+    usage_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class TextTemplate(Base):
+    __tablename__ = "text_templates"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String, unique=True, index=True)
+    value: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class Cooldown(Base):
+    __tablename__ = "cooldowns"
+    __table_args__ = (
+        UniqueConstraint("user_id", "action", name="uq_cooldown_user_action"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    action: Mapped[str] = mapped_column(String, index=True)
+    last_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

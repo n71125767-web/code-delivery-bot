@@ -1,8 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Order, SupplierRequest, Supplier, SupplierProduct
+from app.config import POPULAR_SERVICE_THRESHOLD, PROBLEM_COOLDOWN_SECONDS
+from app.models import Order, SupplierRequest, Supplier, SupplierProduct, ServiceOption, TextTemplate, Cooldown
 
 
 ACTIVE_CUSTOMER_STATUSES = [
@@ -174,6 +175,7 @@ async def get_status_text(session: AsyncSession) -> str:
     confirmed = await session.scalar(select(func.count(Order.id)).where(Order.status == "confirmed"))
     problem = await session.scalar(select(func.count(Order.id)).where(Order.status == "problem"))
     suppliers = await session.scalar(select(func.count(Supplier.id)).where(Supplier.is_active == True))
+    services = await session.scalar(select(func.count(ServiceOption.id)).where(ServiceOption.is_active == True))
 
     return (
         "Статус бота\n\n"
@@ -183,7 +185,8 @@ async def get_status_text(session: AsyncSession) -> str:
         f"Ждут код: {waiting_code or 0}\n"
         f"Успешные: {confirmed or 0}\n"
         f"Проблемные: {problem or 0}\n"
-        f"Активные поставщики: {suppliers or 0}"
+        f"Активные поставщики: {suppliers or 0}\n"
+        f"Активные сервисы: {services or 0}"
     )
 
 
@@ -285,9 +288,7 @@ async def bind_supplier_to_product(session: AsyncSession, telegram_id: int, prod
     if not product_key:
         return "Не указан товар/ключ."
 
-    result = await session.execute(
-        select(Supplier).where(Supplier.telegram_id == telegram_id)
-    )
+    result = await session.execute(select(Supplier).where(Supplier.telegram_id == telegram_id))
     supplier = result.scalars().first()
 
     if not supplier or not supplier.is_active:
@@ -332,7 +333,6 @@ async def find_supplier_for_order(session: AsyncSession, order: Order) -> Suppli
         product_name = normalize_key(order.product_name)
         keys.append(product_name)
 
-    # 1. точное совпадение product_id или product_name
     if keys:
         result = await session.execute(
             select(Supplier)
@@ -345,7 +345,6 @@ async def find_supplier_for_order(session: AsyncSession, order: Order) -> Suppli
         if supplier:
             return supplier
 
-    # 2. product_key как ключевое слово внутри названия товара
     if order.product_name:
         product_name = normalize_key(order.product_name)
         result = await session.execute(
@@ -360,8 +359,198 @@ async def find_supplier_for_order(session: AsyncSession, order: Order) -> Suppli
             if key and key in product_name:
                 return supplier
 
-    # 3. fallback: первый активный поставщик
     result = await session.execute(
         select(Supplier).where(Supplier.is_active == True).order_by(Supplier.created_at.asc()).limit(1)
     )
     return result.scalars().first()
+
+
+# ---------- Services ----------
+
+async def add_service(session: AsyncSession, name: str, emoji: str | None = None) -> str:
+    name = name.strip()
+    if not name:
+        return "Название сервиса пустое."
+
+    result = await session.execute(select(ServiceOption).where(ServiceOption.name == name))
+    service = result.scalars().first()
+
+    if service:
+        service.is_active = True
+        if emoji is not None:
+            service.emoji = emoji
+    else:
+        service = ServiceOption(name=name, emoji=emoji, is_active=True)
+        session.add(service)
+
+    await session.commit()
+    return f"OK. Сервис добавлен/обновлён: {format_service_label(service)}"
+
+
+async def remove_service(session: AsyncSession, name: str) -> str:
+    result = await session.execute(select(ServiceOption).where(func.lower(ServiceOption.name) == name.strip().lower()))
+    service = result.scalars().first()
+
+    if not service:
+        return "Сервис не найден."
+
+    service.is_active = False
+    await session.commit()
+    return f"OK. Сервис выключен: {service.name}"
+
+
+async def set_service_emoji(session: AsyncSession, name: str, emoji: str) -> str:
+    result = await session.execute(select(ServiceOption).where(func.lower(ServiceOption.name) == name.strip().lower()))
+    service = result.scalars().first()
+
+    if not service:
+        return "Сервис не найден."
+
+    service.emoji = emoji.strip()
+    await session.commit()
+    return f"OK. Эмодзи обновлён: {format_service_label(service)}"
+
+
+def format_service_label(service: ServiceOption) -> str:
+    emoji = service.emoji
+    if not emoji and service.usage_count >= POPULAR_SERVICE_THRESHOLD:
+        emoji = "🔥"
+
+    if emoji:
+        return f"{emoji} {service.name}"
+
+    return service.name
+
+
+async def get_services_page(session: AsyncSession, page: int, page_size: int) -> tuple[list[ServiceOption], int]:
+    total = await session.scalar(select(func.count(ServiceOption.id)).where(ServiceOption.is_active == True))
+    total = total or 0
+    max_page = max((total - 1) // page_size, 0)
+
+    page = max(0, min(page, max_page))
+
+    result = await session.execute(
+        select(ServiceOption)
+        .where(ServiceOption.is_active == True)
+        .order_by(ServiceOption.usage_count.desc(), ServiceOption.name.asc())
+        .offset(page * page_size)
+        .limit(page_size)
+    )
+    return result.scalars().all(), max_page
+
+
+async def find_service_by_slug(session: AsyncSession, slug: str) -> ServiceOption | None:
+    slug = slug.strip().lower()
+    result = await session.execute(select(ServiceOption).where(ServiceOption.is_active == True))
+    services = result.scalars().all()
+
+    for service in services:
+        if service.name.lower().replace(" ", "_") == slug:
+            return service
+
+    return None
+
+
+async def find_service_by_text(session: AsyncSession, text: str) -> ServiceOption | None:
+    clean = text.strip().lower()
+    result = await session.execute(select(ServiceOption).where(ServiceOption.is_active == True))
+    services = result.scalars().all()
+
+    for service in services:
+        service_clean = service.name.lower()
+        if clean == service_clean or service_clean in clean:
+            return service
+
+    return None
+
+
+async def increment_service_usage(session: AsyncSession, service_name: str) -> None:
+    result = await session.execute(select(ServiceOption).where(func.lower(ServiceOption.name) == service_name.strip().lower()))
+    service = result.scalars().first()
+    if service:
+        service.usage_count += 1
+        await session.commit()
+
+
+async def services_text(session: AsyncSession) -> str:
+    result = await session.execute(
+        select(ServiceOption).order_by(ServiceOption.is_active.desc(), ServiceOption.usage_count.desc(), ServiceOption.name.asc())
+    )
+    services = result.scalars().all()
+
+    if not services:
+        return "Сервисов пока нет."
+
+    lines = ["Сервисы:\n"]
+    for service in services:
+        status = "active" if service.is_active else "disabled"
+        lines.append(f"{format_service_label(service)} | использований: {service.usage_count} | {status}")
+
+    return "\n".join(lines)
+
+
+# ---------- Text templates ----------
+
+async def get_text(session: AsyncSession, key: str, default: str = "") -> str:
+    result = await session.execute(select(TextTemplate).where(TextTemplate.key == key))
+    template = result.scalars().first()
+    return template.value if template else default
+
+
+async def set_text(session: AsyncSession, key: str, value: str) -> str:
+    result = await session.execute(select(TextTemplate).where(TextTemplate.key == key))
+    template = result.scalars().first()
+
+    if template:
+        template.value = value
+        template.updated_at = datetime.utcnow()
+    else:
+        session.add(TextTemplate(key=key, value=value, updated_at=datetime.utcnow()))
+
+    await session.commit()
+    return f"OK. Текст обновлён: {key}"
+
+
+async def texts_text(session: AsyncSession) -> str:
+    result = await session.execute(select(TextTemplate).order_by(TextTemplate.key.asc()))
+    templates = result.scalars().all()
+
+    if not templates:
+        return "Текстов пока нет."
+
+    lines = ["Тексты:\n"]
+    for template in templates:
+        value = template.value
+        if len(value) > 80:
+            value = value[:80] + "..."
+        lines.append(f"{template.key}: {value}")
+
+    return "\n".join(lines)
+
+
+# ---------- Cooldowns ----------
+
+async def check_cooldown(session: AsyncSession, user_id: int, action: str, seconds: int = PROBLEM_COOLDOWN_SECONDS) -> tuple[bool, int]:
+    now = datetime.utcnow()
+
+    result = await session.execute(
+        select(Cooldown).where(
+            Cooldown.user_id == user_id,
+            Cooldown.action == action,
+        )
+    )
+    cooldown = result.scalars().first()
+
+    if cooldown:
+        delta = now - cooldown.last_at
+        if delta.total_seconds() < seconds:
+            remaining = int(seconds - delta.total_seconds())
+            return False, remaining
+
+        cooldown.last_at = now
+    else:
+        cooldown = Cooldown(user_id=user_id, action=action, last_at=now)
+        session.add(cooldown)
+
+    await session.commit()
+    return True, 0

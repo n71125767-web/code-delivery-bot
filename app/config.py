@@ -26,8 +26,8 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///bot.db").strip()
 
 ADMIN_IDS = parse_ids(os.getenv("ADMIN_IDS", ""))
 
-# Старый SUPPLIER_IDS оставляем как запасной список.
-# После запуска админ может добавлять поставщиков командами прямо в боте.
+# Старый SUPPLIER_IDS оставляем как стартовый список.
+# Новых поставщиков можно добавлять через /add_supplier.
 SUPPLIER_IDS = parse_ids(os.getenv("SUPPLIER_IDS", ""))
 
 SHOP_BOT_USERNAME = os.getenv("SHOP_BOT_USERNAME", "MrvlShopXBot").replace("@", "").strip().lower()
@@ -37,13 +37,16 @@ ADMIN_BUSINESS_CONNECTION_ID = os.getenv("ADMIN_BUSINESS_CONNECTION_ID", "").str
 
 IGNORE_OTHER_BOTS = os.getenv("IGNORE_OTHER_BOTS", "1").strip() == "1"
 
-# Кнопки/разрешённые сервисы для покупателя.
 SERVICE_OPTIONS = parse_words(
     os.getenv(
         "SERVICE_OPTIONS",
-        "Telegram,WhatsApp,Google,Instagram,VK,TikTok,Discord,Facebook,Twitter,Steam",
+        "Telegram,WhatsApp,Google,Instagram,VK,TikTok,Discord,Facebook,Twitter,Steam,Avito,Yandex,Mail.ru,Microsoft,Apple",
     )
 )
+
+SERVICE_PAGE_SIZE = int(os.getenv("SERVICE_PAGE_SIZE", "8"))
+PROBLEM_COOLDOWN_SECONDS = int(os.getenv("PROBLEM_COOLDOWN_SECONDS", "600"))
+POPULAR_SERVICE_THRESHOLD = int(os.getenv("POPULAR_SERVICE_THRESHOLD", "3"))
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is missing in Render Environment")
