@@ -109,7 +109,7 @@ from app.services import (
 )
 
 logger = logging.getLogger(__name__)
-logger.info("FIX_MARKER_SUPPLIER_EMPTY_PANEL_FIX=v4 loaded")
+logger.info("FIX_MARKER_SUPPLIER_COMMAND_ROUTING_FIX=v5 loaded")
 
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 
@@ -667,7 +667,54 @@ def supplier_commands_text() -> str:
         "2. Нажмите заявку.\n"
         "3. Нажмите «Взять в работу» или «Отправить номер/код».\n"
         "4. Отправьте номер или код обычным сообщением.\n\n"
+        "Важно: если нужно отправить номер или код — сначала выберите конкретную заявку кнопкой.\n"
         "Если заявок нет — это нормально, значит сейчас ничего не ждёт поставщика."
+    )
+
+
+SUPPLIER_PANEL_TEXT_BUTTONS = {
+    "🚚 Панель поставщика",
+    "⏳ Заявки в ожидании",
+    "⏳ Все активные",
+    "📞 Ждут номер",
+    "🔑 Ждут код",
+}
+
+SUPPLIER_KNOWN_COMMANDS = {
+    "/start",
+    "/supplier",
+    "/pending",
+    "/work",
+    "/profile",
+    "/commands",
+}
+
+
+def is_supplier_command_like_text(text: str) -> bool:
+    """
+    Защита от бага, когда команда поставщика попадает в обработчик номера/кода.
+    Любой текст, начинающийся с '/', считаем командой, а не номером или кодом.
+    """
+    return (text or "").strip().startswith("/")
+
+
+async def send_supplier_unknown_command(
+    bot: Bot,
+    message: Message,
+    business_connection_id: str | None,
+    text: str,
+) -> None:
+    command = (text or "").strip()[:80]
+    await answer_message(
+        bot,
+        message,
+        (
+            f"Неизвестная команда поставщика: {command}\n\n"
+            "Используйте меню ниже или команду /commands.\n\n"
+            + supplier_commands_text()
+        ),
+        business_connection_id,
+        reply_markup=supplier_inline_menu_keyboard(),
     )
 
 
@@ -699,8 +746,20 @@ async def process_supplier_command(bot: Bot, message: Message, business_connecti
         await answer_message(bot, message, supplier_commands_text(), business_connection_id, reply_markup=supplier_inline_menu_keyboard())
         return True
 
-    if text in {"/supplier", "/work", "/pending", "🚚 Панель поставщика", "⏳ Заявки в ожидании", "⏳ Все активные", "📞 Ждут номер", "🔑 Ждут код"}:
+    if text in {"/start", "/supplier", "/work", "/pending"} or text in SUPPLIER_PANEL_TEXT_BUTTONS:
         await send_supplier_pending_panel(bot, message, business_connection_id)
+        return True
+
+    if text == "/profile" or text == "👤 Мой профиль":
+        async with SessionLocal() as session:
+            profile_text = await supplier_profile_text(session, message.from_user.id, message.from_user.username)
+        await answer_message(bot, message, profile_text, business_connection_id, reply_markup=supplier_inline_menu_keyboard())
+        return True
+
+    # ВАЖНО: неизвестные команды поставщика не должны попадать в обработчик номера/кода.
+    # Иначе бот может отвечать «Не смог найти номер» или «Ожидающих заявок нет» на любую команду.
+    if is_supplier_command_like_text(text):
+        await send_supplier_unknown_command(bot, message, business_connection_id, text)
         return True
 
     return False
@@ -1037,7 +1096,13 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
         return
 
     supplier_id = message.from_user.id
-    text = message.text or ""
+    text = (message.text or "").strip()
+
+    # Дополнительная страховка: даже если route_message по какой-то причине пропустил команду,
+    # команда поставщика не должна восприниматься как номер или код.
+    if is_supplier_command_like_text(text):
+        await send_supplier_unknown_command(bot, message, business_connection_id, text)
+        return
 
     async with SessionLocal() as session:
         # ВАЖНО: active_request всегда создаётся до использования.
@@ -1169,9 +1234,13 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
         await answer_message(
             bot,
             message,
-            "Нет активного запроса для вас. Откройте панель кнопкой ниже.",
+            (
+                "Нет активного запроса для вас.\n\n"
+                "Откройте панель кнопкой ниже и выберите конкретную заявку. "
+                "После этого отправьте номер или код обычным сообщением."
+            ),
             business_connection_id,
-            reply_markup=supplier_reply_keyboard(),
+            reply_markup=supplier_inline_menu_keyboard(),
         )
     except NameError:
         await answer_message(bot, message, "Нет активного запроса для вас. Панель: /supplier", business_connection_id)
@@ -1654,6 +1723,10 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
         async with SessionLocal() as session:
             ok, result, request, order = await mark_supplier_request_in_progress(session, request_id)
+
+        if not ok:
+            await callback.answer(result or "Заявка неактивна или уже обработана", show_alert=True)
+            return True
 
         if not request or not order:
             await callback.answer("Заявка не найдена", show_alert=True)
