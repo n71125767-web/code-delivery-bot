@@ -46,6 +46,7 @@ def service_keyboard(order_id: int | None = None) -> InlineKeyboardMarkup:
 def admin_panel_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="📊 Статус", callback_data="admin:status")
+    kb.button(text="📈 Статистика", callback_data="admin:stats")
     kb.button(text="🧾 Заказы", callback_data="admin:last_orders")
     kb.button(text="⚠️ Проблемы", callback_data="admin:problems")
     kb.button(text="🚚 Поставщики", callback_data="admin:suppliers")
@@ -268,5 +269,37 @@ def supplier_commands_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="⏳ Заявки в ожидании", callback_data="supplier:pending:0")
     kb.button(text="🚚 Панель поставщика", callback_data="supplier:pending:0")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+
+def buyer_reply_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📦 Мои заказы")],
+            [KeyboardButton(text="🆘 Помощь")],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="Выберите действие",
+    )
+
+
+
+def supplier_filter_keyboard(mode: str = "active", page: int = 0, max_page: int = 0) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+
+    kb.button(text="⏳ Все активные", callback_data="supplier:filter:active:0")
+    kb.button(text="📞 Ждут номер", callback_data="supplier:filter:number:0")
+    kb.button(text="🔑 Ждут код", callback_data="supplier:filter:code:0")
+
+    if page > 0:
+        kb.button(text="⬅️ Назад", callback_data=f"supplier:filter:{mode}:{page - 1}")
+    if page < max_page:
+        kb.button(text="➡️ Дальше", callback_data=f"supplier:filter:{mode}:{page + 1}")
+
+    kb.button(text="🔄 Обновить", callback_data=f"supplier:filter:{mode}:{page}")
+    kb.button(text="📖 Команды", callback_data="supplier:commands")
     kb.adjust(1)
     return kb.as_markup()

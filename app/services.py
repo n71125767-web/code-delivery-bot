@@ -892,3 +892,144 @@ async def set_supplier_request_message_id(session: AsyncSession, request_id: int
         return
     request.supplier_message_id = message_id
     await session.commit()
+
+
+# ---------- Final UX helpers ----------
+
+async def create_action_event(
+    session: AsyncSession,
+    event_type: str,
+    text: str | None = None,
+    user_id: int | None = None,
+    order_id: int | None = None,
+) -> None:
+    try:
+        session.add(ActionEvent(user_id=user_id, order_id=order_id, event_type=event_type, text=text))
+        await session.commit()
+    except Exception:
+        # Лог событий не должен ломать основной сценарий.
+        await session.rollback()
+
+
+async def buyer_orders_text(session: AsyncSession, user_id: int, username: str | None, limit: int = 10) -> str:
+    clean_username = (username or "").replace("@", "").lower()
+
+    query = select(Order).where(
+        (Order.customer_telegram_id == user_id) | (Order.buyer_chat_id == user_id)
+    ).order_by(Order.created_at.desc()).limit(limit)
+
+    result = await session.execute(query)
+    orders = result.scalars().all()
+
+    if not orders and clean_username:
+        result = await session.execute(
+            select(Order)
+            .where(func.lower(Order.customer_username) == clean_username)
+            .order_by(Order.created_at.desc())
+            .limit(limit)
+        )
+        orders = result.scalars().all()
+
+    if not orders:
+        return "📦 Мои заказы\n\nУ вас пока нет заказов."
+
+    lines = ["📦 Мои заказы\n"]
+    for order in orders:
+        lines.append(
+            f"Заказ: #{order.operation_id}\n"
+            f"Статус: {order_status_label(order.status)}\n"
+            f"Товар: {order.product_name or 'нет'}\n"
+            f"Сервис: {order.service_name or 'не выбран'}\n"
+            f"Номер: {order.phone_number or 'ещё нет'}\n"
+            f"Код: {order.verification_code or 'ещё нет'}\n"
+            "--------------------"
+        )
+
+    return "\n".join(lines)
+
+
+async def supplier_rows_by_filter(session: AsyncSession, supplier_id: int, mode: str, page: int, page_size: int):
+    if mode == "number":
+        statuses = ["sent", "in_progress"]
+        req_type = "number"
+    elif mode == "code":
+        statuses = ["sent", "in_progress"]
+        req_type = "code"
+    elif mode == "active":
+        statuses = ["sent", "in_progress"]
+        req_type = None
+    else:
+        statuses = ["sent", "in_progress"]
+        req_type = None
+
+    conditions = [
+        SupplierRequest.supplier_telegram_id == supplier_id,
+        SupplierRequest.status.in_(statuses),
+    ]
+    if req_type:
+        conditions.append(SupplierRequest.request_type == req_type)
+
+    total = await session.scalar(select(func.count(SupplierRequest.id)).where(*conditions))
+    total = total or 0
+    max_page = max((total - 1) // page_size, 0)
+    page = max(0, min(page, max_page))
+
+    result = await session.execute(
+        select(SupplierRequest, Order)
+        .join(Order, SupplierRequest.order_id == Order.id)
+        .where(*conditions)
+        .order_by(SupplierRequest.created_at.asc())
+        .offset(page * page_size)
+        .limit(page_size)
+    )
+    rows = result.fetchall()
+
+    return rows, max_page
+
+
+async def supplier_filter_text(mode: str, rows_count: int, page: int, max_page: int) -> str:
+    titles = {
+        "active": "⏳ Все активные заявки",
+        "number": "📞 Ждут номер",
+        "code": "🔑 Ждут код",
+        "problem": "⚠️ Проблемные",
+    }
+    title = titles.get(mode, "⏳ Заявки")
+    if rows_count == 0:
+        return f"{title}\n\nЗаявок нет."
+    return f"{title}\n\nСтраница {page + 1}/{max_page + 1}\nВыберите заявку кнопкой ниже."
+
+
+async def admin_stats_text(session: AsyncSession) -> str:
+    total = await session.scalar(select(func.count(Order.id))) or 0
+    confirmed = await session.scalar(select(func.count(Order.id)).where(Order.status == "confirmed")) or 0
+    problem = await session.scalar(select(func.count(Order.id)).where(Order.status == "problem")) or 0
+    waiting_number = await session.scalar(select(func.count(Order.id)).where(Order.status == "waiting_supplier_number")) or 0
+    waiting_code = await session.scalar(select(func.count(Order.id)).where(Order.status == "waiting_supplier_code")) or 0
+
+    result = await session.execute(
+        select(ServiceOption.name, ServiceOption.usage_count)
+        .where(ServiceOption.is_active == True)
+        .order_by(ServiceOption.usage_count.desc())
+        .limit(5)
+    )
+    top_services = result.fetchall()
+
+    lines = [
+        "📊 Статистика\n",
+        f"Всего заказов: {total}",
+        f"Успешные: {confirmed}",
+        f"Проблемные: {problem}",
+        f"Ждут номер: {waiting_number}",
+        f"Ждут код: {waiting_code}",
+        "",
+        "🔥 Популярные сервисы:",
+    ]
+
+    if not top_services:
+        lines.append("Пока нет данных.")
+    else:
+        for name, count in top_services:
+            lines.append(f"{name}: {count}")
+
+    return "\n".join(lines)

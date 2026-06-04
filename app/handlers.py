@@ -20,6 +20,8 @@ from app.config import (
     SERVICE_PAGE_SIZE,
     SUPPLIER_PAGE_SIZE,
     PROBLEM_COOLDOWN_SECONDS,
+    BUTTON_COOLDOWN_SECONDS,
+    BUYER_ORDERS_LIMIT,
 )
 from app.database import SessionLocal
 from app.keyboards import (
@@ -34,6 +36,8 @@ from app.keyboards import (
     supplier_reply_keyboard,
     supplier_orders_keyboard,
     supplier_commands_keyboard,
+    supplier_filter_keyboard,
+    buyer_reply_keyboard,
     supplier_new_order_keyboard,
     admin_text_keys_keyboard,
     admin_back_keyboard,
@@ -78,6 +82,11 @@ from app.services import (
     supplier_pending_text,
     get_supplier_pending_rows,
     set_supplier_request_message_id,
+    create_action_event,
+    admin_stats_text,
+    supplier_filter_text,
+    supplier_rows_by_filter,
+    buyer_orders_text,
     select_supplier_request,
     find_selected_supplier_request,
     add_service_list,
@@ -579,7 +588,23 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
             )
             return
 
-        await answer_message(bot, message, "Бот работает.\n\nПроверка: /ping\nАдмин-панель: /admin", business_connection_id)
+        await answer_message(bot, message, "Бот работает.", business_connection_id, reply_markup=buyer_reply_keyboard())
+        return
+
+    if text == "📦 Мои заказы" or text == "/orders":
+        async with SessionLocal() as session:
+            orders_text = await buyer_orders_text(session, user_id, username, BUYER_ORDERS_LIMIT)
+        await answer_message(bot, message, orders_text, business_connection_id, reply_markup=buyer_reply_keyboard())
+        return
+
+    if text == "🆘 Помощь":
+        await answer_message(
+            bot,
+            message,
+            "Помощь\n\nЕсли заказ активен — используйте кнопки в чате.\nЕсли есть проблема — нажмите кнопку проблемы под номером или кодом.",
+            business_connection_id,
+            reply_markup=buyer_reply_keyboard(),
+        )
         return
 
     if text == "/ping":
@@ -758,6 +783,7 @@ async def accept_service_for_order(bot: Bot, message: Message | None, order_id: 
         await increment_service_usage(session, service_name)
         await session.commit()
         await session.refresh(order)
+        await create_action_event(session, "service_confirmed", f"service={service_name}", user_id=order.customer_telegram_id, order_id=order.id)
 
     actual_business_id = business_connection_id or order.business_connection_id
     ok = await send_supplier_request_for_order(bot, order, actual_business_id)
@@ -1014,6 +1040,15 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return False
 
     data = callback.data or ""
+
+    if data == "admin:stats":
+        async with SessionLocal() as session:
+            text = await admin_stats_text(session)
+        await update_or_send(callback, text, reply_markup=admin_back_keyboard())
+        await callback.answer()
+        return True
+
+
 
     if data == "admin:problems":
         async with SessionLocal() as session:
@@ -1282,6 +1317,24 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
     data = callback.data or ""
 
+    if data.startswith("supplier:filter:"):
+        _, _, mode, page_raw = data.split(":")
+        page = int(page_raw)
+
+        async with SessionLocal() as session:
+            rows, max_page = await supplier_rows_by_filter(session, callback.from_user.id, mode, page, SUPPLIER_PAGE_SIZE)
+            text = await supplier_filter_text(mode, len(rows), page, max_page)
+
+        await update_or_send(
+            callback,
+            text,
+            reply_markup=supplier_orders_keyboard(rows, page, max_page) if rows else supplier_filter_keyboard(mode, page, max_page),
+        )
+        await callback.answer()
+        return True
+
+
+
     if data == "supplier:commands":
         text = (
             "📖 Команды поставщика\n\n"
@@ -1415,8 +1468,35 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
     return False
 
 
+
+
+async def check_button_cooldown(callback: CallbackQuery, action: str) -> bool:
+    if not callback.from_user:
+        return True
+
+    async with SessionLocal() as session:
+        ok, remaining = await check_cooldown(
+            session,
+            callback.from_user.id,
+            f"button:{action}",
+            BUTTON_COOLDOWN_SECONDS,
+        )
+
+    if not ok:
+        await callback.answer("Слишком часто. Попробуйте ещё раз через пару секунд.", show_alert=False)
+        return False
+
+    return True
+
+
 async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
     data = callback.data or ""
+
+    # BUTTON_COOLDOWN_APPLIED
+    if data and not data.startswith("admin:"):
+        if not await check_button_cooldown(callback, data.split(":")[0]):
+            return
+
     logger.info("HANDLED_CALLBACK from_id=%s data=%s", callback.from_user.id if callback.from_user else None, data)
 
     if data.startswith("admin:"):

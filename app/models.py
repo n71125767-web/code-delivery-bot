@@ -131,3 +131,15 @@ class Cooldown(Base):
     user_id: Mapped[int] = mapped_column(BigInteger, index=True)
     action: Mapped[str] = mapped_column(String, index=True)
     last_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+
+class ActionEvent(Base):
+    __tablename__ = "action_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    order_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    event_type: Mapped[str] = mapped_column(String, index=True)
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
