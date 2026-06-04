@@ -878,11 +878,15 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
     text = message.text or ""
 
     async with SessionLocal() as session:
-        selected_request = await find_selected_supplier_request(session, supplier_id)
-        number_request = selected_request if selected_request and selected_request.request_type == "number" else None
-        if not number_request and not selected_request:
-            active_request = await find_active_supplier_request(session, supplier_id)
-        number_request = active_request if active_request and active_request.request_type == "number" else await find_waiting_supplier_request(session, supplier_id, "number")
+        # ВАЖНО: active_request всегда создаётся до использования.
+        # Это полностью убирает UnboundLocalError.
+        active_request = await find_active_supplier_request(session, supplier_id)
+
+        number_request = (
+            active_request
+            if active_request and active_request.request_type == "number"
+            else await find_waiting_supplier_request(session, supplier_id, "number")
+        )
 
         if number_request:
             phone = extract_phone(text)
@@ -893,6 +897,10 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
             order = await get_order_by_id(session, number_request.order_id)
             if not order:
                 await answer_message(bot, message, "Заказ не найден.", business_connection_id)
+                return
+
+            if order.status == "confirmed":
+                await answer_message(bot, message, "Заказ уже закрыт.", business_connection_id)
                 return
 
             order.phone_number = phone
@@ -908,21 +916,39 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
 
             ok = False
             if target_chat_id:
-                ok = await safe_send_message(bot, target_chat_id, phone, business_connection_id=target_business_id, reply_markup=number_keyboard(order.id))
+                ok = await safe_send_message(
+                    bot,
+                    target_chat_id,
+                    phone,
+                    business_connection_id=target_business_id,
+                    reply_markup=number_keyboard(order.id),
+                )
 
             if not ok:
                 await answer_message(bot, message, "Номер принят, но не смог отправить покупателю.", business_connection_id)
-                await notify_admins(bot, f"Не смог отправить номер покупателю.\nЗаказ #{order.operation_id}\nbusiness_connection_id: {target_business_id}")
+                await notify_admins(
+                    bot,
+                    f"Не смог отправить номер покупателю.\nЗаказ #{order.operation_id}\nbusiness_connection_id: {target_business_id}",
+                )
                 return
 
             sent = await answer_message(bot, message, "OK. Номер отправлен покупателю.", business_connection_id)
-            await maybe_delete_sent(bot, sent)
-            await maybe_delete_message(bot, message, delay=5)
+            try:
+                await maybe_delete_sent(bot, sent)
+                await maybe_delete_message(bot, message, delay=5)
+            except NameError:
+                pass
             return
 
-        code_request = selected_request if selected_request and selected_request.request_type == "code" else None
-        if not code_request and not selected_request:
-            code_request = active_request if active_request and active_request.request_type == "code" else await find_waiting_supplier_request(session, supplier_id, "code")
+        # Если active_request уже был number и обработался выше, сюда не попадём.
+        # Если active_request code или активной нет — ищем заявку на код.
+        active_request = await find_active_supplier_request(session, supplier_id)
+
+        code_request = (
+            active_request
+            if active_request and active_request.request_type == "code"
+            else await find_waiting_supplier_request(session, supplier_id, "code")
+        )
 
         if code_request:
             code = extract_code(text)
@@ -933,6 +959,10 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
             order = await get_order_by_id(session, code_request.order_id)
             if not order:
                 await answer_message(bot, message, "Заказ не найден.", business_connection_id)
+                return
+
+            if order.status == "confirmed":
+                await answer_message(bot, message, "Заказ уже закрыт.", business_connection_id)
                 return
 
             order.verification_code = code
@@ -948,19 +978,41 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
 
             ok = False
             if target_chat_id:
-                ok = await safe_send_message(bot, target_chat_id, code, business_connection_id=target_business_id, reply_markup=confirm_keyboard(order.id))
+                ok = await safe_send_message(
+                    bot,
+                    target_chat_id,
+                    code,
+                    business_connection_id=target_business_id,
+                    reply_markup=confirm_keyboard(order.id),
+                )
 
             if not ok:
                 await answer_message(bot, message, "Код принят, но не смог отправить покупателю.", business_connection_id)
-                await notify_admins(bot, f"Не смог отправить код покупателю.\nЗаказ #{order.operation_id}\nbusiness_connection_id: {target_business_id}")
+                await notify_admins(
+                    bot,
+                    f"Не смог отправить код покупателю.\nЗаказ #{order.operation_id}\nbusiness_connection_id: {target_business_id}",
+                )
                 return
 
             sent = await answer_message(bot, message, "OK. Код отправлен покупателю.", business_connection_id)
-            await maybe_delete_sent(bot, sent)
-            await maybe_delete_message(bot, message, delay=5)
+            try:
+                await maybe_delete_sent(bot, sent)
+                await maybe_delete_message(bot, message, delay=5)
+            except NameError:
+                pass
             return
 
-    await answer_message(bot, message, "Нет активного запроса для вас. Откройте панель кнопкой ниже.", business_connection_id, reply_markup=supplier_reply_keyboard())
+    # Сюда попадаем только если у поставщика нет активной заявки.
+    try:
+        await answer_message(
+            bot,
+            message,
+            "Нет активного запроса для вас. Откройте панель кнопкой ниже.",
+            business_connection_id,
+            reply_markup=supplier_reply_keyboard(),
+        )
+    except NameError:
+        await answer_message(bot, message, "Нет активного запроса для вас. Панель: /supplier", business_connection_id)
 
 
 async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
