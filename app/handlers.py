@@ -31,6 +31,7 @@ from app.keyboards import (
     supplier_panel_keyboard,
     supplier_reply_keyboard,
     supplier_orders_keyboard,
+    admin_text_keys_keyboard,
 )
 from app.parsers import extract_purchase_data, extract_phone, extract_code
 from app.senders import safe_send_message, answer_message
@@ -72,6 +73,9 @@ from app.services import (
 )
 
 logger = logging.getLogger(__name__)
+
+# admin_id -> text_key. Render WEB_CONCURRENCY=1, поэтому in-memory достаточно для короткого шага редактирования.
+ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 
 CONTACT_PATTERNS = [
     r"@[a-zA-Z0-9_]{3,}",
@@ -129,19 +133,55 @@ async def update_or_send(callback: CallbackQuery, text: str, reply_markup=None) 
             await callback.message.answer(text, reply_markup=reply_markup)
 
 
-async def delete_later(bot: Bot, chat_id: int, message_id: int, delay: int = 20) -> None:
+async def delete_later(bot: Bot, chat_id: int, message_id: int, delay: int | None = None) -> None:
+    if not AUTO_DELETE_MESSAGES:
+        return
+
+    if delay is None:
+        delay = AUTO_DELETE_DELAY_SECONDS
+
     await asyncio.sleep(delay)
+
     try:
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except Exception:
-        logger.info("Message delete skipped chat_id=%s message_id=%s", chat_id, message_id)
+    except Exception as exc:
+        logger.info("Message delete skipped chat_id=%s message_id=%s error=%s", chat_id, message_id, exc)
 
 
-async def maybe_delete_message(bot: Bot, message: Message, delay: int = 20) -> None:
+async def maybe_delete_message(bot: Bot, message: Message, delay: int | None = None) -> None:
+    if not AUTO_DELETE_MESSAGES:
+        return
+
     try:
         asyncio.create_task(delete_later(bot, message.chat.id, message.message_id, delay))
     except Exception:
-        logger.exception("Failed to schedule delete")
+        logger.exception("Failed to schedule incoming delete")
+
+
+async def maybe_delete_sent(bot: Bot, sent_message, delay: int | None = None) -> None:
+    if not AUTO_DELETE_MESSAGES:
+        return
+
+    if not sent_message or not hasattr(sent_message, "chat") or not hasattr(sent_message, "message_id"):
+        return
+
+    try:
+        asyncio.create_task(delete_later(bot, sent_message.chat.id, sent_message.message_id, delay))
+    except Exception:
+        logger.exception("Failed to schedule outgoing delete")
+
+
+async def temp_answer(
+    bot: Bot,
+    message: Message,
+    text: str,
+    business_connection_id: str | None = None,
+    reply_markup=None,
+    delay: int | None = None,
+) -> None:
+    sent = await answer_message(bot, message, text, business_connection_id, reply_markup=reply_markup)
+    await maybe_delete_sent(bot, sent, delay)
+    await maybe_delete_message(bot, message, delay=5)
 
 
 async def notify_admins(bot: Bot, text: str) -> None:
@@ -178,6 +218,72 @@ async def send_service_keyboard(
         business_connection_id,
         reply_markup=service_keyboard_from_services(services, page, max_page, order_id),
     )
+
+
+
+async def handle_unknown_buyer(
+    bot: Bot,
+    message: Message,
+    business_connection_id: str | None,
+    text: str,
+) -> None:
+    if AUTO_DELETE_UNKNOWN_BUYERS:
+        await maybe_delete_message(bot, message, delay=5)
+
+    if NOTIFY_UNKNOWN_BUYERS and message.from_user:
+        await notify_admins(
+            bot,
+            "Написал человек без активного заказа.\n\n"
+            f"Telegram ID: {message.from_user.id}\n"
+            f"Username: @{message.from_user.username or 'нет'}\n"
+            f"Текст: {text}",
+        )
+
+    if IGNORE_NON_BUYERS:
+        return
+
+    async with SessionLocal() as session:
+        order_not_found_text = await get_text(
+            session,
+            "order_not_found",
+            "Заказ не найден.\n\nЕсли вы уже оплатили, напишите админу.",
+        )
+
+    await temp_answer(bot, message, order_not_found_text, business_connection_id)
+
+
+async def process_admin_pending_input(bot: Bot, message: Message, business_connection_id: str | None) -> bool:
+    if not message.from_user or not is_admin(message.from_user.id):
+        return False
+
+    admin_id = message.from_user.id
+    key = ADMIN_TEXT_EDIT_WAIT.get(admin_id)
+    if not key:
+        return False
+
+    text = (message.text or "").strip()
+    if not text:
+        await temp_answer(bot, message, "Пришлите новый текст сообщением.", business_connection_id)
+        return True
+
+    if text.lower() in {"отмена", "cancel", "/cancel"}:
+        ADMIN_TEXT_EDIT_WAIT.pop(admin_id, None)
+        await temp_answer(bot, message, "Редактирование отменено.", business_connection_id)
+        return True
+
+    async with SessionLocal() as session:
+        result = await set_text(session, key, text)
+
+    ADMIN_TEXT_EDIT_WAIT.pop(admin_id, None)
+    await temp_answer(
+        bot,
+        message,
+        f"{result}\n\nНовый текст:\n{text}",
+        business_connection_id,
+        reply_markup=admin_panel_keyboard(),
+    )
+    return True
+
 
 
 async def process_admin_command(bot: Bot, message: Message, business_connection_id: str | None) -> bool:
@@ -622,70 +728,6 @@ async def accept_service_for_order(bot: Bot, message: Message | None, order_id: 
             )
 
 
-
-
-# -------- Auto-delete / unknown buyer helpers --------
-
-async def delete_later(bot: Bot, chat_id: int, message_id: int, delay: int | None = None) -> None:
-    if not AUTO_DELETE_MESSAGES:
-        return
-
-    if delay is None:
-        delay = AUTO_DELETE_DELAY_SECONDS
-
-    await asyncio.sleep(delay)
-
-    try:
-        await bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except Exception:
-        logger.info("Message delete skipped chat_id=%s message_id=%s", chat_id, message_id)
-
-
-async def maybe_delete_message(bot: Bot, message: Message, delay: int | None = None) -> None:
-    if not AUTO_DELETE_MESSAGES:
-        return
-
-    try:
-        asyncio.create_task(delete_later(bot, message.chat.id, message.message_id, delay))
-    except Exception:
-        logger.exception("Failed to schedule delete")
-
-
-async def handle_unknown_buyer(
-    bot: Bot,
-    message: Message,
-    business_connection_id: str | None,
-    text: str,
-) -> None:
-    """
-    Люди без активного оплаченного заказа не должны засорять диалог.
-    По умолчанию бот их игнорирует и удаляет их сообщение.
-    """
-    if AUTO_DELETE_UNKNOWN_BUYERS:
-        await maybe_delete_message(bot, message, delay=5)
-
-    if NOTIFY_UNKNOWN_BUYERS and message.from_user:
-        await notify_admins(
-            bot,
-            "Написал человек без активного заказа.\n\n"
-            f"Telegram ID: {message.from_user.id}\n"
-            f"Username: @{message.from_user.username or 'нет'}\n"
-            f"Текст: {text}",
-        )
-
-    if IGNORE_NON_BUYERS:
-        return
-
-    async with SessionLocal() as session:
-        order_not_found_text = await get_text(
-            session,
-            "order_not_found",
-            "Заказ не найден.\n\nЕсли вы уже оплатили, напишите админу.",
-        )
-
-    await handle_unknown_buyer(bot, message, business_connection_id, text)
-
-
 async def handle_buyer_message(bot: Bot, message: Message, business_connection_id: str | None) -> None:
     if not message.from_user:
         return
@@ -699,28 +741,18 @@ async def handle_buyer_message(bot: Bot, message: Message, business_connection_i
         order_not_found_text = await get_text(session, "order_not_found", "Заказ не найден.\n\nЕсли вы уже оплатили, напишите админу.")
 
     if not text:
-        await answer_message(bot, message, "Пришлите только название сервиса текстом или выберите кнопку. Фото/файлы поставщику не отправляются.", business_connection_id)
-        await maybe_delete_message(bot, message)
+        await temp_answer(bot, message, "Пришлите только название сервиса текстом или выберите кнопку. Фото/файлы поставщику не отправляются.", business_connection_id)
         return
 
     if contains_forbidden_contact(text):
-        await answer_message(bot, message, contact_forbidden_text, business_connection_id)
-        await maybe_delete_message(bot, message)
+        await temp_answer(bot, message, contact_forbidden_text, business_connection_id)
         return
 
     async with SessionLocal() as session:
         order = await find_waiting_service_order_for_customer(session, user_id, username)
 
         if not order:
-            await answer_message(bot, message, order_not_found_text, business_connection_id)
-            await notify_admins(
-                bot,
-                "Покупатель написал, но заказ не найден.\n\n"
-                f"Telegram ID: {user_id}\n"
-                f"Username: @{username or 'нет'}\n"
-                f"Текст: {text}\n\n"
-                f"Команда для привязки: /set_customer ID_ЗАКАЗА {user_id}",
-            )
+            await handle_unknown_buyer(bot, message, business_connection_id, text)
             return
 
         order.buyer_chat_id = message.chat.id
@@ -785,8 +817,9 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
                 await notify_admins(bot, f"Не смог отправить номер покупателю.\nЗаказ #{order.operation_id}\nbusiness_connection_id: {target_business_id}")
                 return
 
-            await answer_message(bot, message, "OK. Номер отправлен покупателю.", business_connection_id)
-            await maybe_delete_message(bot, message)
+            sent = await answer_message(bot, message, "OK. Номер отправлен покупателю.", business_connection_id)
+            await maybe_delete_sent(bot, sent)
+            await maybe_delete_message(bot, message, delay=5)
             return
 
         code_request = selected_request if selected_request and selected_request.request_type == "code" else None
@@ -824,8 +857,9 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
                 await notify_admins(bot, f"Не смог отправить код покупателю.\nЗаказ #{order.operation_id}\nbusiness_connection_id: {target_business_id}")
                 return
 
-            await answer_message(bot, message, "OK. Код отправлен покупателю.", business_connection_id)
-            await maybe_delete_message(bot, message)
+            sent = await answer_message(bot, message, "OK. Код отправлен покупателю.", business_connection_id)
+            await maybe_delete_sent(bot, sent)
+            await maybe_delete_message(bot, message, delay=5)
             return
 
     await answer_message(bot, message, "Нет активного запроса для вас. Откройте панель кнопкой ниже.", business_connection_id, reply_markup=supplier_reply_keyboard())
@@ -852,6 +886,8 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         return
 
     if is_admin(user_id) and not text.startswith("/"):
+        if await process_admin_pending_input(bot, message, business_connection_id):
+            return
         logger.info("IGNORED: admin non-command message to avoid self-cycle")
         return
 
@@ -960,6 +996,31 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             text = await services_text(session)
         await update_or_send(callback, text, reply_markup=admin_panel_keyboard())
         await callback.answer()
+        return True
+
+
+    if data == "admin:set_text_help":
+        await update_or_send(
+            callback,
+            "Выберите, какой текст изменить.\n\nПосле выбора бот попросит прислать новый текст одним сообщением.",
+            reply_markup=admin_text_keys_keyboard(),
+        )
+        await callback.answer()
+        return True
+
+    if data.startswith("admin:edit_text:"):
+        key = data.split(":", 2)[2]
+        ADMIN_TEXT_EDIT_WAIT[callback.from_user.id] = key
+
+        async with SessionLocal() as session:
+            current = await get_text(session, key, "")
+
+        await update_or_send(
+            callback,
+            f"Редактирование текста: {key}\n\nТекущий текст:\n{current or 'пусто'}\n\nПришлите новый текст одним сообщением.\nДля отмены напишите: отмена",
+            reply_markup=admin_panel_keyboard(),
+        )
+        await callback.answer("Жду новый текст")
         return True
 
     if data == "admin:texts":

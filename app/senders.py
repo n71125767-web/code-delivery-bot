@@ -11,34 +11,31 @@ async def safe_send_message(
     text: str,
     business_connection_id: str | None = None,
     reply_markup=None,
-) -> bool:
+):
     """
-    Если передан business_connection_id — сообщение уходит от Business-аккаунта.
-    Если нет — обычным ботом.
-
-    Нельзя отправлять самому боту и нельзя использовать business_id вслепую:
-    Telegram даст отправить через Business только в чаты, доступные этому business_connection.
+    Возвращает объект Message при успехе или False при ошибке.
+    Старый код проверял результат как bool — это совместимо.
     """
     me = await bot.me()
+
     if chat_id == me.id:
-        logger.info("Skip self-send to bot id=%s", chat_id)
+        logger.info("SKIP SEND: chat_id is bot id=%s", chat_id)
         return False
 
     try:
         if business_connection_id:
-            await bot.send_message(
+            return await bot.send_message(
                 chat_id=chat_id,
                 text=text,
                 business_connection_id=business_connection_id,
                 reply_markup=reply_markup,
             )
-        else:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                reply_markup=reply_markup,
-            )
-        return True
+
+        return await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup,
+        )
     except Exception as exc:
         logger.exception(
             "Send failed chat_id=%s business_connection_id=%s error=%s",
@@ -55,10 +52,11 @@ async def answer_message(
     text: str,
     business_connection_id: str | None = None,
     reply_markup=None,
-) -> bool:
+):
     me = await bot.me()
+
     if message.from_user and message.from_user.id == me.id:
-        logger.info("Skip answering own bot message")
+        logger.info("SKIP ANSWER: message from own bot")
         return False
 
     if business_connection_id:
@@ -71,8 +69,7 @@ async def answer_message(
         )
 
     try:
-        await message.answer(text, reply_markup=reply_markup)
-        return True
-    except Exception:
-        logger.exception("message.answer failed")
+        return await message.answer(text, reply_markup=reply_markup)
+    except Exception as exc:
+        logger.exception("message.answer failed error=%s", exc)
         return False

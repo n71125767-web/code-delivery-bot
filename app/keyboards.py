@@ -113,3 +113,18 @@ def supplier_reply_keyboard() -> ReplyKeyboardMarkup:
         one_time_keyboard=False,
         input_field_placeholder="Откройте панель или отправьте номер/код",
     )
+
+
+
+def admin_text_keys_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🙏 Спасибо за покупку", callback_data="admin:edit_text:thank_you")
+    kb.button(text="✅ Сервис принят", callback_data="admin:edit_text:service_accepted")
+    kb.button(text="🧩 Выбор сервиса", callback_data="admin:edit_text:service_select")
+    kb.button(text="❌ Заказ не найден", callback_data="admin:edit_text:order_not_found")
+    kb.button(text="🚫 Запрет контактов", callback_data="admin:edit_text:contact_forbidden")
+    kb.button(text="🔒 Заказ закрыт", callback_data="admin:edit_text:order_closed")
+    kb.button(text="⚠️ Проблема отправлена", callback_data="admin:edit_text:problem_sent")
+    kb.button(text="⬅️ Назад", callback_data="admin:panel")
+    kb.adjust(1)
+    return kb.as_markup()

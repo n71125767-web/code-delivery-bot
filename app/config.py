@@ -65,7 +65,7 @@ AUTO_DELETE_MESSAGES = os.getenv("AUTO_DELETE_MESSAGES", "1").strip() == "1"
 AUTO_DELETE_DELAY_SECONDS = int(os.getenv("AUTO_DELETE_DELAY_SECONDS", "30"))
 AUTO_DELETE_UNKNOWN_BUYERS = os.getenv("AUTO_DELETE_UNKNOWN_BUYERS", "1").strip() == "1"
 
-# Если 1 — люди без заказа игнорируются.
+# Если 1 — люди без активного оплаченного заказа игнорируются.
 # Если 0 — им будет отправляться текст order_not_found.
 IGNORE_NON_BUYERS = os.getenv("IGNORE_NON_BUYERS", "1").strip() == "1"
 
