@@ -676,10 +676,11 @@ async def process_admaker_message(bot: Bot, message: Message) -> None:
 
 
 async def send_supplier_request_for_order(bot: Bot, order, business_connection_id: str | None) -> bool:
+    order_id_value = getattr(order, "id", order)
     actual_business_id = business_connection_id or getattr(order, "business_connection_id", None)
 
     async with SessionLocal() as session:
-        db_order = await get_order_by_id(session, order.id)
+        db_order = await get_order_by_id(session, order_id_value)
         if not db_order:
             return False
         supplier = await find_supplier_for_order(session, db_order)
@@ -716,7 +717,7 @@ async def send_supplier_request_for_order(bot: Bot, order, business_connection_i
         return False
 
     async with SessionLocal() as session:
-        supplier_request = await create_supplier_request(session, order.id, supplier.telegram_id, "number")
+        supplier_request = await create_supplier_request(session, order_id_value, supplier.telegram_id, "number")
 
     # Повторно отправим короткое сообщение с кнопками именно по этой заявке.
     # Старое текстовое уведомление выше оставлено для совместимости.
@@ -751,6 +752,13 @@ async def send_supplier_request_for_order(bot: Bot, order, business_connection_i
 
 
 async def accept_service_for_order(bot: Bot, message: Message | None, order_id: int, service_name: str, business_connection_id: str | None) -> None:
+    # ВАЖНО:
+    # Не используем ORM-объект order после выхода из async with SessionLocal().
+    # Иначе SQLAlchemy может дать DetachedInstanceError.
+    order_id_value = order_id
+    actual_business_id = business_connection_id
+    service_accepted_text = "OK. Сервис принят. Ожидайте номер."
+
     async with SessionLocal() as session:
         order = await get_order_by_id(session, order_id)
         if not order:
@@ -759,13 +767,8 @@ async def accept_service_for_order(bot: Bot, message: Message | None, order_id: 
             return
 
         if order.status != "waiting_service":
+            closed_text = await get_text(session, "order_closed", "Заказ уже закрыт или уже в обработке.")
             if message:
-                await answer_message(bot, message, "Этот заказ уже в обработке или закрыт.", business_connection_id or order.business_connection_id)
-            return
-
-        if order.status != "waiting_service":
-            if message:
-                closed_text = await get_text(session, "order_closed", "Заказ уже закрыт или уже в обработке.")
                 await answer_message(bot, message, closed_text, business_connection_id or order.business_connection_id)
             return
 
@@ -783,13 +786,32 @@ async def accept_service_for_order(bot: Bot, message: Message | None, order_id: 
         await increment_service_usage(session, service_name)
         await session.commit()
         await session.refresh(order)
-        await create_action_event(session, "service_confirmed", f"service={service_name}", user_id=order.customer_telegram_id, order_id=order.id)
 
-    actual_business_id = business_connection_id or order.business_connection_id
-    ok = await send_supplier_request_for_order(bot, order, actual_business_id)
-
-    async with SessionLocal() as session:
+        order_id_value = order.id
+        actual_business_id = business_connection_id or order.business_connection_id
         service_accepted_text = await get_text(session, "service_accepted", "OK. Сервис принят. Ожидайте номер.")
+
+        try:
+            await create_action_event(
+                session,
+                "service_confirmed",
+                f"service={service_name}",
+                user_id=order.customer_telegram_id,
+                order_id=order.id,
+            )
+        except Exception:
+            logger.exception("create_action_event failed")
+
+    # Берём свежий объект заказа в новой сессии и передаём его дальше.
+    async with SessionLocal() as session:
+        fresh_order = await get_order_by_id(session, order_id_value)
+
+    if not fresh_order:
+        if message:
+            await answer_message(bot, message, "Заказ не найден после обновления.", actual_business_id)
+        return
+
+    ok = await send_supplier_request_for_order(bot, fresh_order, actual_business_id)
 
     if message:
         if ok:
