@@ -38,6 +38,8 @@ from app.keyboards import (
     supplier_commands_keyboard,
     supplier_filter_keyboard,
     buyer_reply_keyboard,
+    buyer_inline_menu_keyboard,
+    supplier_inline_menu_keyboard,
     supplier_new_order_keyboard,
     admin_text_keys_keyboard,
     admin_back_keyboard,
@@ -205,6 +207,48 @@ async def temp_answer(
     sent = await answer_message(bot, message, text, business_connection_id, reply_markup=reply_markup)
     await maybe_delete_sent(bot, sent, delay)
     await maybe_delete_message(bot, message, delay=5)
+
+
+async def send_buyer_menu(
+    bot: Bot,
+    chat_id: int,
+    text: str = "Меню покупателя",
+    business_connection_id: str | None = None,
+):
+    """Отправляет покупателю inline-кнопки, которые видны прямо под сообщением."""
+    logger.info(
+        "SEND_BUYER_INLINE_MENU chat_id=%s business_id=%s",
+        chat_id,
+        business_connection_id,
+    )
+    return await safe_send_message(
+        bot,
+        chat_id,
+        text,
+        business_connection_id=business_connection_id,
+        reply_markup=buyer_inline_menu_keyboard(),
+    )
+
+
+async def send_supplier_menu(
+    bot: Bot,
+    chat_id: int,
+    text: str = "Меню поставщика",
+    business_connection_id: str | None = None,
+):
+    """Отправляет поставщику inline-кнопки, которые видны прямо под сообщением."""
+    logger.info(
+        "SEND_SUPPLIER_INLINE_MENU chat_id=%s business_id=%s",
+        chat_id,
+        business_connection_id,
+    )
+    return await safe_send_message(
+        bot,
+        chat_id,
+        text,
+        business_connection_id=business_connection_id,
+        reply_markup=supplier_inline_menu_keyboard(),
+    )
 
 
 async def notify_admins(bot: Bot, text: str) -> None:
@@ -455,7 +499,7 @@ async def process_admin_command(bot: Bot, message: Message, business_connection_
 
         async with SessionLocal() as session:
             supplier = await add_supplier(session, supplier_id, name)
-        await safe_send_message(bot, supplier_id, "Вы добавлены как поставщик. Откройте панель кнопкой ниже.", reply_markup=supplier_reply_keyboard())
+        await safe_send_message(bot, supplier_id, "Вы добавлены как поставщик. Откройте панель кнопкой ниже.", reply_markup=supplier_inline_menu_keyboard())
 
         await answer_message(bot, message, f"OK. Поставщик добавлен.\nID: {supplier.telegram_id}\nИмя: {supplier.name}", business_connection_id)
         return True
@@ -592,31 +636,31 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
             )
             return
 
-        await answer_message(bot, message, "Бот работает.", business_connection_id, reply_markup=buyer_reply_keyboard())
+        await answer_message(bot, message, "Бот работает. Кнопки ниже.", business_connection_id, reply_markup=buyer_inline_menu_keyboard())
         return
 
     if text == "👤 Мой профиль" or text == "/profile":
         if is_admin(user_id):
             async with SessionLocal() as session:
                 profile_text = await admin_profile_text(session, user_id, username)
-            await answer_message(bot, message, profile_text, business_connection_id, reply_markup=buyer_reply_keyboard())
+            await answer_message(bot, message, profile_text, business_connection_id, reply_markup=buyer_inline_menu_keyboard())
             return
 
         if await is_supplier_user(user_id):
             async with SessionLocal() as session:
                 profile_text = await supplier_profile_text(session, user_id, username)
-            await answer_message(bot, message, profile_text, business_connection_id, reply_markup=supplier_reply_keyboard())
+            await answer_message(bot, message, profile_text, business_connection_id, reply_markup=supplier_inline_menu_keyboard())
             return
 
         async with SessionLocal() as session:
             profile_text = await buyer_profile_text(session, user_id, username)
-        await answer_message(bot, message, profile_text, business_connection_id, reply_markup=buyer_reply_keyboard())
+        await answer_message(bot, message, profile_text, business_connection_id, reply_markup=buyer_inline_menu_keyboard())
         return
 
     if text == "📦 Мои заказы" or text == "/orders":
         async with SessionLocal() as session:
             orders_text = await buyer_orders_text(session, user_id, username, BUYER_ORDERS_LIMIT)
-        await answer_message(bot, message, orders_text, business_connection_id, reply_markup=buyer_reply_keyboard())
+        await answer_message(bot, message, orders_text, business_connection_id, reply_markup=buyer_inline_menu_keyboard())
         return
 
     if text == "🆘 Помощь":
@@ -625,7 +669,7 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
             message,
             "Помощь\n\nЕсли заказ активен — используйте кнопки в чате.\nЕсли есть проблема — нажмите кнопку проблемы под номером или кодом.",
             business_connection_id,
-            reply_markup=buyer_reply_keyboard(),
+            reply_markup=buyer_inline_menu_keyboard(),
         )
         return
 
@@ -730,7 +774,7 @@ async def send_supplier_request_for_order(bot: Bot, order, business_connection_i
         "Пример: +79990000000"
     )
 
-    ok = await safe_send_message(bot, supplier.telegram_id, supplier_text, actual_business_id, reply_markup=supplier_reply_keyboard())
+    ok = await safe_send_message(bot, supplier.telegram_id, supplier_text, actual_business_id, reply_markup=supplier_inline_menu_keyboard())
     if not ok:
         ok = await safe_send_message(bot, supplier.telegram_id, supplier_text)
 
@@ -954,7 +998,7 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
                 )
                 return
 
-            sent = await answer_message(bot, message, "OK. Номер отправлен покупателю.", business_connection_id, reply_markup=supplier_reply_keyboard())
+            sent = await answer_message(bot, message, "OK. Номер отправлен покупателю.", business_connection_id, reply_markup=supplier_inline_menu_keyboard())
             try:
                 await maybe_delete_sent(bot, sent)
                 await maybe_delete_message(bot, message, delay=5)
@@ -1016,7 +1060,7 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
                 )
                 return
 
-            sent = await answer_message(bot, message, "OK. Код отправлен покупателю.", business_connection_id, reply_markup=supplier_reply_keyboard())
+            sent = await answer_message(bot, message, "OK. Код отправлен покупателю.", business_connection_id, reply_markup=supplier_inline_menu_keyboard())
             try:
                 await maybe_delete_sent(bot, sent)
                 await maybe_delete_message(bot, message, delay=5)
@@ -1122,13 +1166,27 @@ async def resend_problem_to_supplier(bot: Bot, order, problem_type: str) -> None
             "Панель поставщика: /supplier"
         )
 
-    ok = await safe_send_message(bot, supplier.telegram_id, supplier_text, order.business_connection_id, reply_markup=supplier_reply_keyboard())
-    if not ok:
-        ok = await safe_send_message(bot, supplier.telegram_id, supplier_text)
+    async with SessionLocal() as session:
+        problem_request = await create_supplier_request(session, order.id, supplier.telegram_id, request_type)
 
-    if ok:
+    ok = await safe_send_message(
+        bot,
+        supplier.telegram_id,
+        supplier_text,
+        order.business_connection_id,
+        reply_markup=supplier_new_order_keyboard(problem_request.id, request_type),
+    )
+    if not ok:
+        ok = await safe_send_message(
+            bot,
+            supplier.telegram_id,
+            supplier_text,
+            reply_markup=supplier_new_order_keyboard(problem_request.id, request_type),
+        )
+
+    if ok and hasattr(ok, "message_id"):
         async with SessionLocal() as session:
-            await create_supplier_request(session, order.id, supplier.telegram_id, request_type)
+            await set_supplier_request_message_id(session, problem_request.id, ok.message_id)
 
 
 async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
@@ -1442,6 +1500,13 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
 
+    if data == "supplier:profile":
+        async with SessionLocal() as session:
+            text = await supplier_profile_text(session, callback.from_user.id, callback.from_user.username)
+        await update_or_send(callback, text, reply_markup=supplier_inline_menu_keyboard())
+        await callback.answer()
+        return True
+
 
     if data == "supplier:commands":
         text = (
@@ -1578,6 +1643,42 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
 
 
+async def handle_buyer_callback(bot: Bot, callback: CallbackQuery) -> bool:
+    if not callback.from_user:
+        return False
+
+    data = callback.data or ""
+    user_id = callback.from_user.id
+    username = callback.from_user.username
+
+    if data == "buyer:profile":
+        async with SessionLocal() as session:
+            text = await buyer_profile_text(session, user_id, username)
+        await update_or_send(callback, text, reply_markup=buyer_inline_menu_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "buyer:orders":
+        async with SessionLocal() as session:
+            text = await buyer_orders_text(session, user_id, username, BUYER_ORDERS_LIMIT)
+        await update_or_send(callback, text, reply_markup=buyer_inline_menu_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "buyer:help":
+        text = (
+            "Помощь\n\n"
+            "Если заказ активен — выберите сервис кнопкой или напишите название сервиса.\n"
+            "После номера нажмите «Код отправлен».\n"
+            "Если номер или код не работает — нажмите кнопку проблемы под сообщением."
+        )
+        await update_or_send(callback, text, reply_markup=buyer_inline_menu_keyboard())
+        await callback.answer()
+        return True
+
+    return False
+
+
 async def check_button_cooldown(callback: CallbackQuery, action: str) -> bool:
     if not callback.from_user:
         return True
@@ -1621,7 +1722,15 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         await callback.answer("Команда только для поставщика", show_alert=True)
         return
 
+    if data.startswith("buyer:"):
+        handled = await handle_buyer_callback(bot, callback)
+        if handled:
+            return
+        await callback.answer("Неизвестная кнопка покупателя", show_alert=True)
+        return
+
     if data.startswith("svcpage:"):
+
         _, order_id_raw, page_raw = data.split(":")
         order_id = int(order_id_raw)
         page = int(page_raw)
@@ -1737,13 +1846,27 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             "Панель поставщика: /supplier"
         )
 
-        ok = await safe_send_message(bot, supplier.telegram_id, supplier_text, order.business_connection_id)
-        if not ok:
-            ok = await safe_send_message(bot, supplier.telegram_id, supplier_text)
+        async with SessionLocal() as session:
+            code_request = await create_supplier_request(session, order.id, supplier.telegram_id, "code")
 
-        if ok:
+        ok = await safe_send_message(
+            bot,
+            supplier.telegram_id,
+            supplier_text,
+            order.business_connection_id,
+            reply_markup=supplier_new_order_keyboard(code_request.id, "code"),
+        )
+        if not ok:
+            ok = await safe_send_message(
+                bot,
+                supplier.telegram_id,
+                supplier_text,
+                reply_markup=supplier_new_order_keyboard(code_request.id, "code"),
+            )
+
+        if ok and hasattr(ok, "message_id"):
             async with SessionLocal() as session:
-                await create_supplier_request(session, order.id, supplier.telegram_id, "code")
+                await set_supplier_request_message_id(session, code_request.id, ok.message_id)
 
         if callback.message:
             await callback.message.answer("OK. Запросил код у поставщика." if ok else "Не смог написать поставщику.")
@@ -1775,10 +1898,10 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
 
         thanks_sent = False
         if target_chat_id:
-            thanks_sent = await safe_send_message(bot, target_chat_id, thank_you_text, business_connection_id=target_business_id, reply_markup=buyer_reply_keyboard())
+            thanks_sent = await safe_send_message(bot, target_chat_id, thank_you_text, business_connection_id=target_business_id, reply_markup=buyer_inline_menu_keyboard())
 
         if not thanks_sent and callback.message:
-            await callback.message.answer(thank_you_text, reply_markup=buyer_reply_keyboard())
+            await callback.message.answer(thank_you_text, reply_markup=buyer_inline_menu_keyboard())
 
         await callback.answer("Заказ завершён")
         return

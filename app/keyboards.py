@@ -289,6 +289,33 @@ def buyer_reply_keyboard() -> ReplyKeyboardMarkup:
 
 
 
+def buyer_inline_menu_keyboard() -> InlineKeyboardMarkup:
+    """
+    Inline-меню покупателя.
+    ВАЖНО: inline-кнопки видны прямо под сообщением.
+    Это надёжнее, чем ReplyKeyboardMarkup в Telegram Business-чатах.
+    """
+    kb = InlineKeyboardBuilder()
+    kb.button(text="👤 Мой профиль", callback_data="buyer:profile")
+    kb.button(text="📦 Мои заказы", callback_data="buyer:orders")
+    kb.button(text="🆘 Помощь", callback_data="buyer:help")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def supplier_inline_menu_keyboard() -> InlineKeyboardMarkup:
+    """Inline-меню поставщика, чтобы кнопки точно появились под сообщением."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="👤 Мой профиль", callback_data="supplier:profile")
+    kb.button(text="🚚 Панель поставщика", callback_data="supplier:pending:0")
+    kb.button(text="⏳ Все активные", callback_data="supplier:filter:active:0")
+    kb.button(text="📞 Ждут номер", callback_data="supplier:filter:number:0")
+    kb.button(text="🔑 Ждут код", callback_data="supplier:filter:code:0")
+    kb.button(text="📖 Команды", callback_data="supplier:commands")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
 def supplier_filter_keyboard(mode: str = "active", page: int = 0, max_page: int = 0) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
 
