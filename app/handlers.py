@@ -120,13 +120,16 @@ from app.services import (
 )
 
 logger = logging.getLogger(__name__)
-logger.info("FIX_MARKER_BUSINESS_PANEL_CONTEXT_FIX=v9 loaded")
+logger.info("FIX_MARKER_BUSINESS_PANEL_STRICT_CONTEXT=v10 loaded")
 
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 
 # Динамические панели ролей: храним последнее inline-сообщение панели,
 # чтобы команды и callback-кнопки редактировали его, а не спамили новым сообщением.
 ROLE_PANEL_MESSAGES: dict[tuple[str, int, str], int] = {}
+# Запоминаем Business connection по chat_id. CallbackQuery часто приходит без явного
+# business_connection_id, но редактировать Business-сообщение без него нельзя.
+BUSINESS_CONTEXT_BY_CHAT: dict[int, str] = {}
 REPLY_KEYBOARD_CLEANED: set[int] = set()
 
 
@@ -223,36 +226,45 @@ async def send_or_edit_role_panel(
     if callback is None:
         await cleanup_reply_keyboard_once(bot, chat_id, business_connection_id)
 
+    if business_connection_id:
+        remember_business_context(chat_id, business_connection_id)
+
     panel_context = business_connection_id or "normal"
     key = (role, chat_id, panel_context)
 
-    # Если пришёл callback — это идеальный вариант, редактируем сообщение кнопки.
+    # Если пришёл callback — редактируем именно то сообщение, на котором была кнопка.
+    # Для Business-сообщений нельзя использовать callback.message.edit_text без
+    # business_connection_id: Telegram ответит "message to edit not found".
     if callback and callback.message:
-        try:
-            await callback.message.edit_text(text, reply_markup=reply_markup)
-            ROLE_PANEL_MESSAGES[key] = callback.message.message_id
+        cb_message_id = callback.message.message_id
+        ok = await _bot_edit_text_safe(
+            bot,
+            chat_id,
+            cb_message_id,
+            text,
+            reply_markup=reply_markup,
+            business_connection_id=business_connection_id,
+        )
+        if ok:
+            ROLE_PANEL_MESSAGES[key] = cb_message_id
             logger.info(
-                "ROLE_PANEL_CALLBACK_EDIT_OK role=%s chat_id=%s message_id=%s data=%s has_keyboard=%s",
+                "ROLE_PANEL_CALLBACK_EDIT_OK role=%s chat_id=%s message_id=%s business_context=%s data=%s has_keyboard=%s",
                 role,
                 chat_id,
-                callback.message.message_id,
+                cb_message_id,
+                panel_context,
                 callback.data,
                 reply_markup is not None,
             )
             return callback.message
-        except Exception as exc:
-            if _is_message_not_modified_error(exc):
-                ROLE_PANEL_MESSAGES[key] = callback.message.message_id
-                logger.info("ROLE_PANEL_CALLBACK_NOT_MODIFIED role=%s chat_id=%s data=%s", role, chat_id, callback.data)
-                return callback.message
-            logger.info(
-                "ROLE_PANEL_CALLBACK_EDIT_FAILED role=%s chat_id=%s message_id=%s data=%s error=%s",
-                role,
-                chat_id,
-                callback.message.message_id,
-                callback.data,
-                exc,
-            )
+        logger.info(
+            "ROLE_PANEL_CALLBACK_EDIT_FAILED_FINAL role=%s chat_id=%s message_id=%s business_context=%s data=%s",
+            role,
+            chat_id,
+            cb_message_id,
+            panel_context,
+            callback.data,
+        )
 
     # Если команда текстом — пытаемся редактировать последнее сообщение панели.
     old_message_id = ROLE_PANEL_MESSAGES.get(key)
@@ -346,6 +358,26 @@ def get_business_id(message: Message | None, fallback: str | None = None) -> str
     )
 
 
+def remember_business_context(chat_id: int | None, business_connection_id: str | None) -> None:
+    if chat_id and business_connection_id:
+        BUSINESS_CONTEXT_BY_CHAT[chat_id] = business_connection_id
+
+
+def get_callback_business_id(callback: CallbackQuery | None) -> str | None:
+    if callback is None:
+        return None
+
+    message = getattr(callback, "message", None)
+    chat = getattr(message, "chat", None)
+    chat_id = getattr(chat, "id", None)
+
+    return (
+        getattr(callback, "business_connection_id", None)
+        or getattr(message, "business_connection_id", None)
+        or BUSINESS_CONTEXT_BY_CHAT.get(chat_id)
+    )
+
+
 def contains_forbidden_contact(text: str) -> bool:
     return bool(CONTACT_RE.search(text or ""))
 
@@ -370,11 +402,13 @@ async def update_or_send(callback: CallbackQuery, text: str, reply_markup=None) 
     chat_id = callback.message.chat.id
 
     if data.startswith("supplier:"):
-        await send_supplier_role_panel(callback.bot, chat_id, text, reply_markup=reply_markup, callback=callback)
+        business_id = get_callback_business_id(callback)
+        await send_supplier_role_panel(callback.bot, chat_id, text, reply_markup=reply_markup, business_connection_id=business_id, callback=callback)
         return
 
     if data.startswith("buyer:"):
-        await send_buyer_role_panel(callback.bot, chat_id, text, reply_markup=reply_markup, callback=callback)
+        business_id = get_callback_business_id(callback)
+        await send_buyer_role_panel(callback.bot, chat_id, text, reply_markup=reply_markup, business_connection_id=business_id, callback=callback)
         return
 
     # Админскую панель оставляем в старом стиле, но без спама на "message is not modified".
@@ -1535,6 +1569,9 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         "HANDLED_TEXT is_business=%s from_id=%s username=%s is_bot=%s chat_id=%s business_id=%s text=%s",
         is_business, user_id, username, sender.is_bot, message.chat.id, business_connection_id, text[:200],
     )
+
+    if is_business and business_connection_id:
+        remember_business_context(message.chat.id, business_connection_id)
 
     if user_id == me.id:
         logger.info("IGNORED: own bot message")

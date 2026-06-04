@@ -108,6 +108,7 @@ async def answer_message(
             text=text,
             business_connection_id=business_connection_id,
             reply_markup=reply_markup,
+            allow_normal_fallback=False,
         )
 
     try:
