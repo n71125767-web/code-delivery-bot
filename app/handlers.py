@@ -49,6 +49,7 @@ from app.keyboards import (
     supplier_requests_menu_keyboard,
     supplier_section_orders_keyboard,
     supplier_empty_section_keyboard,
+    supplier_wait_confirm_keyboard,
     buyer_orders_list_keyboard,
     buyer_empty_section_keyboard,
     buyer_order_card_keyboard,
@@ -120,10 +121,12 @@ from app.services import (
     order_card_text,
     get_recent_order_rows,
     get_problem_order_rows,
+    mark_code_waiting_buyer_confirm,
+    close_waiting_supplier_requests_for_order,
 )
 
 logger = logging.getLogger(__name__)
-logger.info("FIX_MARKER_BUSINESS_DYNAMIC_RAW_EDIT=v11 loaded")
+logger.info("FIX_MARKER_WAIT_BUYER_CONFIRM_DYNAMIC=v12 loaded")
 
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 
@@ -1601,22 +1604,29 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
                 return
 
             order.verification_code = code
+            # НЕ закрываем заказ после кода от поставщика.
+            # Это состояние означает: код отправлен покупателю, ждём кнопку «OK, всё успешно»
+            # или «Код не работает».
             order.status = "code_sent_to_customer"
             order.updated_at = datetime.utcnow()
-            code_request.status = "answered"
-            code_request.answered_at = datetime.utcnow()
+            await mark_code_waiting_buyer_confirm(session, code_request.id)
             await session.commit()
             await session.refresh(order)
+            await session.refresh(code_request)
 
             target_chat_id = order.buyer_chat_id or order.customer_telegram_id
             target_business_id = order.business_connection_id or business_connection_id or ADMIN_BUSINESS_CONNECTION_ID
 
             ok = False
             if target_chat_id:
-                ok = await safe_send_message(
+                ok = await send_buyer_role_panel(
                     bot,
                     target_chat_id,
-                    code,
+                    (
+                        f"🔑 Код по заказу #{order.operation_id}:\n\n"
+                        f"{code}\n\n"
+                        "Проверьте код и подтвердите результат кнопкой ниже."
+                    ),
                     business_connection_id=target_business_id,
                     reply_markup=confirm_keyboard(order.id),
                 )
@@ -1629,7 +1639,17 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
                 )
                 return
 
-            sent = await send_supplier_role_panel(bot, message.chat.id, "OK. Код отправлен покупателю.", reply_markup=supplier_inline_menu_keyboard(), business_connection_id=business_connection_id)
+            sent = await send_supplier_role_panel(
+                bot,
+                message.chat.id,
+                (
+                    "OK. Код отправлен покупателю.\n\n"
+                    f"Заказ #{order.operation_id} теперь ожидает подтверждения покупателя.\n"
+                    "Пока покупатель не нажмёт «OK, всё успешно», заявка не считается закрытой."
+                ),
+                reply_markup=supplier_wait_confirm_keyboard("code", 0),
+                business_connection_id=business_connection_id,
+            )
             try:
                 await maybe_delete_sent(bot, sent)
                 await maybe_delete_message(bot, message, delay=5)
@@ -2190,6 +2210,33 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
         await callback.answer()
         return True
 
+    if data.startswith("supplier:wait:"):
+        parts = data.split(":")
+        request_id = int(parts[2])
+        mode = parts[3] if len(parts) > 3 else "active"
+        page = int(parts[4]) if len(parts) > 4 else 0
+
+        async with SessionLocal() as session:
+            request, order = await get_supplier_request_order(session, request_id)
+
+        if not request or not order or request.supplier_telegram_id != callback.from_user.id:
+            await callback.answer("Заявка не найдена", show_alert=True)
+            return True
+
+        text = (
+            "⏳ Заявка ожидает подтверждения покупателя.\n\n"
+            f"Заказ: #{order.operation_id}\n"
+            f"Товар: {order.product_name}\n"
+            f"Сервис: {order.service_name or 'не указан'}\n"
+            f"Номер: {order.phone_number or 'ещё нет'}\n"
+            f"Код: {order.verification_code or 'ещё нет'}\n\n"
+            "Поставщику больше ничего отправлять не нужно.\n"
+            "Ждём, пока покупатель нажмёт «OK, всё успешно» или сообщит о проблеме."
+        )
+        await update_or_send(callback, text, reply_markup=supplier_wait_confirm_keyboard(mode, page))
+        await callback.answer()
+        return True
+
     if data.startswith("supplier:reqf:"):
         parts = data.split(":")
         request_id = int(parts[2])
@@ -2549,6 +2596,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
 
             order.status = "confirmed"
             order.updated_at = datetime.utcnow()
+            closed_requests_count = await close_waiting_supplier_requests_for_order(session, order.id)
             await session.commit()
             await session.refresh(order)
             thank_you_text = await get_text(session, "thank_you", "Спасибо за покупку!")
@@ -2558,10 +2606,17 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
 
         thanks_sent = False
         if target_chat_id:
-            thanks_sent = await safe_send_message(bot, target_chat_id, thank_you_text, business_connection_id=target_business_id, reply_markup=buyer_inline_menu_keyboard())
+            thanks_sent = await send_buyer_role_panel(
+                bot,
+                target_chat_id,
+                thank_you_text,
+                business_connection_id=get_callback_business_id(callback) or target_business_id,
+                reply_markup=buyer_inline_menu_keyboard(),
+                callback=callback,
+            )
 
         if not thanks_sent and callback.message:
-            await callback.message.answer(thank_you_text, reply_markup=buyer_inline_menu_keyboard())
+            await update_or_send(callback, thank_you_text, reply_markup=buyer_inline_menu_keyboard())
 
         await callback.answer("Заказ завершён")
         return

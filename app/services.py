@@ -644,7 +644,7 @@ async def select_supplier_request(session: AsyncSession, supplier_id: int, reque
         .where(
             SupplierRequest.id == request_id,
             SupplierRequest.supplier_telegram_id == supplier_id,
-            SupplierRequest.status == "sent",
+            SupplierRequest.status.in_(["sent", "in_progress", "selected"]),
         )
     )
     row = result.first()
@@ -668,6 +668,37 @@ async def select_supplier_request(session: AsyncSession, supplier_id: int, reque
     await session.refresh(order)
 
     return True, "OK. Заявка выбрана.", request, order
+
+
+async def mark_code_waiting_buyer_confirm(session: AsyncSession, request_id: int) -> None:
+    """
+    После отправки кода поставщиком заявка НЕ закрывается окончательно.
+    Она остаётся видимой поставщику как "ждём подтверждение покупателя".
+    Закрывать её можно только после кнопки покупателя OK.
+    """
+    request = await get_supplier_request_by_id(session, request_id)
+    if request:
+        request.status = "waiting_buyer_confirm"
+        request.answered_at = datetime.utcnow()
+
+
+async def close_waiting_supplier_requests_for_order(session: AsyncSession, order_id: int) -> int:
+    """
+    Закрывает supplier_requests по заказу только после подтверждения покупателем.
+    Возвращает количество обновлённых заявок.
+    """
+    result = await session.execute(
+        select(SupplierRequest).where(
+            SupplierRequest.order_id == order_id,
+            SupplierRequest.status.in_(["waiting_buyer_confirm", "sent", "selected", "in_progress"]),
+        )
+    )
+    requests = result.scalars().all()
+    for request in requests:
+        request.status = "answered"
+        if not request.answered_at:
+            request.answered_at = datetime.utcnow()
+    return len(requests)
 
 
 async def add_service_list(session: AsyncSession, name: str) -> str:
@@ -855,7 +886,7 @@ async def find_active_supplier_request(session: AsyncSession, supplier_telegram_
     result = await session.execute(
         select(SupplierRequest)
         .where(SupplierRequest.supplier_telegram_id == supplier_telegram_id)
-        .where(SupplierRequest.status.in_(["in_progress", "sent"]))
+        .where(SupplierRequest.status.in_(["in_progress", "selected", "sent"]))
         .order_by(SupplierRequest.status.asc(), SupplierRequest.created_at.asc())
     )
     return result.scalars().first()
@@ -865,7 +896,7 @@ async def supplier_pending_rows(session: AsyncSession, supplier_id: int, page: i
     result_total = await session.scalar(
         select(func.count(SupplierRequest.id)).where(
             SupplierRequest.supplier_telegram_id == supplier_id,
-            SupplierRequest.status.in_(["sent", "in_progress"]),
+            SupplierRequest.status.in_(["sent", "in_progress", "waiting_buyer_confirm"]),
         )
     )
     total = result_total or 0
@@ -877,7 +908,7 @@ async def supplier_pending_rows(session: AsyncSession, supplier_id: int, page: i
         .join(Order, SupplierRequest.order_id == Order.id)
         .where(
             SupplierRequest.supplier_telegram_id == supplier_id,
-            SupplierRequest.status.in_(["sent", "in_progress"]),
+            SupplierRequest.status.in_(["sent", "in_progress", "waiting_buyer_confirm"]),
         )
         .order_by(SupplierRequest.created_at.asc())
         .offset(page * page_size)
@@ -949,17 +980,21 @@ async def buyer_orders_text(session: AsyncSession, user_id: int, username: str |
 
 
 async def supplier_rows_by_filter(session: AsyncSession, supplier_id: int, mode: str, page: int, page_size: int):
+    # В панели поставщика показываем не только новые/в работе,
+    # но и заявки, где код уже отправлен покупателю и ждём OK.
+    visible_statuses = ["sent", "in_progress", "selected", "waiting_buyer_confirm"]
+
     if mode == "number":
-        statuses = ["sent", "in_progress"]
+        statuses = visible_statuses
         req_type = "number"
     elif mode == "code":
-        statuses = ["sent", "in_progress"]
+        statuses = visible_statuses
         req_type = "code"
     elif mode == "active":
-        statuses = ["sent", "in_progress"]
+        statuses = visible_statuses
         req_type = None
     else:
-        statuses = ["sent", "in_progress"]
+        statuses = visible_statuses
         req_type = None
 
     conditions = [
@@ -1068,7 +1103,7 @@ async def supplier_profile_text(session: AsyncSession, supplier_id: int, usernam
     active_count = await session.scalar(
         select(func.count(SupplierRequest.id)).where(
             SupplierRequest.supplier_telegram_id == supplier_id,
-            SupplierRequest.status.in_(["sent", "in_progress"]),
+            SupplierRequest.status.in_(["sent", "in_progress", "waiting_buyer_confirm"]),
         )
     ) or 0
 

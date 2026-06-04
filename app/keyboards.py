@@ -462,10 +462,18 @@ def supplier_section_orders_keyboard(rows, mode: str = "active", page: int = 0, 
     kb = InlineKeyboardBuilder()
 
     for request, order in rows:
+        status = getattr(request, "status", "")
+        op_id = getattr(order, "operation_id", None) or getattr(order, "id", "?")
+        title = _short_button_text(order.service_name or order.product_name)
+
+        if status == "waiting_buyer_confirm":
+            label = f"⏳ #{op_id} — {title} — ждём OK"
+            kb.button(text=label, callback_data=f"supplier:wait:{request.id}:{mode}:{page}")
+            continue
+
         icon = "📞" if request.request_type == "number" else "🔑"
         action = "номер" if request.request_type == "number" else "код"
-        op_id = getattr(order, "operation_id", None) or getattr(order, "id", "?")
-        label = f"{icon} #{op_id} — {_short_button_text(order.service_name or order.product_name)} — {action}"
+        label = f"{icon} #{op_id} — {title} — {action}"
         kb.button(text=label, callback_data=f"supplier:reqf:{request.id}:{mode}:{page}")
 
     if page > 0:
@@ -474,6 +482,15 @@ def supplier_section_orders_keyboard(rows, mode: str = "active", page: int = 0, 
         kb.button(text="➡️ Дальше", callback_data=f"supplier:filter:{mode}:{page + 1}")
 
     kb.button(text="🔄 Обновить раздел", callback_data=f"supplier:filter:{mode}:{page}")
+    kb.button(text="📋 К разделу заявок", callback_data="supplier:requests")
+    kb.button(text="🏠 Главное меню", callback_data="supplier:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def supplier_wait_confirm_keyboard(mode: str = "active", page: int = 0) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ Назад к разделу", callback_data=f"supplier:filter:{mode}:{page}")
     kb.button(text="📋 К разделу заявок", callback_data="supplier:requests")
     kb.button(text="🏠 Главное меню", callback_data="supplier:panel")
     kb.adjust(1)
