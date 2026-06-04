@@ -8,6 +8,11 @@ from aiogram.types import Message, CallbackQuery
 
 from app.config import (
     ADMIN_IDS,
+    AUTO_DELETE_MESSAGES,
+    AUTO_DELETE_DELAY_SECONDS,
+    AUTO_DELETE_UNKNOWN_BUYERS,
+    IGNORE_NON_BUYERS,
+    NOTIFY_UNKNOWN_BUYERS,
     ADMIN_ALERT_CHAT_ID,
     SHOP_BOT_USERNAME,
     IGNORE_OTHER_BOTS,
@@ -617,6 +622,70 @@ async def accept_service_for_order(bot: Bot, message: Message | None, order_id: 
             )
 
 
+
+
+# -------- Auto-delete / unknown buyer helpers --------
+
+async def delete_later(bot: Bot, chat_id: int, message_id: int, delay: int | None = None) -> None:
+    if not AUTO_DELETE_MESSAGES:
+        return
+
+    if delay is None:
+        delay = AUTO_DELETE_DELAY_SECONDS
+
+    await asyncio.sleep(delay)
+
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception:
+        logger.info("Message delete skipped chat_id=%s message_id=%s", chat_id, message_id)
+
+
+async def maybe_delete_message(bot: Bot, message: Message, delay: int | None = None) -> None:
+    if not AUTO_DELETE_MESSAGES:
+        return
+
+    try:
+        asyncio.create_task(delete_later(bot, message.chat.id, message.message_id, delay))
+    except Exception:
+        logger.exception("Failed to schedule delete")
+
+
+async def handle_unknown_buyer(
+    bot: Bot,
+    message: Message,
+    business_connection_id: str | None,
+    text: str,
+) -> None:
+    """
+    Люди без активного оплаченного заказа не должны засорять диалог.
+    По умолчанию бот их игнорирует и удаляет их сообщение.
+    """
+    if AUTO_DELETE_UNKNOWN_BUYERS:
+        await maybe_delete_message(bot, message, delay=5)
+
+    if NOTIFY_UNKNOWN_BUYERS and message.from_user:
+        await notify_admins(
+            bot,
+            "Написал человек без активного заказа.\n\n"
+            f"Telegram ID: {message.from_user.id}\n"
+            f"Username: @{message.from_user.username or 'нет'}\n"
+            f"Текст: {text}",
+        )
+
+    if IGNORE_NON_BUYERS:
+        return
+
+    async with SessionLocal() as session:
+        order_not_found_text = await get_text(
+            session,
+            "order_not_found",
+            "Заказ не найден.\n\nЕсли вы уже оплатили, напишите админу.",
+        )
+
+    await handle_unknown_buyer(bot, message, business_connection_id, text)
+
+
 async def handle_buyer_message(bot: Bot, message: Message, business_connection_id: str | None) -> None:
     if not message.from_user:
         return
@@ -717,6 +786,7 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
                 return
 
             await answer_message(bot, message, "OK. Номер отправлен покупателю.", business_connection_id)
+            await maybe_delete_message(bot, message)
             return
 
         code_request = selected_request if selected_request and selected_request.request_type == "code" else None
@@ -755,6 +825,7 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
                 return
 
             await answer_message(bot, message, "OK. Код отправлен покупателю.", business_connection_id)
+            await maybe_delete_message(bot, message)
             return
 
     await answer_message(bot, message, "Нет активного запроса для вас. Откройте панель кнопкой ниже.", business_connection_id, reply_markup=supplier_reply_keyboard())

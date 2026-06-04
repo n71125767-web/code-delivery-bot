@@ -58,3 +58,16 @@ if not BOT_TOKEN:
 
 if not ADMIN_IDS:
     raise RuntimeError("ADMIN_IDS is missing in Render Environment")
+
+
+# Автоудаление сообщений, чтобы диалоги не засорялись.
+AUTO_DELETE_MESSAGES = os.getenv("AUTO_DELETE_MESSAGES", "1").strip() == "1"
+AUTO_DELETE_DELAY_SECONDS = int(os.getenv("AUTO_DELETE_DELAY_SECONDS", "30"))
+AUTO_DELETE_UNKNOWN_BUYERS = os.getenv("AUTO_DELETE_UNKNOWN_BUYERS", "1").strip() == "1"
+
+# Если 1 — люди без заказа игнорируются.
+# Если 0 — им будет отправляться текст order_not_found.
+IGNORE_NON_BUYERS = os.getenv("IGNORE_NON_BUYERS", "1").strip() == "1"
+
+# Уведомлять админа, когда пишет не покупатель.
+NOTIFY_UNKNOWN_BUYERS = os.getenv("NOTIFY_UNKNOWN_BUYERS", "0").strip() == "1"
