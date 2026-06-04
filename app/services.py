@@ -1101,3 +1101,69 @@ async def admin_profile_text(session: AsyncSession, admin_id: int, username: str
         f"Проблемные заказы: {problem_orders}\n"
         f"Активные поставщики: {active_suppliers}"
     )
+
+
+# ---------------- Section lists patch v7 ----------------
+async def get_buyer_order_rows(session: AsyncSession, user_id: int, username: str | None, limit: int = 10):
+    clean_username = (username or "").replace("@", "").lower()
+
+    query = (
+        select(Order)
+        .where((Order.customer_telegram_id == user_id) | (Order.buyer_chat_id == user_id))
+        .order_by(Order.created_at.desc())
+        .limit(limit)
+    )
+    result = await session.execute(query)
+    orders = result.scalars().all()
+
+    if not orders and clean_username:
+        result = await session.execute(
+            select(Order)
+            .where(func.lower(Order.customer_username) == clean_username)
+            .order_by(Order.created_at.desc())
+            .limit(limit)
+        )
+        orders = result.scalars().all()
+
+    return orders
+
+
+def buyer_order_card_text(order: Order | None) -> str:
+    if not order:
+        return "🧾 Заказ не найден."
+
+    return (
+        "🧾 Карточка заказа\n\n"
+        f"Заказ: #{order.operation_id}\n"
+        f"Статус: {order_status_label(order.status)}\n"
+        f"Товар: {order.product_name or 'нет'}\n"
+        f"Сервис: {order.service_name or 'не выбран'}\n"
+        f"Номер: {order.phone_number or 'ещё нет'}\n"
+        f"Код: {order.verification_code or 'ещё нет'}\n\n"
+        "Доступные действия показаны кнопками ниже."
+    )
+
+
+def supplier_section_title(mode: str) -> str:
+    return {
+        "pending": "⏳ Ожидающие заявки",
+        "active": "📊 Все активные заявки",
+        "number": "📞 Ждут номер",
+        "code": "🔑 Ждут код",
+    }.get(mode, "📋 Заявки")
+
+
+def supplier_section_text(mode: str, rows_count: int, page: int, max_page: int) -> str:
+    title = supplier_section_title(mode)
+    if rows_count == 0:
+        return (
+            f"{title}\n\n"
+            "В этом разделе сейчас нет заявок.\n\n"
+            "Нажмите «Назад» или откройте другой раздел."
+        )
+    return (
+        f"{title}\n\n"
+        f"Страница {page + 1}/{max_page + 1}\n"
+        "Выберите конкретную заявку кнопкой ниже."
+    )
+# -----------------------------------------------------

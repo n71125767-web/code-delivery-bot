@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 
 from aiogram import Bot
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
 
 from app.config import (
     ADMIN_IDS,
@@ -44,6 +44,11 @@ from app.keyboards import (
     buyer_back_keyboard,
     buyer_active_order_keyboard,
     supplier_requests_menu_keyboard,
+    supplier_section_orders_keyboard,
+    supplier_empty_section_keyboard,
+    buyer_orders_list_keyboard,
+    buyer_empty_section_keyboard,
+    buyer_order_card_keyboard,
     admin_text_keys_keyboard,
     admin_back_keyboard,
     admin_suppliers_keyboard,
@@ -96,6 +101,9 @@ from app.services import (
     supplier_filter_text,
     supplier_rows_by_filter,
     buyer_orders_text,
+    get_buyer_order_rows,
+    buyer_order_card_text,
+    supplier_section_text,
     select_supplier_request,
     find_selected_supplier_request,
     add_service_list,
@@ -112,9 +120,203 @@ from app.services import (
 )
 
 logger = logging.getLogger(__name__)
-logger.info("FIX_MARKER_ROLE_MENUS_DYNAMIC=v6 loaded")
+logger.info("FIX_MARKER_ROLE_PANEL_NO_SPAM=v8 loaded")
 
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
+
+# Динамические панели ролей: храним последнее inline-сообщение панели,
+# чтобы команды и callback-кнопки редактировали его, а не спамили новым сообщением.
+ROLE_PANEL_MESSAGES: dict[tuple[str, int], int] = {}
+REPLY_KEYBOARD_CLEANED: set[int] = set()
+
+
+def _is_message_not_modified_error(exc: Exception) -> bool:
+    return "message is not modified" in str(exc).lower()
+
+
+async def _bot_edit_text_safe(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    reply_markup=None,
+    business_connection_id: str | None = None,
+) -> bool:
+    """Редактирует сообщение. Возвращает True, если edit успешен или текст не изменился."""
+    try:
+        kwargs = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "reply_markup": reply_markup,
+        }
+        if business_connection_id:
+            kwargs["business_connection_id"] = business_connection_id
+        await bot.edit_message_text(**kwargs)
+        return True
+    except TypeError:
+        # На старых версиях aiogram параметр business_connection_id может отсутствовать.
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                reply_markup=reply_markup,
+            )
+            return True
+        except Exception as retry_exc:
+            if _is_message_not_modified_error(retry_exc):
+                return True
+            logger.info("ROLE_PANEL_EDIT_FAILED_RETRY chat_id=%s message_id=%s error=%s", chat_id, message_id, retry_exc)
+            return False
+    except Exception as exc:
+        if _is_message_not_modified_error(exc):
+            return True
+        logger.info("ROLE_PANEL_EDIT_FAILED chat_id=%s message_id=%s error=%s", chat_id, message_id, exc)
+        return False
+
+
+async def cleanup_reply_keyboard_once(
+    bot: Bot,
+    chat_id: int,
+    business_connection_id: str | None = None,
+) -> None:
+    """
+    Убирает старую нижнюю reply-клавиатуру, из-за которой снизу дублировались
+    кнопки вроде «ключ/панель/профиль». Telegram убирает её только отдельным сообщением.
+    """
+    if chat_id in REPLY_KEYBOARD_CLEANED:
+        return
+    REPLY_KEYBOARD_CLEANED.add(chat_id)
+    try:
+        msg = await safe_send_message(
+            bot,
+            chat_id,
+            "Панель обновлена.",
+            business_connection_id=business_connection_id,
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        await maybe_delete_sent(bot, msg, delay=3)
+    except Exception as exc:
+        logger.info("REPLY_KEYBOARD_CLEANUP_FAILED chat_id=%s error=%s", chat_id, exc)
+
+
+async def send_or_edit_role_panel(
+    bot: Bot,
+    chat_id: int,
+    role: str,
+    text: str,
+    reply_markup=None,
+    business_connection_id: str | None = None,
+    callback: CallbackQuery | None = None,
+):
+    """
+    Единая динамическая панель как у админа:
+    1) callback редактирует текущее сообщение;
+    2) текстовая команда редактирует последнюю сохранённую панель;
+    3) новое сообщение создаётся только если редактировать нечего/невозможно;
+    4) нижняя reply-клавиатура убирается, чтобы не было дублей кнопок.
+    """
+    # ReplyKeyboardRemove нужен только при текстовой команде.
+    # При callback не отправляем лишнее сообщение, иначе получится спам.
+    if callback is None:
+        await cleanup_reply_keyboard_once(bot, chat_id, business_connection_id)
+
+    key = (role, chat_id)
+
+    # Если пришёл callback — это идеальный вариант, редактируем сообщение кнопки.
+    if callback and callback.message:
+        try:
+            await callback.message.edit_text(text, reply_markup=reply_markup)
+            ROLE_PANEL_MESSAGES[key] = callback.message.message_id
+            logger.info(
+                "ROLE_PANEL_CALLBACK_EDIT_OK role=%s chat_id=%s message_id=%s data=%s has_keyboard=%s",
+                role,
+                chat_id,
+                callback.message.message_id,
+                callback.data,
+                reply_markup is not None,
+            )
+            return callback.message
+        except Exception as exc:
+            if _is_message_not_modified_error(exc):
+                ROLE_PANEL_MESSAGES[key] = callback.message.message_id
+                logger.info("ROLE_PANEL_CALLBACK_NOT_MODIFIED role=%s chat_id=%s data=%s", role, chat_id, callback.data)
+                return callback.message
+            logger.info(
+                "ROLE_PANEL_CALLBACK_EDIT_FAILED role=%s chat_id=%s message_id=%s data=%s error=%s",
+                role,
+                chat_id,
+                callback.message.message_id,
+                callback.data,
+                exc,
+            )
+
+    # Если команда текстом — пытаемся редактировать последнее сообщение панели.
+    old_message_id = ROLE_PANEL_MESSAGES.get(key)
+    if old_message_id:
+        ok = await _bot_edit_text_safe(
+            bot,
+            chat_id,
+            old_message_id,
+            text,
+            reply_markup=reply_markup,
+            business_connection_id=business_connection_id,
+        )
+        if ok:
+            logger.info(
+                "ROLE_PANEL_STORED_EDIT_OK role=%s chat_id=%s message_id=%s has_keyboard=%s",
+                role,
+                chat_id,
+                old_message_id,
+                reply_markup is not None,
+            )
+            return True
+
+    # Последний fallback: отправляем новое и запоминаем его id.
+    msg = await safe_send_message(
+        bot,
+        chat_id,
+        text,
+        business_connection_id=business_connection_id,
+        reply_markup=reply_markup,
+    )
+    if msg and getattr(msg, "message_id", None):
+        ROLE_PANEL_MESSAGES[key] = msg.message_id
+        logger.info(
+            "ROLE_PANEL_SEND_NEW_OK role=%s chat_id=%s message_id=%s has_keyboard=%s",
+            role,
+            chat_id,
+            msg.message_id,
+            reply_markup is not None,
+        )
+    return msg
+
+
+async def send_buyer_role_panel(
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    reply_markup=None,
+    business_connection_id: str | None = None,
+    callback: CallbackQuery | None = None,
+):
+    return await send_or_edit_role_panel(
+        bot, chat_id, "buyer", text, reply_markup, business_connection_id, callback
+    )
+
+
+async def send_supplier_role_panel(
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    reply_markup=None,
+    business_connection_id: str | None = None,
+    callback: CallbackQuery | None = None,
+):
+    return await send_or_edit_role_panel(
+        bot, chat_id, "supplier", text, reply_markup, business_connection_id, callback
+    )
 
 CONTACT_PATTERNS = [
     r"@[a-zA-Z0-9_]{3,}",
@@ -154,17 +356,25 @@ def admin_panel_text() -> str:
 
 async def update_or_send(callback: CallbackQuery, text: str, reply_markup=None) -> None:
     """
-    Пытается обновить старое сообщение с кнопками.
-    Если Telegram не разрешает edit_text — отправляет новое сообщение.
-    В логах видно, была ли клавиатура и какой callback её вызвал.
+    Как у админа: callback редактирует текущее inline-сообщение.
+    Важно: если Telegram отвечает "message is not modified", НЕ отправляем новое сообщение.
     """
-    has_keyboard = reply_markup is not None
-    data = callback.data or ""
-
     if not callback.message:
-        logger.warning("UPDATE_OR_SEND_NO_MESSAGE data=%s has_keyboard=%s", data, has_keyboard)
+        logger.warning("UPDATE_OR_SEND_NO_MESSAGE data=%s has_keyboard=%s", callback.data, reply_markup is not None)
         return
 
+    data = callback.data or ""
+    chat_id = callback.message.chat.id
+
+    if data.startswith("supplier:"):
+        await send_supplier_role_panel(callback.bot, chat_id, text, reply_markup=reply_markup, callback=callback)
+        return
+
+    if data.startswith("buyer:"):
+        await send_buyer_role_panel(callback.bot, chat_id, text, reply_markup=reply_markup, callback=callback)
+        return
+
+    # Админскую панель оставляем в старом стиле, но без спама на "message is not modified".
     try:
         await callback.message.edit_text(text, reply_markup=reply_markup)
         logger.info(
@@ -172,33 +382,24 @@ async def update_or_send(callback: CallbackQuery, text: str, reply_markup=None) 
             callback.message.chat.id,
             callback.message.message_id,
             data,
-            has_keyboard,
+            reply_markup is not None,
         )
     except Exception as exc:
+        if _is_message_not_modified_error(exc):
+            logger.info("UPDATE_OR_SEND_NOT_MODIFIED chat_id=%s data=%s", callback.message.chat.id, data)
+            return
         logger.info(
             "UPDATE_OR_SEND_EDIT_FAILED_SEND_NEW chat_id=%s message_id=%s data=%s has_keyboard=%s error=%s",
             callback.message.chat.id,
             callback.message.message_id,
             data,
-            has_keyboard,
+            reply_markup is not None,
             exc,
         )
         try:
             await callback.message.answer(text, reply_markup=reply_markup)
-            logger.info(
-                "UPDATE_OR_SEND_NEW_OK chat_id=%s data=%s has_keyboard=%s",
-                callback.message.chat.id,
-                data,
-                has_keyboard,
-            )
         except Exception as send_exc:
-            logger.exception(
-                "UPDATE_OR_SEND_NEW_FAILED chat_id=%s data=%s has_keyboard=%s error=%s",
-                callback.message.chat.id,
-                data,
-                has_keyboard,
-                send_exc,
-            )
+            logger.exception("UPDATE_OR_SEND_NEW_FAILED chat_id=%s data=%s error=%s", callback.message.chat.id, data, send_exc)
 
 
 async def delete_later(bot: Bot, chat_id: int, message_id: int, delay: int | None = None) -> None:
@@ -276,18 +477,13 @@ async def send_buyer_menu(
     text: str = "Меню покупателя",
     business_connection_id: str | None = None,
 ):
-    """Отправляет покупателю inline-кнопки, которые видны прямо под сообщением."""
-    logger.info(
-        "SEND_BUYER_INLINE_MENU chat_id=%s business_id=%s",
-        chat_id,
-        business_connection_id,
-    )
-    return await safe_send_message(
+    """Динамическая inline-панель покупателя без спама новыми сообщениями."""
+    return await send_buyer_role_panel(
         bot,
         chat_id,
         text,
-        business_connection_id=business_connection_id,
         reply_markup=buyer_inline_menu_keyboard(),
+        business_connection_id=business_connection_id,
     )
 
 
@@ -297,18 +493,13 @@ async def send_supplier_menu(
     text: str = "Меню поставщика",
     business_connection_id: str | None = None,
 ):
-    """Отправляет поставщику inline-кнопки, которые видны прямо под сообщением."""
-    logger.info(
-        "SEND_SUPPLIER_INLINE_MENU chat_id=%s business_id=%s",
-        chat_id,
-        business_connection_id,
-    )
-    return await safe_send_message(
+    """Динамическая inline-панель поставщика без спама новыми сообщениями."""
+    return await send_supplier_role_panel(
         bot,
         chat_id,
         text,
-        business_connection_id=business_connection_id,
         reply_markup=supplier_inline_menu_keyboard(),
+        business_connection_id=business_connection_id,
     )
 
 
@@ -796,7 +987,7 @@ async def send_supplier_pending_panel(bot: Bot, message: Message, business_conne
         text = supplier_empty_panel_text()
         markup = supplier_inline_menu_keyboard()
 
-    await answer_message(bot, message, text, business_connection_id, reply_markup=markup)
+    await send_supplier_role_panel(bot, message.chat.id, text, reply_markup=markup, business_connection_id=business_connection_id)
 
 
 async def process_supplier_command(bot: Bot, message: Message, business_connection_id: str | None) -> bool:
@@ -808,11 +999,11 @@ async def process_supplier_command(bot: Bot, message: Message, business_connecti
     text = (message.text or "").strip()
 
     if text in {"/commands", "📖 Команды"}:
-        await answer_message(bot, message, supplier_commands_text(), business_connection_id, reply_markup=supplier_commands_keyboard())
+        await send_supplier_role_panel(bot, message.chat.id, supplier_commands_text(), reply_markup=supplier_commands_keyboard(), business_connection_id=business_connection_id)
         return True
 
     if text in {"/start", "/supplier"} or text == "🚚 Панель поставщика":
-        await answer_message(bot, message, supplier_main_panel_text(), business_connection_id, reply_markup=supplier_inline_menu_keyboard())
+        await send_supplier_role_panel(bot, message.chat.id, supplier_main_panel_text(), reply_markup=supplier_inline_menu_keyboard(), business_connection_id=business_connection_id)
         return True
 
     if text in {"/work", "/pending"} or text in SUPPLIER_PANEL_TEXT_BUTTONS:
@@ -822,7 +1013,7 @@ async def process_supplier_command(bot: Bot, message: Message, business_connecti
     if text == "/profile" or text == "👤 Мой профиль":
         async with SessionLocal() as session:
             profile_text = await supplier_profile_text(session, message.from_user.id, message.from_user.username)
-        await answer_message(bot, message, profile_text, business_connection_id, reply_markup=supplier_inline_menu_keyboard())
+        await send_supplier_role_panel(bot, message.chat.id, profile_text, reply_markup=supplier_inline_menu_keyboard(), business_connection_id=business_connection_id)
         return True
 
     # ВАЖНО: неизвестные команды поставщика не должны попадать в обработчик номера/кода.
@@ -860,7 +1051,7 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
             await send_supplier_pending_panel(bot, message, business_connection_id)
             return
 
-        await answer_message(bot, message, buyer_main_panel_text(), business_connection_id, reply_markup=buyer_inline_menu_keyboard())
+        await send_buyer_role_panel(bot, message.chat.id, buyer_main_panel_text(), reply_markup=buyer_inline_menu_keyboard(), business_connection_id=business_connection_id)
         return
 
     if text == "👤 Мой профиль" or text == "/profile":
@@ -873,18 +1064,18 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
         if await is_supplier_user(user_id):
             async with SessionLocal() as session:
                 profile_text = await supplier_profile_text(session, user_id, username)
-            await answer_message(bot, message, profile_text, business_connection_id, reply_markup=supplier_inline_menu_keyboard())
+            await send_supplier_role_panel(bot, message.chat.id, profile_text, reply_markup=supplier_inline_menu_keyboard(), business_connection_id=business_connection_id)
             return
 
         async with SessionLocal() as session:
             profile_text = await buyer_profile_text(session, user_id, username)
-        await answer_message(bot, message, profile_text, business_connection_id, reply_markup=buyer_inline_menu_keyboard())
+        await send_buyer_role_panel(bot, message.chat.id, profile_text, reply_markup=buyer_inline_menu_keyboard(), business_connection_id=business_connection_id)
         return
 
     if text == "📦 Мои заказы" or text == "/orders":
         async with SessionLocal() as session:
             orders_text = await buyer_orders_text(session, user_id, username, BUYER_ORDERS_LIMIT)
-        await answer_message(bot, message, orders_text, business_connection_id, reply_markup=buyer_back_keyboard())
+        await send_buyer_role_panel(bot, message.chat.id, orders_text, reply_markup=buyer_back_keyboard(), business_connection_id=business_connection_id)
         return
 
     if text == "🆘 Помощь":
@@ -1228,7 +1419,7 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
                 )
                 return
 
-            sent = await answer_message(bot, message, "OK. Номер отправлен покупателю.", business_connection_id, reply_markup=supplier_inline_menu_keyboard())
+            sent = await send_supplier_role_panel(bot, message.chat.id, "OK. Номер отправлен покупателю.", reply_markup=supplier_inline_menu_keyboard(), business_connection_id=business_connection_id)
             try:
                 await maybe_delete_sent(bot, sent)
                 await maybe_delete_message(bot, message, delay=5)
@@ -1290,7 +1481,7 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
                 )
                 return
 
-            sent = await answer_message(bot, message, "OK. Код отправлен покупателю.", business_connection_id, reply_markup=supplier_inline_menu_keyboard())
+            sent = await send_supplier_role_panel(bot, message.chat.id, "OK. Код отправлен покупателю.", reply_markup=supplier_inline_menu_keyboard(), business_connection_id=business_connection_id)
             try:
                 await maybe_delete_sent(bot, sent)
                 await maybe_delete_message(bot, message, delay=5)
@@ -1733,13 +1924,14 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
         async with SessionLocal() as session:
             rows, max_page = await supplier_rows_by_filter(session, callback.from_user.id, mode, page, SUPPLIER_PAGE_SIZE)
-            text = await supplier_filter_text(mode, len(rows), page, max_page)
+            text = supplier_section_text(mode, len(rows), page, max_page)
 
-        await update_or_send(
-            callback,
-            text,
-            reply_markup=supplier_orders_keyboard(rows, page, max_page) if rows else supplier_filter_keyboard(mode, page, max_page),
+        markup = (
+            supplier_section_orders_keyboard(rows, mode, page, max_page)
+            if rows
+            else supplier_empty_section_keyboard(mode)
         )
+        await update_or_send(callback, text, reply_markup=markup)
         await callback.answer()
         return True
 
@@ -1835,18 +2027,52 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
     if data.startswith("supplier:pending:"):
         page = int(data.split(":")[2])
         async with SessionLocal() as session:
-            text, max_page = await supplier_pending_text(session, callback.from_user.id, page, SUPPLIER_PAGE_SIZE)
             rows, max_page = await get_supplier_pending_rows(session, callback.from_user.id, page, SUPPLIER_PAGE_SIZE)
+            text = supplier_section_text("pending", len(rows), page, max_page)
 
-        if rows:
-            text = text + "\n\nВыберите заявку кнопкой ниже, потом отправьте номер или код сообщением."
-            markup = supplier_orders_keyboard(rows, page, max_page)
-        else:
-            text = supplier_empty_panel_text()
-            markup = supplier_inline_menu_keyboard()
-
+        markup = (
+            supplier_section_orders_keyboard(rows, "pending", page, max_page)
+            if rows
+            else supplier_empty_section_keyboard("pending")
+        )
         await update_or_send(callback, text, reply_markup=markup)
         await callback.answer()
+        return True
+
+    if data.startswith("supplier:reqf:"):
+        parts = data.split(":")
+        request_id = int(parts[2])
+        mode = parts[3] if len(parts) > 3 else "active"
+        page = int(parts[4]) if len(parts) > 4 else 0
+
+        async with SessionLocal() as session:
+            ok, msg, request, order = await select_supplier_request(session, callback.from_user.id, request_id)
+            if mode == "pending":
+                rows, max_page = await get_supplier_pending_rows(session, callback.from_user.id, page, SUPPLIER_PAGE_SIZE)
+            else:
+                rows, max_page = await supplier_rows_by_filter(session, callback.from_user.id, mode, page, SUPPLIER_PAGE_SIZE)
+
+        if not ok or not request or not order:
+            await callback.answer(msg or "Заявка не найдена", show_alert=True)
+            text = supplier_section_text(mode, len(rows), page, max_page)
+            markup = supplier_section_orders_keyboard(rows, mode, page, max_page) if rows else supplier_empty_section_keyboard(mode)
+            await update_or_send(callback, text, reply_markup=markup)
+            return True
+
+        need_text = "номер" if request.request_type == "number" else "код"
+        icon = "📞" if request.request_type == "number" else "🔑"
+        selected_text = (
+            f"{icon} Заявка выбрана.\n\n"
+            f"Нужно отправить: {need_text}\n"
+            f"Заказ: #{order.operation_id}\n"
+            f"ID в базе: {order.id}\n"
+            f"Товар: {order.product_name}\n"
+            f"Сервис: {order.service_name or 'не указан'}\n"
+            f"Номер: {order.phone_number or 'ещё нет'}\n\n"
+            "Теперь отправьте ответ обычным сообщением в этот чат."
+        )
+        await update_or_send(callback, selected_text, reply_markup=supplier_request_actions_keyboard(request.id, request.request_type))
+        await callback.answer("Заявка выбрана")
         return True
 
     if data.startswith("supplier:req:"):
@@ -1915,8 +2141,36 @@ async def handle_buyer_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
     if data == "buyer:orders":
         async with SessionLocal() as session:
-            text = await buyer_orders_text(session, user_id, username, BUYER_ORDERS_LIMIT)
-        await update_or_send(callback, text, reply_markup=buyer_back_keyboard())
+            orders = await get_buyer_order_rows(session, user_id, username, BUYER_ORDERS_LIMIT)
+
+        if not orders:
+            text = "🧾 Мои заказы\n\nУ вас пока нет заказов."
+            markup = buyer_empty_section_keyboard("buyer:panel")
+        else:
+            text = "🧾 Мои заказы\n\nВыберите заказ кнопкой ниже."
+            markup = buyer_orders_list_keyboard(orders)
+
+        await update_or_send(callback, text, reply_markup=markup)
+        await callback.answer()
+        return True
+
+    if data.startswith("buyer:order:"):
+        order_id = int(data.split(":")[2])
+        async with SessionLocal() as session:
+            order = await get_order_by_id(session, order_id)
+
+        if not order:
+            await update_or_send(callback, "🧾 Заказ не найден.", reply_markup=buyer_empty_section_keyboard("buyer:orders"))
+            await callback.answer("Заказ не найден", show_alert=True)
+            return True
+
+        allowed_by_id = order.customer_telegram_id == user_id or order.buyer_chat_id == user_id
+        allowed_by_username = bool(username and order.customer_username and order.customer_username.lower().replace("@", "") == username.lower().replace("@", ""))
+        if not (allowed_by_id or allowed_by_username):
+            await callback.answer("Это не ваш заказ", show_alert=True)
+            return True
+
+        await update_or_send(callback, buyer_order_card_text(order), reply_markup=buyer_order_card_keyboard(order.id, order.status))
         await callback.answer()
         return True
 

@@ -453,3 +453,85 @@ def supplier_orders_keyboard(rows, page: int = 0, max_page: int = 0) -> InlineKe
     kb.adjust(1)
     return kb.as_markup()
 # -----------------------------------------------------
+
+
+# ---------------- Section lists patch v7 ----------------
+# Нормальные разделы: в каждом разделе показываются именно заявки/заказы этого раздела + назад.
+
+def supplier_section_orders_keyboard(rows, mode: str = "active", page: int = 0, max_page: int = 0) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+
+    for request, order in rows:
+        icon = "📞" if request.request_type == "number" else "🔑"
+        action = "номер" if request.request_type == "number" else "код"
+        op_id = getattr(order, "operation_id", None) or getattr(order, "id", "?")
+        label = f"{icon} #{op_id} — {_short_button_text(order.service_name or order.product_name)} — {action}"
+        kb.button(text=label, callback_data=f"supplier:reqf:{request.id}:{mode}:{page}")
+
+    if page > 0:
+        kb.button(text="⬅️ Назад", callback_data=f"supplier:filter:{mode}:{page - 1}")
+    if page < max_page:
+        kb.button(text="➡️ Дальше", callback_data=f"supplier:filter:{mode}:{page + 1}")
+
+    kb.button(text="🔄 Обновить раздел", callback_data=f"supplier:filter:{mode}:{page}")
+    kb.button(text="📋 К разделу заявок", callback_data="supplier:requests")
+    kb.button(text="🏠 Главное меню", callback_data="supplier:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def supplier_empty_section_keyboard(mode: str = "active") -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📋 К разделу заявок", callback_data="supplier:requests")
+    kb.button(text="🏠 Главное меню", callback_data="supplier:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def buyer_orders_list_keyboard(orders) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for order in orders:
+        status_icons = {
+            "waiting_service": "🧩",
+            "waiting_supplier_number": "📞",
+            "number_sent_to_customer": "📩",
+            "waiting_supplier_code": "🔑",
+            "code_sent_to_customer": "🔐",
+            "confirmed": "✅",
+            "problem": "⚠️",
+            "cancelled": "❌",
+        }
+        icon = status_icons.get(order.status, "🧾")
+        op_id = getattr(order, "operation_id", None) or getattr(order, "id", "?")
+        label = f"{icon} #{op_id} — {_short_button_text(order.service_name or order.product_name)}"
+        kb.button(text=label, callback_data=f"buyer:order:{order.id}")
+
+    kb.button(text="📦 Активный заказ", callback_data="buyer:active")
+    kb.button(text="🏠 Главное меню", callback_data="buyer:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def buyer_empty_section_keyboard(back_to: str = "buyer:panel") -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🏠 Главное меню", callback_data=back_to)
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def buyer_order_card_keyboard(order_id: int, status: str | None = None) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    if status == "waiting_service":
+        kb.button(text="🧩 Выбрать сервис", callback_data=f"svcpage:{order_id}:0")
+    elif status == "number_sent_to_customer":
+        kb.button(text="📩 Код отправлен", callback_data=f"code_sent:{order_id}")
+        kb.button(text="⚠️ Номер не работает", callback_data=f"number_invalid:{order_id}")
+    elif status == "code_sent_to_customer":
+        kb.button(text="✅ OK, всё успешно", callback_data=f"confirm_success:{order_id}")
+        kb.button(text="⚠️ Код не работает", callback_data=f"code_invalid:{order_id}")
+
+    kb.button(text="⬅️ Назад к заказам", callback_data="buyer:orders")
+    kb.button(text="🏠 Главное меню", callback_data="buyer:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+# -----------------------------------------------------
