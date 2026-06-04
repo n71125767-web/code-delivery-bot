@@ -33,6 +33,8 @@ from app.keyboards import (
     supplier_request_actions_keyboard,
     supplier_reply_keyboard,
     supplier_orders_keyboard,
+    supplier_commands_keyboard,
+    supplier_new_order_keyboard,
     admin_text_keys_keyboard,
     admin_back_keyboard,
     admin_suppliers_keyboard,
@@ -75,6 +77,7 @@ from app.services import (
     check_cooldown,
     supplier_pending_text,
     get_supplier_pending_rows,
+    set_supplier_request_message_id,
     select_supplier_request,
     find_selected_supplier_request,
     add_service_list,
@@ -688,7 +691,36 @@ async def send_supplier_request_for_order(bot: Bot, order, business_connection_i
         return False
 
     async with SessionLocal() as session:
-        await create_supplier_request(session, order.id, supplier.telegram_id, "number")
+        supplier_request = await create_supplier_request(session, order.id, supplier.telegram_id, "number")
+
+    # Повторно отправим короткое сообщение с кнопками именно по этой заявке.
+    # Старое текстовое уведомление выше оставлено для совместимости.
+    button_text = (
+        "📦 Новый заказ\n\n"
+        f"Заказ: #{order.operation_id}\n"
+        f"ID в базе: {order.id}\n"
+        f"Товар: {order.product_name}\n"
+        f"Сервис: {order.service_name}\n\n"
+        "Выберите действие кнопкой ниже."
+    )
+    sent_with_buttons = await safe_send_message(
+        bot,
+        supplier.telegram_id,
+        button_text,
+        actual_business_id,
+        reply_markup=supplier_new_order_keyboard(supplier_request.id, "number"),
+    )
+    if not sent_with_buttons:
+        sent_with_buttons = await safe_send_message(
+            bot,
+            supplier.telegram_id,
+            button_text,
+            reply_markup=supplier_new_order_keyboard(supplier_request.id, "number"),
+        )
+
+    if sent_with_buttons and hasattr(sent_with_buttons, "message_id"):
+        async with SessionLocal() as session:
+            await set_supplier_request_message_id(session, supplier_request.id, sent_with_buttons.message_id)
 
     return True
 
@@ -1249,6 +1281,24 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return False
 
     data = callback.data or ""
+
+    if data == "supplier:commands":
+        text = (
+            "📖 Команды поставщика\n\n"
+            "Можно пользоваться кнопками ниже, команды писать не обязательно.\n\n"
+            "/start — открыть панель\n"
+            "/supplier — панель поставщика\n"
+            "/pending — заявки в ожидании\n"
+            "/work — заявки в ожидании\n\n"
+            "Как работать:\n"
+            "1. Нажмите заявку.\n"
+            "2. Нажмите «Взять в работу» или «Отправить номер/код».\n"
+            "3. Отправьте номер или код сообщением."
+        )
+        await update_or_send(callback, text, reply_markup=supplier_commands_keyboard())
+        await callback.answer()
+        return True
+
 
     if data.startswith("supplier:take:"):
         request_id = int(data.split(":")[2])

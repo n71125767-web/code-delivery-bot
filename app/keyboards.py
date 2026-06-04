@@ -245,3 +245,28 @@ def supplier_request_actions_keyboard(request_id: int, request_type: str) -> Inl
     kb.button(text="⏳ Все заявки", callback_data="supplier:pending:0")
     kb.adjust(1)
     return kb.as_markup()
+
+
+
+def supplier_new_order_keyboard(request_id: int, request_type: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+
+    if request_type == "number":
+        kb.button(text="📞 Взять номер в работу", callback_data=f"supplier:take:{request_id}")
+        kb.button(text="✍️ Отправить номер", callback_data=f"supplier:answer:{request_id}")
+    else:
+        kb.button(text="🔑 Взять код в работу", callback_data=f"supplier:take:{request_id}")
+        kb.button(text="✍️ Отправить код", callback_data=f"supplier:answer:{request_id}")
+
+    kb.button(text="⏳ Заявки в ожидании", callback_data="supplier:pending:0")
+    kb.button(text="📖 Команды", callback_data="supplier:commands")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def supplier_commands_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⏳ Заявки в ожидании", callback_data="supplier:pending:0")
+    kb.button(text="🚚 Панель поставщика", callback_data="supplier:pending:0")
+    kb.adjust(1)
+    return kb.as_markup()

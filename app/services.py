@@ -836,8 +836,11 @@ async def mark_supplier_request_in_progress(session: AsyncSession, request_id: i
     if not request or not order:
         return False, "Заявка или заказ не найдены.", request, order
 
-    if request.status != "sent":
-        return False, "Эта заявка уже обработана или неактивна.", request, order
+    if request.status == "answered":
+        return False, "Эта заявка уже обработана.", request, order
+
+    if request.status not in ["sent", "in_progress"]:
+        return False, "Эта заявка неактивна.", request, order
 
     request.status = "in_progress"
     order.updated_at = datetime.utcnow()
@@ -881,3 +884,11 @@ async def supplier_pending_rows(session: AsyncSession, supplier_id: int, page: i
         .limit(page_size)
     )
     return result.fetchall(), max_page
+
+
+async def set_supplier_request_message_id(session: AsyncSession, request_id: int, message_id: int | None) -> None:
+    request = await get_supplier_request_by_id(session, request_id)
+    if not request:
+        return
+    request.supplier_message_id = message_id
+    await session.commit()
