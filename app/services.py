@@ -1033,3 +1033,71 @@ async def admin_stats_text(session: AsyncSession) -> str:
             lines.append(f"{name}: {count}")
 
     return "\n".join(lines)
+
+
+async def buyer_profile_text(session: AsyncSession, user_id: int, username: str | None) -> str:
+    active_order = await find_active_order_for_customer(session, user_id, username)
+    total = await session.scalar(
+        select(func.count(Order.id)).where(
+            (Order.customer_telegram_id == user_id) | (Order.buyer_chat_id == user_id)
+        )
+    ) or 0
+
+    text = (
+        "👤 Мой профиль\n\n"
+        f"Telegram ID: {user_id}\n"
+        f"Username: @{username or 'нет'}\n"
+        f"Всего заказов: {total}\n"
+    )
+
+    if active_order:
+        text += (
+            "\nАктивный заказ:\n"
+            f"Заказ: #{active_order.operation_id}\n"
+            f"Статус: {order_status_label(active_order.status)}\n"
+            f"Товар: {active_order.product_name or 'нет'}\n"
+            f"Сервис: {active_order.service_name or 'не выбран'}"
+        )
+    else:
+        text += "\nАктивных заказов нет."
+
+    return text
+
+
+async def supplier_profile_text(session: AsyncSession, supplier_id: int, username: str | None) -> str:
+    active_count = await session.scalar(
+        select(func.count(SupplierRequest.id)).where(
+            SupplierRequest.supplier_telegram_id == supplier_id,
+            SupplierRequest.status.in_(["sent", "in_progress"]),
+        )
+    ) or 0
+
+    done_count = await session.scalar(
+        select(func.count(SupplierRequest.id)).where(
+            SupplierRequest.supplier_telegram_id == supplier_id,
+            SupplierRequest.status == "answered",
+        )
+    ) or 0
+
+    return (
+        "👤 Профиль поставщика\n\n"
+        f"Telegram ID: {supplier_id}\n"
+        f"Username: @{username or 'нет'}\n"
+        f"Активные заявки: {active_count}\n"
+        f"Выполнено заявок: {done_count}"
+    )
+
+
+async def admin_profile_text(session: AsyncSession, admin_id: int, username: str | None) -> str:
+    total_orders = await session.scalar(select(func.count(Order.id))) or 0
+    problem_orders = await session.scalar(select(func.count(Order.id)).where(Order.status == "problem")) or 0
+    active_suppliers = await session.scalar(select(func.count(Supplier.id)).where(Supplier.is_active == True)) or 0
+
+    return (
+        "👤 Профиль админа\n\n"
+        f"Telegram ID: {admin_id}\n"
+        f"Username: @{username or 'нет'}\n"
+        f"Всего заказов: {total_orders}\n"
+        f"Проблемные заказы: {problem_orders}\n"
+        f"Активные поставщики: {active_suppliers}"
+    )

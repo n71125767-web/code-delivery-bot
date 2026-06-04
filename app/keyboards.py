@@ -99,12 +99,13 @@ def supplier_orders_keyboard(rows, page: int = 0, max_page: int = 0) -> InlineKe
 def supplier_reply_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
+            [KeyboardButton(text="👤 Мой профиль")],
             [KeyboardButton(text="🚚 Панель поставщика")],
             [KeyboardButton(text="⏳ Заявки в ожидании")],
         ],
         resize_keyboard=True,
         one_time_keyboard=False,
-        input_field_placeholder="Откройте панель или отправьте номер/код",
+        input_field_placeholder="Откройте профиль, панель или отправьте номер/код",
     )
 
 
@@ -277,6 +278,7 @@ def supplier_commands_keyboard() -> InlineKeyboardMarkup:
 def buyer_reply_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
+            [KeyboardButton(text="👤 Мой профиль")],
             [KeyboardButton(text="📦 Мои заказы")],
             [KeyboardButton(text="🆘 Помощь")],
         ],
@@ -301,5 +303,14 @@ def supplier_filter_keyboard(mode: str = "active", page: int = 0, max_page: int 
 
     kb.button(text="🔄 Обновить", callback_data=f"supplier:filter:{mode}:{page}")
     kb.button(text="📖 Команды", callback_data="supplier:commands")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+
+def admin_profile_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="👤 Мой профиль", callback_data="admin:profile")
+    kb.button(text="🏠 Главное меню", callback_data="admin:panel")
     kb.adjust(1)
     return kb.as_markup()

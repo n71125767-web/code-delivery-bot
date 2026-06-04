@@ -46,6 +46,7 @@ from app.keyboards import (
     admin_lists_keyboard,
     admin_texts_menu_keyboard,
     admin_settings_keyboard,
+    admin_profile_keyboard,
     admin_order_card_keyboard,
     admin_orders_keyboard,
 )
@@ -84,6 +85,9 @@ from app.services import (
     set_supplier_request_message_id,
     create_action_event,
     admin_stats_text,
+    admin_profile_text,
+    supplier_profile_text,
+    buyer_profile_text,
     supplier_filter_text,
     supplier_rows_by_filter,
     buyer_orders_text,
@@ -591,6 +595,24 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
         await answer_message(bot, message, "Бот работает.", business_connection_id, reply_markup=buyer_reply_keyboard())
         return
 
+    if text == "👤 Мой профиль" or text == "/profile":
+        if is_admin(user_id):
+            async with SessionLocal() as session:
+                profile_text = await admin_profile_text(session, user_id, username)
+            await answer_message(bot, message, profile_text, business_connection_id, reply_markup=buyer_reply_keyboard())
+            return
+
+        if await is_supplier_user(user_id):
+            async with SessionLocal() as session:
+                profile_text = await supplier_profile_text(session, user_id, username)
+            await answer_message(bot, message, profile_text, business_connection_id, reply_markup=supplier_reply_keyboard())
+            return
+
+        async with SessionLocal() as session:
+            profile_text = await buyer_profile_text(session, user_id, username)
+        await answer_message(bot, message, profile_text, business_connection_id, reply_markup=buyer_reply_keyboard())
+        return
+
     if text == "📦 Мои заказы" or text == "/orders":
         async with SessionLocal() as session:
             orders_text = await buyer_orders_text(session, user_id, username, BUYER_ORDERS_LIMIT)
@@ -932,7 +954,7 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
                 )
                 return
 
-            sent = await answer_message(bot, message, "OK. Номер отправлен покупателю.", business_connection_id)
+            sent = await answer_message(bot, message, "OK. Номер отправлен покупателю.", business_connection_id, reply_markup=supplier_reply_keyboard())
             try:
                 await maybe_delete_sent(bot, sent)
                 await maybe_delete_message(bot, message, delay=5)
@@ -994,7 +1016,7 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
                 )
                 return
 
-            sent = await answer_message(bot, message, "OK. Код отправлен покупателю.", business_connection_id)
+            sent = await answer_message(bot, message, "OK. Код отправлен покупателю.", business_connection_id, reply_markup=supplier_reply_keyboard())
             try:
                 await maybe_delete_sent(bot, sent)
                 await maybe_delete_message(bot, message, delay=5)
@@ -1114,6 +1136,18 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return False
 
     data = callback.data or ""
+
+    if data == "admin:profile":
+        async with SessionLocal() as session:
+            text = await admin_profile_text(
+                session,
+                callback.from_user.id,
+                callback.from_user.username if callback.from_user else None,
+            )
+        await update_or_send(callback, text, reply_markup=admin_profile_keyboard())
+        await callback.answer()
+        return True
+
 
     if data == "admin:stats":
         async with SessionLocal() as session:
@@ -1741,10 +1775,10 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
 
         thanks_sent = False
         if target_chat_id:
-            thanks_sent = await safe_send_message(bot, target_chat_id, thank_you_text, business_connection_id=target_business_id)
+            thanks_sent = await safe_send_message(bot, target_chat_id, thank_you_text, business_connection_id=target_business_id, reply_markup=buyer_reply_keyboard())
 
         if not thanks_sent and callback.message:
-            await callback.message.answer(thank_you_text)
+            await callback.message.answer(thank_you_text, reply_markup=buyer_reply_keyboard())
 
         await callback.answer("Заказ завершён")
         return
