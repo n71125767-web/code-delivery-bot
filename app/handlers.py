@@ -2139,3 +2139,62 @@ async def on_edited_business_message(message: Message, bot: Bot) -> None:
 
 async def on_deleted_business_messages(event, bot: Bot) -> None:
     logger.info("DISPATCHER_DELETED_BUSINESS_MESSAGES ignored event=%s", event)
+
+# ---------------- Dynamic Panel Patch ----------------
+import logging
+from aiogram import types
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+logger = logging.getLogger(__name__)
+
+LAST_MESSAGES = {}  # key = chat_id, value = message_id
+
+async def update_dynamic_panel(bot, chat_id: int, role: str, active_orders: list):
+    """
+    Динамическая панель для покупателя или поставщика.
+    Редактирует старое сообщение, если оно есть, иначе отправляет новое.
+    """
+    kb = InlineKeyboardBuilder()
+    text = ""
+
+    if role == "buyer":
+        if active_orders:
+            text = "📦 Ваши заказы:"
+            kb.add(types.InlineKeyboardButton(text="✅ Подтвердить сервис", callback_data="service_confirm"))
+            kb.add(types.InlineKeyboardButton(text="🔄 Выбрать другой сервис", callback_data="service_change"))
+            kb.add(types.InlineKeyboardButton(text="📩 Код отправлен", callback_data="code_sent"))
+        else:
+            text = "📦 У вас нет активных заказов."
+
+    elif role == "supplier":
+        if active_orders:
+            text = "🚚 Панель поставщика:"
+            kb.add(types.InlineKeyboardButton(text="📞 Взять номер в работу", callback_data="take_number"))
+            kb.add(types.InlineKeyboardButton(text="✍️ Отправить номер", callback_data="send_number"))
+            kb.add(types.InlineKeyboardButton(text="🔑 Взять код в работу", callback_data="take_code"))
+            kb.add(types.InlineKeyboardButton(text="✍️ Отправить код", callback_data="send_code"))
+            kb.add(types.InlineKeyboardButton(text="⏳ Все активные", callback_data="filter_all"))
+            kb.add(types.InlineKeyboardButton(text="📞 Ждут номер", callback_data="filter_number"))
+            kb.add(types.InlineKeyboardButton(text="🔑 Ждут код", callback_data="filter_code"))
+            kb.add(types.InlineKeyboardButton(text="📖 Команды", callback_data="commands"))
+        else:
+            text = "🚚 Нет активных заявок для вас."
+
+    message_id = LAST_MESSAGES.get(chat_id)
+    try:
+        if message_id:
+            await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, reply_markup=kb.as_markup())
+            logger.info(f"Dynamic panel updated chat_id={chat_id} role={role}")
+            return
+    except Exception as e:
+        logger.warning(f"edit_message_text failed, sending new message: {e}")
+
+    try:
+        msg = await bot.send_message(chat_id=chat_id, text=text, reply_markup=kb.as_markup())
+        LAST_MESSAGES[chat_id] = msg.message_id
+        logger.info(f"Dynamic panel sent new message chat_id={chat_id} role={role}")
+    except Exception as e:
+        logger.error(f"Failed to send dynamic panel: {e}")
+
+logger.info("FIX_MARKER_DYNAMIC_PANEL=v1 loaded")
+# -----------------------------------------------------
