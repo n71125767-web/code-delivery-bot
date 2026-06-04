@@ -109,7 +109,7 @@ from app.services import (
 )
 
 logger = logging.getLogger(__name__)
-logger.info("FIX_MARKER_BUTTONS_SAFE_SEND_AUTODELETE=v3 loaded")
+logger.info("FIX_MARKER_SUPPLIER_EMPTY_PANEL_FIX=v4 loaded")
 
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 
@@ -637,6 +637,56 @@ async def send_supplier_reply_buttons(bot: Bot, supplier_id: int) -> None:
     )
 
 
+def supplier_empty_panel_text() -> str:
+    return (
+        "🚚 Панель поставщика\n\n"
+        "Ожидающих заявок сейчас нет.\n\n"
+        "Когда появится новая заявка, бот сам пришлёт уведомление с кнопками.\n"
+        "Пока можно пользоваться меню ниже.\n\n"
+        "Команды:\n"
+        "/supplier — открыть панель поставщика\n"
+        "/pending — заявки в ожидании\n"
+        "/work — все активные заявки\n"
+        "/profile — профиль поставщика\n"
+        "/commands — список команд"
+    )
+
+
+def supplier_commands_text() -> str:
+    return (
+        "📖 Команды поставщика\n\n"
+        "Основные команды:\n"
+        "/start — открыть меню\n"
+        "/supplier — открыть панель поставщика\n"
+        "/pending — заявки в ожидании\n"
+        "/work — все активные заявки\n"
+        "/profile — профиль поставщика\n"
+        "/commands — список команд\n\n"
+        "Как работать:\n"
+        "1. Дождитесь новой заявки или откройте /pending.\n"
+        "2. Нажмите заявку.\n"
+        "3. Нажмите «Взять в работу» или «Отправить номер/код».\n"
+        "4. Отправьте номер или код обычным сообщением.\n\n"
+        "Если заявок нет — это нормально, значит сейчас ничего не ждёт поставщика."
+    )
+
+
+async def send_supplier_pending_panel(bot: Bot, message: Message, business_connection_id: str | None) -> None:
+    supplier_id = message.from_user.id
+    async with SessionLocal() as session:
+        pending_text, max_page = await supplier_pending_text(session, supplier_id, 0, SUPPLIER_PAGE_SIZE)
+        rows, max_page = await get_supplier_pending_rows(session, supplier_id, 0, SUPPLIER_PAGE_SIZE)
+
+    if rows:
+        text = pending_text + "\n\nВыберите заявку кнопкой ниже, потом отправьте номер или код сообщением."
+        markup = supplier_orders_keyboard(rows, 0, max_page)
+    else:
+        text = supplier_empty_panel_text()
+        markup = supplier_inline_menu_keyboard()
+
+    await answer_message(bot, message, text, business_connection_id, reply_markup=markup)
+
+
 async def process_supplier_command(bot: Bot, message: Message, business_connection_id: str | None) -> bool:
     if not message.from_user:
         return False
@@ -644,18 +694,15 @@ async def process_supplier_command(bot: Bot, message: Message, business_connecti
         return False
 
     text = (message.text or "").strip()
-    if text in {"/supplier", "/work", "/pending", "🚚 Панель поставщика", "⏳ Заявки в ожидании"}:
-        async with SessionLocal() as session:
-            pending_text, max_page = await supplier_pending_text(session, message.from_user.id, 0, SUPPLIER_PAGE_SIZE)
-            rows, max_page = await get_supplier_pending_rows(session, message.from_user.id, 0, SUPPLIER_PAGE_SIZE)
-        await answer_message(
-            bot,
-            message,
-            pending_text + "\n\nВыберите заявку кнопкой ниже, потом отправьте номер или код сообщением.",
-            business_connection_id,
-            reply_markup=supplier_orders_keyboard(rows, 0, max_page),
-        )
+
+    if text in {"/commands", "📖 Команды"}:
+        await answer_message(bot, message, supplier_commands_text(), business_connection_id, reply_markup=supplier_inline_menu_keyboard())
         return True
+
+    if text in {"/supplier", "/work", "/pending", "🚚 Панель поставщика", "⏳ Заявки в ожидании", "⏳ Все активные", "📞 Ждут номер", "🔑 Ждут код"}:
+        await send_supplier_pending_panel(bot, message, business_connection_id)
+        return True
+
     return False
 
 
@@ -682,16 +729,7 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
             return
 
         if await is_supplier_user(user_id):
-            async with SessionLocal() as session:
-                pending_text, max_page = await supplier_pending_text(session, user_id, 0, SUPPLIER_PAGE_SIZE)
-                rows, max_page = await get_supplier_pending_rows(session, user_id, 0, SUPPLIER_PAGE_SIZE)
-            await answer_message(
-                bot,
-                message,
-                pending_text + "\n\nВыберите заявку кнопкой ниже, потом отправьте номер или код сообщением.",
-                business_connection_id,
-                reply_markup=supplier_orders_keyboard(rows, 0, max_page),
-            )
+            await send_supplier_pending_panel(bot, message, business_connection_id)
             return
 
         await answer_message(bot, message, "Бот работает. Кнопки ниже.", business_connection_id, reply_markup=buyer_inline_menu_keyboard())
@@ -1567,19 +1605,7 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
 
     if data == "supplier:commands":
-        text = (
-            "📖 Команды поставщика\n\n"
-            "Можно пользоваться кнопками ниже, команды писать не обязательно.\n\n"
-            "/start — открыть панель\n"
-            "/supplier — панель поставщика\n"
-            "/pending — заявки в ожидании\n"
-            "/work — заявки в ожидании\n\n"
-            "Как работать:\n"
-            "1. Нажмите заявку.\n"
-            "2. Нажмите «Взять в работу» или «Отправить номер/код».\n"
-            "3. Отправьте номер или код сообщением."
-        )
-        await update_or_send(callback, text, reply_markup=supplier_commands_keyboard())
+        await update_or_send(callback, supplier_commands_text(), reply_markup=supplier_inline_menu_keyboard())
         await callback.answer()
         return True
 
@@ -1659,11 +1685,15 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
         async with SessionLocal() as session:
             text, max_page = await supplier_pending_text(session, callback.from_user.id, page, SUPPLIER_PAGE_SIZE)
             rows, max_page = await get_supplier_pending_rows(session, callback.from_user.id, page, SUPPLIER_PAGE_SIZE)
-        await update_or_send(
-            callback,
-            text + "\n\nВыберите заявку кнопкой ниже, потом отправьте номер или код сообщением.",
-            reply_markup=supplier_orders_keyboard(rows, page, max_page),
-        )
+
+        if rows:
+            text = text + "\n\nВыберите заявку кнопкой ниже, потом отправьте номер или код сообщением."
+            markup = supplier_orders_keyboard(rows, page, max_page)
+        else:
+            text = supplier_empty_panel_text()
+            markup = supplier_inline_menu_keyboard()
+
+        await update_or_send(callback, text, reply_markup=markup)
         await callback.answer()
         return True
 
