@@ -3,6 +3,8 @@ import logging
 import re
 from datetime import datetime
 
+import aiohttp
+
 from aiogram import Bot
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
 
@@ -22,6 +24,7 @@ from app.config import (
     PROBLEM_COOLDOWN_SECONDS,
     BUTTON_COOLDOWN_SECONDS,
     BUYER_ORDERS_LIMIT,
+    BOT_TOKEN,
 )
 from app.database import SessionLocal
 from app.keyboards import (
@@ -120,7 +123,7 @@ from app.services import (
 )
 
 logger = logging.getLogger(__name__)
-logger.info("FIX_MARKER_BUSINESS_PANEL_STRICT_CONTEXT=v10 loaded")
+logger.info("FIX_MARKER_BUSINESS_DYNAMIC_RAW_EDIT=v11 loaded")
 
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 
@@ -133,8 +136,89 @@ BUSINESS_CONTEXT_BY_CHAT: dict[int, str] = {}
 REPLY_KEYBOARD_CLEANED: set[int] = set()
 
 
-def _is_message_not_modified_error(exc: Exception) -> bool:
+def _is_message_not_modified_error(exc: Exception | str) -> bool:
     return "message is not modified" in str(exc).lower()
+
+
+def _reply_markup_to_json(reply_markup):
+    if reply_markup is None:
+        return None
+    if hasattr(reply_markup, "model_dump"):
+        return reply_markup.model_dump(exclude_none=True)
+    if hasattr(reply_markup, "dict"):
+        return reply_markup.dict(exclude_none=True)
+    return reply_markup
+
+
+async def _raw_business_edit_text(
+    chat_id: int,
+    message_id: int,
+    text: str,
+    reply_markup=None,
+    business_connection_id: str | None = None,
+) -> bool:
+    """
+    Редактирует Business-сообщение напрямую через Telegram Bot API.
+
+    Почему это нужно:
+    часть версий aiogram 3 не умеет нормально прокидывать business_connection_id
+    в edit_message_text. В итоге бот не редактирует старую Business-панель и
+    каждый раз создаёт новое сообщение. Raw API фиксит именно это.
+    """
+    if not business_connection_id:
+        return False
+
+    payload = {
+        "business_connection_id": business_connection_id,
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+    }
+    markup_json = _reply_markup_to_json(reply_markup)
+    if markup_json is not None:
+        payload["reply_markup"] = markup_json
+
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
+    try:
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=payload) as response:
+                data = await response.json(content_type=None)
+
+        if data.get("ok"):
+            logger.info(
+                "ROLE_PANEL_RAW_BUSINESS_EDIT_OK chat_id=%s message_id=%s business_connection_id=%s",
+                chat_id,
+                message_id,
+                business_connection_id,
+            )
+            return True
+
+        description = data.get("description", "")
+        if _is_message_not_modified_error(description):
+            logger.info(
+                "ROLE_PANEL_RAW_BUSINESS_EDIT_NOT_MODIFIED chat_id=%s message_id=%s",
+                chat_id,
+                message_id,
+            )
+            return True
+
+        logger.info(
+            "ROLE_PANEL_RAW_BUSINESS_EDIT_FAILED chat_id=%s message_id=%s status=%s response=%s",
+            chat_id,
+            message_id,
+            data.get("error_code"),
+            description,
+        )
+        return False
+    except Exception as exc:
+        logger.info(
+            "ROLE_PANEL_RAW_BUSINESS_EDIT_EXCEPTION chat_id=%s message_id=%s error=%s",
+            chat_id,
+            message_id,
+            exc,
+        )
+        return False
 
 
 async def _bot_edit_text_safe(
@@ -157,24 +241,40 @@ async def _bot_edit_text_safe(
             kwargs["business_connection_id"] = business_connection_id
         await bot.edit_message_text(**kwargs)
         return True
-    except TypeError:
-        # На старых версиях aiogram параметр business_connection_id может отсутствовать.
-        try:
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=text,
+    except TypeError as exc:
+        # Aiogram может не поддерживать business_connection_id в edit_message_text.
+        # Для Business-панелей не падаем в обычный edit, а редактируем через raw API.
+        if business_connection_id:
+            raw_ok = await _raw_business_edit_text(
+                chat_id,
+                message_id,
+                text,
                 reply_markup=reply_markup,
+                business_connection_id=business_connection_id,
             )
-            return True
-        except Exception as retry_exc:
-            if _is_message_not_modified_error(retry_exc):
+            if raw_ok:
                 return True
-            logger.info("ROLE_PANEL_EDIT_FAILED_RETRY chat_id=%s message_id=%s error=%s", chat_id, message_id, retry_exc)
-            return False
+        if _is_message_not_modified_error(exc):
+            return True
+        logger.info("ROLE_PANEL_EDIT_TYPEERROR chat_id=%s message_id=%s error=%s", chat_id, message_id, exc)
+        return False
     except Exception as exc:
         if _is_message_not_modified_error(exc):
             return True
+
+        # Если aiogram принял параметр, но Telegram всё равно не нашёл Business-сообщение,
+        # делаем второй заход напрямую в Bot API. Это убирает спам новыми сообщениями.
+        if business_connection_id:
+            raw_ok = await _raw_business_edit_text(
+                chat_id,
+                message_id,
+                text,
+                reply_markup=reply_markup,
+                business_connection_id=business_connection_id,
+            )
+            if raw_ok:
+                return True
+
         logger.info("ROLE_PANEL_EDIT_FAILED chat_id=%s message_id=%s error=%s", chat_id, message_id, exc)
         return False
 
