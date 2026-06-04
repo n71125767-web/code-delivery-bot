@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import BigInteger, String, DateTime, Text, ForeignKey, Numeric
+from sqlalchemy import BigInteger, String, DateTime, Text, ForeignKey, Numeric, Boolean, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -56,3 +56,25 @@ class SupplierRequest(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     answered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class Supplier(Base):
+    __tablename__ = "suppliers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String, default="supplier")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class SupplierProduct(Base):
+    __tablename__ = "supplier_products"
+    __table_args__ = (
+        UniqueConstraint("supplier_telegram_id", "product_key", name="uq_supplier_product_key"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    supplier_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    product_key: Mapped[str] = mapped_column(String, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

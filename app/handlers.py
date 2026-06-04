@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import re
 from datetime import datetime
 
 from aiogram import Bot
@@ -6,13 +8,13 @@ from aiogram.types import Message, CallbackQuery
 
 from app.config import (
     ADMIN_IDS,
-    SUPPLIER_IDS,
     SHOP_BOT_USERNAME,
     IGNORE_OTHER_BOTS,
     ADMIN_BUSINESS_CONNECTION_ID,
+    SERVICE_OPTIONS,
 )
 from app.database import SessionLocal
-from app.keyboards import confirm_keyboard, number_keyboard
+from app.keyboards import confirm_keyboard, number_keyboard, service_keyboard
 from app.parsers import extract_purchase_data, extract_phone, extract_code
 from app.senders import safe_send_message, answer_message
 from app.services import (
@@ -25,33 +27,182 @@ from app.services import (
     get_status_text,
     get_last_orders_text,
     set_customer_by_order_id,
+    add_supplier,
+    remove_supplier,
+    list_suppliers_text,
+    bind_supplier_to_product,
+    unbind_supplier_from_product,
+    find_supplier_for_order,
 )
 
 logger = logging.getLogger(__name__)
+
+CONTACT_PATTERNS = [
+    r"@[a-zA-Z0-9_]{3,}",
+    r"(?:https?://)?t\.me/[a-zA-Z0-9_]{3,}",
+    r"(?:https?://)?telegram\.me/[a-zA-Z0-9_]{3,}",
+    r"\b(?:мой|моя|напиши|пиши|свяжись|связь|контакт|личка|лс|л/с)\b.*\b[a-zA-Z0-9_]{4,}\b",
+    r"\+?\d[\d\s\-\(\)]{8,}\d",
+]
+
+CONTACT_RE = re.compile("|".join(CONTACT_PATTERNS), re.IGNORECASE)
 
 
 def is_admin(user_id: int | None) -> bool:
     return bool(user_id and user_id in ADMIN_IDS)
 
 
-def is_supplier(user_id: int | None) -> bool:
-    return bool(user_id and user_id in SUPPLIER_IDS)
-
-
 def get_business_id(message: Message | None, fallback: str | None = None) -> str | None:
     if message is None:
         return fallback or ADMIN_BUSINESS_CONNECTION_ID
+    return getattr(message, "business_connection_id", None) or fallback or ADMIN_BUSINESS_CONNECTION_ID
 
-    return (
-        getattr(message, "business_connection_id", None)
-        or fallback
-        or ADMIN_BUSINESS_CONNECTION_ID
-    )
+
+def normalize_service_from_text(text: str) -> str | None:
+    clean = text.strip().lower()
+    for service in SERVICE_OPTIONS:
+        service_clean = service.lower()
+        if clean == service_clean or service_clean in clean:
+            return service
+    return None
+
+
+def contains_forbidden_contact(text: str) -> bool:
+    return bool(CONTACT_RE.search(text or ""))
+
+
+async def delete_later(bot: Bot, chat_id: int, message_id: int, delay: int = 20) -> None:
+    await asyncio.sleep(delay)
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception:
+        logger.info("Message delete skipped chat_id=%s message_id=%s", chat_id, message_id)
+
+
+async def maybe_delete_message(bot: Bot, message: Message, delay: int = 20) -> None:
+    try:
+        asyncio.create_task(delete_later(bot, message.chat.id, message.message_id, delay))
+    except Exception:
+        logger.exception("Failed to schedule delete")
 
 
 async def notify_admins(bot: Bot, text: str) -> None:
     for admin_id in ADMIN_IDS:
         await safe_send_message(bot, admin_id, text)
+
+
+async def process_admin_command(bot: Bot, message: Message, business_connection_id: str | None) -> bool:
+    if not message.from_user or not is_admin(message.from_user.id):
+        return False
+
+    text = (message.text or "").strip()
+    parts = text.split()
+
+    if text == "/suppliers":
+        async with SessionLocal() as session:
+            result = await list_suppliers_text(session)
+        await answer_message(bot, message, result, business_connection_id)
+        return True
+
+    if text.startswith("/add_supplier"):
+        if len(parts) < 3:
+            await answer_message(
+                bot,
+                message,
+                "Формат:\n/add_supplier TELEGRAM_ID Имя\n\nПример:\n/add_supplier 123456789 proxy_supplier",
+                business_connection_id,
+            )
+            return True
+
+        try:
+            supplier_id = int(parts[1])
+        except ValueError:
+            await answer_message(bot, message, "TELEGRAM_ID должен быть числом.", business_connection_id)
+            return True
+
+        name = " ".join(parts[2:]).strip()
+        async with SessionLocal() as session:
+            supplier = await add_supplier(session, supplier_id, name)
+
+        await answer_message(
+            bot,
+            message,
+            f"OK. Поставщик добавлен.\nID: {supplier.telegram_id}\nИмя: {supplier.name}",
+            business_connection_id,
+        )
+        return True
+
+    if text.startswith("/remove_supplier"):
+        if len(parts) != 2:
+            await answer_message(bot, message, "Формат:\n/remove_supplier TELEGRAM_ID", business_connection_id)
+            return True
+
+        try:
+            supplier_id = int(parts[1])
+        except ValueError:
+            await answer_message(bot, message, "TELEGRAM_ID должен быть числом.", business_connection_id)
+            return True
+
+        async with SessionLocal() as session:
+            ok = await remove_supplier(session, supplier_id)
+
+        await answer_message(
+            bot,
+            message,
+            "OK. Поставщик выключен." if ok else "Поставщик не найден.",
+            business_connection_id,
+        )
+        return True
+
+    if text.startswith("/bind_supplier"):
+        if len(parts) < 3:
+            await answer_message(
+                bot,
+                message,
+                "Формат:\n/bind_supplier TELEGRAM_ID товар_или_ключ\n\n"
+                "Можно указывать ID товара или часть названия.\n"
+                "Пример:\n/bind_supplier 123456789 proxy\n/bind_supplier 123456789 99001",
+                business_connection_id,
+            )
+            return True
+
+        try:
+            supplier_id = int(parts[1])
+        except ValueError:
+            await answer_message(bot, message, "TELEGRAM_ID должен быть числом.", business_connection_id)
+            return True
+
+        product_key = " ".join(parts[2:]).strip()
+        async with SessionLocal() as session:
+            result = await bind_supplier_to_product(session, supplier_id, product_key)
+
+        await answer_message(bot, message, result, business_connection_id)
+        return True
+
+    if text.startswith("/unbind_supplier"):
+        if len(parts) < 3:
+            await answer_message(
+                bot,
+                message,
+                "Формат:\n/unbind_supplier TELEGRAM_ID товар_или_ключ",
+                business_connection_id,
+            )
+            return True
+
+        try:
+            supplier_id = int(parts[1])
+        except ValueError:
+            await answer_message(bot, message, "TELEGRAM_ID должен быть числом.", business_connection_id)
+            return True
+
+        product_key = " ".join(parts[2:]).strip()
+        async with SessionLocal() as session:
+            result = await unbind_supplier_from_product(session, supplier_id, product_key)
+
+        await answer_message(bot, message, result, business_connection_id)
+        return True
+
+    return False
 
 
 async def process_command_message(bot: Bot, message: Message, business_connection_id: str | None) -> None:
@@ -62,7 +213,8 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
     user_id = message.from_user.id
     username = message.from_user.username
 
-    logger.info("COMMAND from_id=%s text=%s business_id=%s", user_id, text, business_connection_id)
+    if await process_admin_command(bot, message, business_connection_id):
+        return
 
     if text == "/start":
         async with SessionLocal() as session:
@@ -72,12 +224,18 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
             await answer_message(
                 bot,
                 message,
-                "Оплата получена.\n\nНапишите, для какого сервиса нужен номер.\nНапример: Telegram, WhatsApp, Google.",
+                "Оплата получена.\n\nВыберите сервис кнопкой ниже или напишите название сервиса.",
                 business_connection_id,
+                reply_markup=service_keyboard(order.id),
             )
             return
 
-        await answer_message(bot, message, "Бот работает. Проверка: /ping", business_connection_id)
+        await answer_message(
+            bot,
+            message,
+            "Бот работает.\n\nПроверка: /ping\nСтатус: /status",
+            business_connection_id,
+        )
         return
 
     if text == "/ping":
@@ -88,10 +246,8 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
         if not is_admin(user_id):
             await answer_message(bot, message, "Команда только для админа.", business_connection_id)
             return
-
         async with SessionLocal() as session:
             status_text = await get_status_text(session)
-
         await answer_message(bot, message, status_text, business_connection_id)
         return
 
@@ -99,10 +255,8 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
         if not is_admin(user_id):
             await answer_message(bot, message, "Команда только для админа.", business_connection_id)
             return
-
         async with SessionLocal() as session:
             last_orders = await get_last_orders_text(session)
-
         await answer_message(bot, message, last_orders, business_connection_id)
         return
 
@@ -129,7 +283,14 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
         await answer_message(bot, message, result_text, business_connection_id)
         return
 
-    await answer_message(bot, message, "Неизвестная команда. Напишите /ping или /status", business_connection_id)
+    await answer_message(
+        bot,
+        message,
+        "Неизвестная команда.\n\n"
+        "Проверка: /ping\n"
+        "Поставщики: /suppliers",
+        business_connection_id,
+    )
 
 
 async def process_admaker_message(bot: Bot, message: Message) -> None:
@@ -154,9 +315,105 @@ async def process_admaker_message(bot: Bot, message: Message) -> None:
         f"ID в базе: {order.id}\n"
         f"Покупатель ID: {order.customer_telegram_id}\n"
         f"Username: @{order.customer_username or 'нет'}\n"
+        f"Товар ID: {order.product_id or 'нет'}\n"
         f"Товар: {order.product_name}\n"
-        f"Статус: {order.status}",
+        f"Статус: {order.status}\n\n"
+        "Если покупатель напишет — бот предложит сервис.",
     )
+
+
+async def send_supplier_request_for_order(
+    bot: Bot,
+    order,
+    business_connection_id: str | None,
+    buyer_message: Message | None = None,
+) -> bool:
+    async with SessionLocal() as session:
+        db_order = await get_order_by_id(session, order.id)
+        if not db_order:
+            return False
+        supplier = await find_supplier_for_order(session, db_order)
+
+    if not supplier:
+        await notify_admins(
+            bot,
+            "Нет активного поставщика для заказа.\n\n"
+            f"Заказ: #{order.operation_id}\n"
+            f"Товар: {order.product_name}\n"
+            "Добавь поставщика и привяжи товар:\n"
+            "/add_supplier TELEGRAM_ID Имя\n"
+            "/bind_supplier TELEGRAM_ID товар_или_ID",
+        )
+        return False
+
+    # ВАЖНО: поставщику НЕ уходит текст покупателя, фото, username или контакт.
+    # Только служебная заявка.
+    supplier_text = (
+        "Новый заказ.\n\n"
+        f"Заказ: #{order.operation_id}\n"
+        f"ID в базе: {order.id}\n"
+        f"Товар ID: {order.product_id or 'нет'}\n"
+        f"Товар: {order.product_name}\n"
+        f"Сервис: {order.service_name}\n\n"
+        "Пришлите номер для покупателя.\n"
+        "Пример: +79990000000"
+    )
+
+    ok = await safe_send_message(bot, supplier.telegram_id, supplier_text, business_connection_id)
+
+    if not ok:
+        ok = await safe_send_message(bot, supplier.telegram_id, supplier_text)
+
+    if not ok:
+        await notify_admins(
+            bot,
+            f"Не смог отправить заявку поставщику {supplier.telegram_id} по заказу #{order.operation_id}",
+        )
+        return False
+
+    async with SessionLocal() as session:
+        await create_supplier_request(
+            session=session,
+            order_id=order.id,
+            supplier_telegram_id=supplier.telegram_id,
+            request_type="number",
+        )
+
+    return True
+
+
+async def accept_service_for_order(
+    bot: Bot,
+    message: Message | None,
+    order_id: int,
+    service_name: str,
+    business_connection_id: str | None,
+) -> None:
+    async with SessionLocal() as session:
+        order = await get_order_by_id(session, order_id)
+        if not order:
+            if message:
+                await answer_message(bot, message, "Заказ не найден.", business_connection_id)
+            return
+
+        order.service_name = service_name
+        order.status = "waiting_supplier_number"
+        if message and message.from_user:
+            order.buyer_chat_id = message.chat.id
+            order.customer_telegram_id = message.from_user.id
+        order.business_connection_id = business_connection_id
+        order.updated_at = datetime.utcnow()
+
+        await session.commit()
+        await session.refresh(order)
+
+    ok = await send_supplier_request_for_order(bot, order, business_connection_id, buyer_message=message)
+
+    if message:
+        if ok:
+            await answer_message(bot, message, "OK. Сервис принят. Ожидайте номер.", business_connection_id)
+        else:
+            await answer_message(bot, message, "Сервис принят, но поставщик для этого товара не найден или недоступен. Админ уведомлён.", business_connection_id)
 
 
 async def handle_buyer_message(bot: Bot, message: Message, business_connection_id: str | None) -> None:
@@ -166,6 +423,50 @@ async def handle_buyer_message(bot: Bot, message: Message, business_connection_i
     user_id = message.from_user.id
     username = message.from_user.username
     text = (message.text or "").strip()
+
+    if not text:
+        await answer_message(
+            bot,
+            message,
+            "Пришлите только название сервиса текстом или выберите кнопку. Фото/файлы поставщику не отправляются.",
+            business_connection_id,
+        )
+        await maybe_delete_message(bot, message)
+        return
+
+    if contains_forbidden_contact(text):
+        await answer_message(
+            bot,
+            message,
+            "Нельзя отправлять контакты, username, ссылки или номера для связи.\n\n"
+            "Напишите только название сервиса или выберите кнопку ниже.",
+            business_connection_id,
+        )
+        await maybe_delete_message(bot, message)
+        return
+
+    service_name = normalize_service_from_text(text)
+    if not service_name:
+        async with SessionLocal() as session:
+            order = await find_waiting_service_order_for_customer(session, user_id, username)
+
+        if order:
+            await answer_message(
+                bot,
+                message,
+                "Выберите сервис кнопкой ниже или напишите название из списка.",
+                business_connection_id,
+                reply_markup=service_keyboard(order.id),
+            )
+        else:
+            await answer_message(
+                bot,
+                message,
+                "Заказ не найден.\n\nЕсли вы уже оплатили, напишите админу.",
+                business_connection_id,
+            )
+        await maybe_delete_message(bot, message)
+        return
 
     async with SessionLocal() as session:
         order = await find_waiting_service_order_for_customer(session, user_id, username)
@@ -179,7 +480,7 @@ async def handle_buyer_message(bot: Bot, message: Message, business_connection_i
             )
             await notify_admins(
                 bot,
-                "Покупатель написал, но заказ не найден.\n\n"
+                "Покупатель написал сервис, но заказ не найден.\n\n"
                 f"Telegram ID: {user_id}\n"
                 f"Username: @{username or 'нет'}\n"
                 f"Текст: {text}\n\n"
@@ -187,45 +488,13 @@ async def handle_buyer_message(bot: Bot, message: Message, business_connection_i
             )
             return
 
-        order.service_name = text
-        order.status = "waiting_supplier_number"
         order.buyer_chat_id = message.chat.id
         order.customer_telegram_id = user_id
-        order.business_connection_id = business_connection_id
-        order.updated_at = datetime.utcnow()
-
         await session.commit()
         await session.refresh(order)
 
-    supplier_id = SUPPLIER_IDS[0]
-    supplier_text = (
-        "Новый заказ.\n\n"
-        f"Заказ: #{order.operation_id}\n"
-        f"ID в базе: {order.id}\n"
-        f"Товар: {order.product_name}\n"
-        f"Сервис: {order.service_name}\n\n"
-        "Пришлите номер для покупателя.\n"
-        "Пример: +79990000000"
-    )
-
-    ok = await safe_send_message(bot, supplier_id, supplier_text, business_connection_id)
-    if not ok:
-        ok = await safe_send_message(bot, supplier_id, supplier_text)
-
-    if not ok:
-        await answer_message(
-            bot,
-            message,
-            "Сервис принят, но я не смог написать поставщику. Админ уже уведомлён.",
-            business_connection_id,
-        )
-        await notify_admins(bot, f"Не смог отправить заявку поставщику по заказу #{order.operation_id}")
-        return
-
-    async with SessionLocal() as session:
-        await create_supplier_request(session, order.id, supplier_id, "number")
-
-    await answer_message(bot, message, "OK. Сервис принят. Ожидайте номер.", business_connection_id)
+    await accept_service_for_order(bot, message, order.id, service_name, business_connection_id)
+    await maybe_delete_message(bot, message)
 
 
 async def handle_supplier_message(bot: Bot, message: Message, business_connection_id: str | None) -> None:
@@ -325,7 +594,6 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
 
 async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
     if not message.from_user:
-        logger.info("MESSAGE WITHOUT from_user")
         return
 
     me = await bot.me()
@@ -354,10 +622,6 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         logger.info("IGNORED: admin non-command message to avoid self-cycle")
         return
 
-    if not text:
-        logger.info("IGNORED: empty/non-text message")
-        return
-
     if IGNORE_OTHER_BOTS and sender.is_bot and username != SHOP_BOT_USERNAME:
         logger.info("IGNORED: other bot username=%s", username)
         return
@@ -370,7 +634,16 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         await process_admaker_message(bot, message)
         return
 
-    if is_supplier(user_id):
+    # Поставщик определяется теперь по базе suppliers, не по env.
+    async with SessionLocal() as session:
+        from app.models import Supplier
+        from sqlalchemy import select
+        result = await session.execute(
+            select(Supplier).where(Supplier.telegram_id == user_id, Supplier.is_active == True)
+        )
+        supplier = result.scalars().first()
+
+    if supplier:
         await handle_supplier_message(bot, message, business_connection_id)
         return
 
@@ -379,7 +652,31 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
 
 async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
     data = callback.data or ""
+
     logger.info("HANDLED_CALLBACK from_id=%s data=%s", callback.from_user.id if callback.from_user else None, data)
+
+    if data.startswith("service:"):
+        parts = data.split(":", 2)
+        order_id = int(parts[1])
+        service_slug = parts[2]
+        service_name = service_slug.replace("_", " ").strip()
+
+        # Восстанавливаем красивое имя сервиса из SERVICE_OPTIONS.
+        for service in SERVICE_OPTIONS:
+            if service.lower().replace(" ", "_") == service_slug:
+                service_name = service
+                break
+
+        business_connection_id = None
+        message = callback.message if isinstance(callback.message, Message) else None
+
+        if order_id:
+            await accept_service_for_order(bot, message, order_id, service_name, business_connection_id)
+            await callback.answer("Сервис выбран")
+            return
+
+        await callback.answer("Заказ не найден", show_alert=True)
+        return
 
     if data.startswith("code_sent:"):
         order_id = int(data.split(":")[1])
@@ -395,7 +692,16 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             await session.commit()
             await session.refresh(order)
 
-        supplier_id = SUPPLIER_IDS[0]
+        async with SessionLocal() as session:
+            db_order = await get_order_by_id(session, order_id)
+            supplier = await find_supplier_for_order(session, db_order)
+
+        if not supplier:
+            if callback.message:
+                await callback.message.answer("Поставщик для этого товара не найден.")
+            await callback.answer()
+            return
+
         supplier_text = (
             "Нужен код.\n\n"
             f"Заказ: #{order.operation_id}\n"
@@ -406,13 +712,13 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             "Пришлите код. Пример: 123456"
         )
 
-        ok = await safe_send_message(bot, supplier_id, supplier_text, order.business_connection_id)
+        ok = await safe_send_message(bot, supplier.telegram_id, supplier_text, order.business_connection_id)
         if not ok:
-            ok = await safe_send_message(bot, supplier_id, supplier_text)
+            ok = await safe_send_message(bot, supplier.telegram_id, supplier_text)
 
         if ok:
             async with SessionLocal() as session:
-                await create_supplier_request(session, order.id, supplier_id, "code")
+                await create_supplier_request(session, order.id, supplier.telegram_id, "code")
 
         if callback.message:
             await callback.message.answer("OK. Запросил код у поставщика." if ok else "Не смог написать поставщику.")

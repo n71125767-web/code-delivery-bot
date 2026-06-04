@@ -1,8 +1,9 @@
 import logging
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from app.config import DATABASE_URL
-from app.models import Base
+
+from app.config import DATABASE_URL, SUPPLIER_IDS
+from app.models import Base, Supplier
 
 logger = logging.getLogger(__name__)
 
@@ -17,40 +18,71 @@ SessionLocal = async_sessionmaker(
 
 async def init_db() -> None:
     """
-    Создаёт таблицы и мягко добавляет новые колонки в старую SQLite-базу.
-
-    Для разработки самый простой вариант при проблемах со схемой:
-    остановить бота -> удалить bot.db -> запустить снова.
-    Но эта функция старается не ломать старую базу.
+    Создаёт таблицы.
+    Для SQLite мягко добавляет новые колонки в старые таблицы.
+    Новые таблицы suppliers и supplier_products создаются автоматически.
     """
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
         if DATABASE_URL.startswith("sqlite"):
-            columns_result = await conn.execute(text("PRAGMA table_info(orders)"))
-            columns = {row[1] for row in columns_result.fetchall()}
+            await _sqlite_migrations(conn)
 
-            migrations = {
-                "business_connection_id": "ALTER TABLE orders ADD COLUMN business_connection_id VARCHAR",
-                "buyer_chat_id": "ALTER TABLE orders ADD COLUMN buyer_chat_id BIGINT",
-                "supplier_message_id": "ALTER TABLE supplier_requests ADD COLUMN supplier_message_id BIGINT",
-            }
+    await seed_env_suppliers()
 
-            for column, sql in migrations.items():
-                target_table = "orders" if column in {"business_connection_id", "buyer_chat_id"} else "supplier_requests"
-                if target_table == "supplier_requests":
-                    req_columns_result = await conn.execute(text("PRAGMA table_info(supplier_requests)"))
-                    req_columns = {row[1] for row in req_columns_result.fetchall()}
-                    exists = column in req_columns
-                else:
-                    exists = column in columns
 
-                if not exists:
-                    try:
-                        await conn.execute(text(sql))
-                        logger.info("Migration applied: %s", sql)
-                    except Exception as exc:
-                        logger.warning("Migration skipped: %s; error=%s", sql, exc)
+async def _sqlite_migrations(conn) -> None:
+    orders_columns_result = await conn.execute(text("PRAGMA table_info(orders)"))
+    orders_columns = {row[1] for row in orders_columns_result.fetchall()}
+
+    order_migrations = {
+        "business_connection_id": "ALTER TABLE orders ADD COLUMN business_connection_id VARCHAR",
+        "buyer_chat_id": "ALTER TABLE orders ADD COLUMN buyer_chat_id BIGINT",
+    }
+
+    for column, sql in order_migrations.items():
+        if column not in orders_columns:
+            try:
+                await conn.execute(text(sql))
+                logger.info("Migration applied: %s", sql)
+            except Exception as exc:
+                logger.warning("Migration skipped: %s; error=%s", sql, exc)
+
+    req_columns_result = await conn.execute(text("PRAGMA table_info(supplier_requests)"))
+    req_columns = {row[1] for row in req_columns_result.fetchall()}
+
+    req_migrations = {
+        "supplier_message_id": "ALTER TABLE supplier_requests ADD COLUMN supplier_message_id BIGINT",
+    }
+
+    for column, sql in req_migrations.items():
+        if column not in req_columns:
+            try:
+                await conn.execute(text(sql))
+                logger.info("Migration applied: %s", sql)
+            except Exception as exc:
+                logger.warning("Migration skipped: %s; error=%s", sql, exc)
+
+
+async def seed_env_suppliers() -> None:
+    """
+    Старые SUPPLIER_IDS из Render Environment автоматически добавляются в базу,
+    чтобы после обновления бот не потерял текущих поставщиков.
+    """
+    if not SUPPLIER_IDS:
+        return
+
+    from sqlalchemy import select
+
+    async with SessionLocal() as session:
+        for supplier_id in SUPPLIER_IDS:
+            result = await session.execute(
+                select(Supplier).where(Supplier.telegram_id == supplier_id)
+            )
+            exists = result.scalars().first()
+            if not exists:
+                session.add(Supplier(telegram_id=supplier_id, name=f"supplier_{supplier_id}", is_active=True))
+        await session.commit()
 
 
 async def get_session() -> AsyncSession:
