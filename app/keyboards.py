@@ -47,6 +47,7 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="📊 Статус", callback_data="admin:status")
     kb.button(text="🧾 Заказы", callback_data="admin:last_orders")
+    kb.button(text="⚠️ Проблемы", callback_data="admin:problems")
     kb.button(text="🚚 Поставщики", callback_data="admin:suppliers")
     kb.button(text="🧩 Сервисы", callback_data="admin:services")
     kb.button(text="📚 Листы", callback_data="admin:lists")
@@ -174,5 +175,48 @@ def admin_settings_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="📖 Команды", callback_data="admin:commands")
     kb.button(text="🔄 Обновить меню", callback_data="admin:panel")
     kb.button(text="⬅️ Назад", callback_data="admin:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def _short_admin_button_text(value: str | None, limit: int = 28) -> str:
+    text = (value or "Заказ").strip()
+    if len(text) > limit:
+        text = text[: limit - 1] + "…"
+    return text
+
+
+def admin_orders_keyboard(orders, back_callback: str = "admin:panel") -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+
+    for order in orders:
+        status_icon = {
+            "waiting_service": "⏳",
+            "waiting_supplier_number": "📞",
+            "number_sent_to_customer": "📩",
+            "waiting_supplier_code": "🔑",
+            "code_sent_to_customer": "🔐",
+            "confirmed": "✅",
+            "problem": "⚠️",
+        }.get(order.status, "🧾")
+        label = f"{status_icon} #{order.operation_id} — {_short_admin_button_text(order.service_name or order.product_name)}"
+        kb.button(text=label, callback_data=f"admin:order:{order.id}")
+
+    kb.button(text="⬅️ Назад", callback_data=back_callback)
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_order_card_keyboard(order_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+
+    kb.button(text="🔁 Повторить запрос поставщику", callback_data=f"admin:order_resend:{order_id}")
+    kb.button(text="📞 Ждать номер", callback_data=f"admin:order_status:{order_id}:waiting_supplier_number")
+    kb.button(text="🔑 Ждать код", callback_data=f"admin:order_status:{order_id}:waiting_supplier_code")
+    kb.button(text="⚠️ Пометить проблемным", callback_data=f"admin:order_status:{order_id}:problem")
+    kb.button(text="✅ Закрыть вручную", callback_data=f"admin:order_status:{order_id}:confirmed")
+    kb.button(text="⬅️ К проблемам", callback_data="admin:problems")
+    kb.button(text="🏠 Главное меню", callback_data="admin:panel")
+
     kb.adjust(1)
     return kb.as_markup()

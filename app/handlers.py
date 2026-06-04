@@ -38,6 +38,8 @@ from app.keyboards import (
     admin_lists_keyboard,
     admin_texts_menu_keyboard,
     admin_settings_keyboard,
+    admin_order_card_keyboard,
+    admin_orders_keyboard,
 )
 from app.parsers import extract_purchase_data, extract_phone, extract_code
 from app.senders import safe_send_message, answer_message
@@ -76,6 +78,11 @@ from app.services import (
     add_service_list,
     add_service_to_list,
     lists_text,
+    admin_create_supplier_request_for_order,
+    set_order_status,
+    order_card_text,
+    get_recent_order_rows,
+    get_problem_order_rows,
 )
 
 logger = logging.getLogger(__name__)
@@ -969,6 +976,117 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return False
 
     data = callback.data or ""
+
+    if data == "admin:problems":
+        async with SessionLocal() as session:
+            orders = await get_problem_order_rows(session)
+        if not orders:
+            await update_or_send(callback, "⚠️ Проблемные заказы\n\nПроблемных заказов сейчас нет.", reply_markup=admin_back_keyboard())
+        else:
+            await update_or_send(
+                callback,
+                "⚠️ Проблемные заказы\n\nВыберите заказ:",
+                reply_markup=admin_orders_keyboard(orders, back_callback="admin:panel"),
+            )
+        await callback.answer()
+        return True
+
+    if data == "admin:last_orders":
+        async with SessionLocal() as session:
+            orders = await get_recent_order_rows(session)
+        if not orders:
+            await update_or_send(callback, "🧾 Заказы\n\nЗаказов пока нет.", reply_markup=admin_back_keyboard())
+        else:
+            await update_or_send(
+                callback,
+                "🧾 Последние заказы\n\nВыберите заказ:",
+                reply_markup=admin_orders_keyboard(orders, back_callback="admin:panel"),
+            )
+        await callback.answer()
+        return True
+
+    if data.startswith("admin:order:"):
+        order_id = int(data.split(":")[2])
+        async with SessionLocal() as session:
+            order = await get_order_by_id(session, order_id)
+        if not order:
+            await callback.answer("Заказ не найден", show_alert=True)
+            return True
+
+        await update_or_send(callback, order_card_text(order), reply_markup=admin_order_card_keyboard(order.id))
+        await callback.answer()
+        return True
+
+    if data.startswith("admin:order_status:"):
+        parts = data.split(":")
+        order_id = int(parts[2])
+        status = parts[3]
+
+        async with SessionLocal() as session:
+            result = await set_order_status(session, order_id, status)
+            order = await get_order_by_id(session, order_id)
+
+        if not order:
+            await callback.answer("Заказ не найден", show_alert=True)
+            return True
+
+        await update_or_send(callback, result + "\n\n" + order_card_text(order), reply_markup=admin_order_card_keyboard(order.id))
+        await callback.answer("Статус обновлён")
+        return True
+
+    if data.startswith("admin:order_resend:"):
+        order_id = int(data.split(":")[2])
+
+        async with SessionLocal() as session:
+            order = await get_order_by_id(session, order_id)
+            if not order:
+                await callback.answer("Заказ не найден", show_alert=True)
+                return True
+
+            # Если уже был номер, чаще всего нужно повторно запросить код.
+            request_type = "code" if order.phone_number else "number"
+            ok, result, order, supplier = await admin_create_supplier_request_for_order(session, order_id, request_type)
+
+        if not ok or not order or not supplier:
+            await update_or_send(callback, result, reply_markup=admin_back_keyboard())
+            await callback.answer("Не получилось", show_alert=True)
+            return True
+
+        if request_type == "code":
+            supplier_text = (
+                "Повторный запрос от админа: нужен код.\n\n"
+                f"Заказ: #{order.operation_id}\n"
+                f"ID в базе: {order.id}\n"
+                f"Товар: {order.product_name}\n"
+                f"Сервис: {order.service_name}\n"
+                f"Номер: {order.phone_number or 'нет'}\n\n"
+                "Пришлите код."
+            )
+        else:
+            supplier_text = (
+                "Повторный запрос от админа: нужен номер.\n\n"
+                f"Заказ: #{order.operation_id}\n"
+                f"ID в базе: {order.id}\n"
+                f"Товар: {order.product_name}\n"
+                f"Сервис: {order.service_name}\n\n"
+                "Пришлите номер."
+            )
+
+        sent = await safe_send_message(bot, supplier.telegram_id, supplier_text, order.business_connection_id)
+        if not sent:
+            sent = await safe_send_message(bot, supplier.telegram_id, supplier_text)
+
+        text = (
+            f"{result}\n\n"
+            f"Поставщик: {supplier.telegram_id}\n"
+            f"Запрос: {'код' if request_type == 'code' else 'номер'}\n"
+            f"Отправка поставщику: {'OK' if sent else 'не удалось'}\n\n"
+            + order_card_text(order)
+        )
+        await update_or_send(callback, text, reply_markup=admin_order_card_keyboard(order.id))
+        await callback.answer("Повторный запрос создан")
+        return True
+
 
     # Clean section navigation.
     if data == "admin:panel":

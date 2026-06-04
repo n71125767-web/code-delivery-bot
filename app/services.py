@@ -720,3 +720,99 @@ async def lists_text(session: AsyncSession) -> str:
         lines.append(f"{item.name}: {', '.join(services) if services else 'пусто'}")
 
     return "\n".join(lines)
+
+
+# ---------- Admin order control ----------
+
+async def get_problem_order_rows(session: AsyncSession, limit: int = 20):
+    result = await session.execute(
+        select(Order)
+        .where(Order.status == "problem")
+        .order_by(Order.updated_at.desc())
+        .limit(limit)
+    )
+    return result.scalars().all()
+
+
+async def get_recent_order_rows(session: AsyncSession, limit: int = 20):
+    result = await session.execute(
+        select(Order)
+        .order_by(Order.created_at.desc())
+        .limit(limit)
+    )
+    return result.scalars().all()
+
+
+def order_status_label(status: str | None) -> str:
+    labels = {
+        "waiting_service": "⏳ ждёт выбор сервиса",
+        "waiting_supplier_number": "📞 ждёт номер от поставщика",
+        "number_sent_to_customer": "📩 номер отправлен покупателю",
+        "waiting_supplier_code": "🔑 ждёт код от поставщика",
+        "code_sent_to_customer": "🔐 код отправлен покупателю",
+        "confirmed": "✅ закрыт успешно",
+        "problem": "⚠️ проблема",
+    }
+    return labels.get(status or "", status or "неизвестно")
+
+
+def order_card_text(order: Order) -> str:
+    return (
+        "🧾 Карточка заказа\n\n"
+        f"Заказ: #{order.operation_id}\n"
+        f"ID в базе: {order.id}\n"
+        f"Статус: {order_status_label(order.status)}\n\n"
+        f"Покупатель ID: {order.customer_telegram_id or order.buyer_chat_id or 'нет'}\n"
+        f"Username: @{order.customer_username or 'нет'}\n\n"
+        f"Товар ID: {order.product_id or 'нет'}\n"
+        f"Товар: {order.product_name or 'нет'}\n"
+        f"Сервис: {order.service_name or 'нет'}\n\n"
+        f"Номер: {order.phone_number or 'нет'}\n"
+        f"Код: {order.verification_code or 'нет'}\n\n"
+        f"Создан: {order.created_at}\n"
+        f"Обновлён: {order.updated_at}"
+    )
+
+
+async def set_order_status(session: AsyncSession, order_id: int, status: str) -> str:
+    order = await get_order_by_id(session, order_id)
+    if not order:
+        return "Заказ не найден."
+
+    order.status = status
+    order.updated_at = datetime.utcnow()
+    await session.commit()
+    return f"OK. Статус заказа #{order.operation_id} изменён на {order_status_label(status)}."
+
+
+async def get_order_supplier(session: AsyncSession, order_id: int) -> Supplier | None:
+    order = await get_order_by_id(session, order_id)
+    if not order:
+        return None
+    return await find_supplier_for_order(session, order)
+
+
+async def admin_create_supplier_request_for_order(
+    session: AsyncSession,
+    order_id: int,
+    request_type: str,
+) -> tuple[bool, str, Order | None, Supplier | None]:
+    order = await get_order_by_id(session, order_id)
+    if not order:
+        return False, "Заказ не найден.", None, None
+
+    supplier = await find_supplier_for_order(session, order)
+    if not supplier:
+        return False, "Поставщик для этого заказа не найден.", order, None
+
+    if request_type == "number":
+        order.status = "waiting_supplier_number"
+    elif request_type == "code":
+        order.status = "waiting_supplier_code"
+
+    order.updated_at = datetime.utcnow()
+    await session.commit()
+    await session.refresh(order)
+
+    await create_supplier_request(session, order.id, supplier.telegram_id, request_type)
+    return True, "OK. Запрос создан.", order, supplier
