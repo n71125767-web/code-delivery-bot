@@ -41,6 +41,9 @@ from app.keyboards import (
     buyer_inline_menu_keyboard,
     supplier_inline_menu_keyboard,
     supplier_new_order_keyboard,
+    buyer_back_keyboard,
+    buyer_active_order_keyboard,
+    supplier_requests_menu_keyboard,
     admin_text_keys_keyboard,
     admin_back_keyboard,
     admin_suppliers_keyboard,
@@ -109,7 +112,7 @@ from app.services import (
 )
 
 logger = logging.getLogger(__name__)
-logger.info("FIX_MARKER_SUPPLIER_COMMAND_ROUTING_FIX=v5 loaded")
+logger.info("FIX_MARKER_ROLE_MENUS_DYNAMIC=v6 loaded")
 
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 
@@ -672,6 +675,68 @@ def supplier_commands_text() -> str:
     )
 
 
+
+def supplier_main_panel_text() -> str:
+    return (
+        "🚚 Панель поставщика\n\n"
+        "Выберите раздел:\n\n"
+        "📋 Заявки — список заявок и фильтры\n"
+        "📞 Ждут номер — заявки, где нужно выдать номер\n"
+        "🔑 Ждут код — заявки, где нужно выдать код\n"
+        "👤 Мой профиль — ваша статистика\n"
+        "📖 Команды — справка по работе"
+    )
+
+
+def supplier_requests_panel_text() -> str:
+    return (
+        "📋 Заявки поставщика\n\n"
+        "Выберите, какие заявки показать.\n"
+        "После выбора конкретной заявки бот будет ждать номер или код обычным сообщением."
+    )
+
+
+def buyer_main_panel_text() -> str:
+    return (
+        "🏠 Меню покупателя\n\n"
+        "Выберите раздел:\n\n"
+        "📦 Активный заказ — текущий заказ и действия\n"
+        "🧾 Мои заказы — история последних заказов\n"
+        "👤 Мой профиль — краткая информация\n"
+        "🆘 Помощь — что делать на каждом этапе"
+    )
+
+
+def format_buyer_active_order_text(order) -> str:
+    if not order:
+        return (
+            "📦 Активный заказ\n\n"
+            "Активного заказа сейчас нет.\n\n"
+            "Если вы уже оплатили заказ, напишите в поддержку или дождитесь обновления данных от shop-бота."
+        )
+
+    status_labels = {
+        "waiting_service": "ожидает выбора сервиса",
+        "waiting_supplier_number": "поставщик готовит номер",
+        "number_sent_to_customer": "номер отправлен, ждём код",
+        "waiting_supplier_code": "поставщик готовит код",
+        "code_sent_to_customer": "код отправлен, ждём подтверждение",
+        "confirmed": "закрыт успешно",
+        "problem": "есть проблема",
+        "cancelled": "отменён",
+    }
+    return (
+        "📦 Активный заказ\n\n"
+        f"Заказ: #{order.operation_id}\n"
+        f"Товар: {order.product_name or 'не указан'}\n"
+        f"Сервис: {order.service_name or 'ещё не выбран'}\n"
+        f"Статус: {status_labels.get(order.status, order.status)}\n"
+        f"Номер: {order.phone_number or 'ещё нет'}\n"
+        f"Код: {order.verification_code or 'ещё нет'}\n\n"
+        "Доступные действия показаны кнопками ниже."
+    )
+
+
 SUPPLIER_PANEL_TEXT_BUTTONS = {
     "🚚 Панель поставщика",
     "⏳ Заявки в ожидании",
@@ -743,10 +808,14 @@ async def process_supplier_command(bot: Bot, message: Message, business_connecti
     text = (message.text or "").strip()
 
     if text in {"/commands", "📖 Команды"}:
-        await answer_message(bot, message, supplier_commands_text(), business_connection_id, reply_markup=supplier_inline_menu_keyboard())
+        await answer_message(bot, message, supplier_commands_text(), business_connection_id, reply_markup=supplier_commands_keyboard())
         return True
 
-    if text in {"/start", "/supplier", "/work", "/pending"} or text in SUPPLIER_PANEL_TEXT_BUTTONS:
+    if text in {"/start", "/supplier"} or text == "🚚 Панель поставщика":
+        await answer_message(bot, message, supplier_main_panel_text(), business_connection_id, reply_markup=supplier_inline_menu_keyboard())
+        return True
+
+    if text in {"/work", "/pending"} or text in SUPPLIER_PANEL_TEXT_BUTTONS:
         await send_supplier_pending_panel(bot, message, business_connection_id)
         return True
 
@@ -791,14 +860,14 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
             await send_supplier_pending_panel(bot, message, business_connection_id)
             return
 
-        await answer_message(bot, message, "Бот работает. Кнопки ниже.", business_connection_id, reply_markup=buyer_inline_menu_keyboard())
+        await answer_message(bot, message, buyer_main_panel_text(), business_connection_id, reply_markup=buyer_inline_menu_keyboard())
         return
 
     if text == "👤 Мой профиль" or text == "/profile":
         if is_admin(user_id):
             async with SessionLocal() as session:
                 profile_text = await admin_profile_text(session, user_id, username)
-            await answer_message(bot, message, profile_text, business_connection_id, reply_markup=buyer_inline_menu_keyboard())
+            await answer_message(bot, message, profile_text, business_connection_id, reply_markup=admin_profile_keyboard())
             return
 
         if await is_supplier_user(user_id):
@@ -815,7 +884,7 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
     if text == "📦 Мои заказы" or text == "/orders":
         async with SessionLocal() as session:
             orders_text = await buyer_orders_text(session, user_id, username, BUYER_ORDERS_LIMIT)
-        await answer_message(bot, message, orders_text, business_connection_id, reply_markup=buyer_inline_menu_keyboard())
+        await answer_message(bot, message, orders_text, business_connection_id, reply_markup=buyer_back_keyboard())
         return
 
     if text == "🆘 Помощь":
@@ -824,7 +893,7 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
             message,
             "Помощь\n\nЕсли заказ активен — используйте кнопки в чате.\nЕсли есть проблема — нажмите кнопку проблемы под номером или кодом.",
             business_connection_id,
-            reply_markup=buyer_inline_menu_keyboard(),
+            reply_markup=buyer_back_keyboard(),
         )
         return
 
@@ -1648,6 +1717,16 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
     data = callback.data or ""
 
+    if data == "supplier:panel":
+        await update_or_send(callback, supplier_main_panel_text(), reply_markup=supplier_inline_menu_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "supplier:requests":
+        await update_or_send(callback, supplier_requests_panel_text(), reply_markup=supplier_requests_menu_keyboard())
+        await callback.answer()
+        return True
+
     if data.startswith("supplier:filter:"):
         _, _, mode, page_raw = data.split(":")
         page = int(page_raw)
@@ -1674,7 +1753,7 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
 
     if data == "supplier:commands":
-        await update_or_send(callback, supplier_commands_text(), reply_markup=supplier_inline_menu_keyboard())
+        await update_or_send(callback, supplier_commands_text(), reply_markup=supplier_commands_keyboard())
         await callback.answer()
         return True
 
@@ -1812,17 +1891,32 @@ async def handle_buyer_callback(bot: Bot, callback: CallbackQuery) -> bool:
     user_id = callback.from_user.id
     username = callback.from_user.username
 
+    if data == "buyer:panel":
+        await update_or_send(callback, buyer_main_panel_text(), reply_markup=buyer_inline_menu_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "buyer:active":
+        async with SessionLocal() as session:
+            order = await find_active_order_for_customer(session, user_id, username)
+            text = format_buyer_active_order_text(order)
+            order_id = order.id if order else None
+            status = order.status if order else None
+        await update_or_send(callback, text, reply_markup=buyer_active_order_keyboard(order_id, status))
+        await callback.answer()
+        return True
+
     if data == "buyer:profile":
         async with SessionLocal() as session:
             text = await buyer_profile_text(session, user_id, username)
-        await update_or_send(callback, text, reply_markup=buyer_inline_menu_keyboard())
+        await update_or_send(callback, text, reply_markup=buyer_back_keyboard())
         await callback.answer()
         return True
 
     if data == "buyer:orders":
         async with SessionLocal() as session:
             text = await buyer_orders_text(session, user_id, username, BUYER_ORDERS_LIMIT)
-        await update_or_send(callback, text, reply_markup=buyer_inline_menu_keyboard())
+        await update_or_send(callback, text, reply_markup=buyer_back_keyboard())
         await callback.answer()
         return True
 
@@ -1833,7 +1927,7 @@ async def handle_buyer_callback(bot: Bot, callback: CallbackQuery) -> bool:
             "После номера нажмите «Код отправлен».\n"
             "Если номер или код не работает — нажмите кнопку проблемы под сообщением."
         )
-        await update_or_send(callback, text, reply_markup=buyer_inline_menu_keyboard())
+        await update_or_send(callback, text, reply_markup=buyer_back_keyboard())
         await callback.answer()
         return True
 
@@ -2139,62 +2233,3 @@ async def on_edited_business_message(message: Message, bot: Bot) -> None:
 
 async def on_deleted_business_messages(event, bot: Bot) -> None:
     logger.info("DISPATCHER_DELETED_BUSINESS_MESSAGES ignored event=%s", event)
-
-# ---------------- Dynamic Panel Patch ----------------
-import logging
-from aiogram import types
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-
-logger = logging.getLogger(__name__)
-
-LAST_MESSAGES = {}  # key = chat_id, value = message_id
-
-async def update_dynamic_panel(bot, chat_id: int, role: str, active_orders: list):
-    """
-    Динамическая панель для покупателя или поставщика.
-    Редактирует старое сообщение, если оно есть, иначе отправляет новое.
-    """
-    kb = InlineKeyboardBuilder()
-    text = ""
-
-    if role == "buyer":
-        if active_orders:
-            text = "📦 Ваши заказы:"
-            kb.add(types.InlineKeyboardButton(text="✅ Подтвердить сервис", callback_data="service_confirm"))
-            kb.add(types.InlineKeyboardButton(text="🔄 Выбрать другой сервис", callback_data="service_change"))
-            kb.add(types.InlineKeyboardButton(text="📩 Код отправлен", callback_data="code_sent"))
-        else:
-            text = "📦 У вас нет активных заказов."
-
-    elif role == "supplier":
-        if active_orders:
-            text = "🚚 Панель поставщика:"
-            kb.add(types.InlineKeyboardButton(text="📞 Взять номер в работу", callback_data="take_number"))
-            kb.add(types.InlineKeyboardButton(text="✍️ Отправить номер", callback_data="send_number"))
-            kb.add(types.InlineKeyboardButton(text="🔑 Взять код в работу", callback_data="take_code"))
-            kb.add(types.InlineKeyboardButton(text="✍️ Отправить код", callback_data="send_code"))
-            kb.add(types.InlineKeyboardButton(text="⏳ Все активные", callback_data="filter_all"))
-            kb.add(types.InlineKeyboardButton(text="📞 Ждут номер", callback_data="filter_number"))
-            kb.add(types.InlineKeyboardButton(text="🔑 Ждут код", callback_data="filter_code"))
-            kb.add(types.InlineKeyboardButton(text="📖 Команды", callback_data="commands"))
-        else:
-            text = "🚚 Нет активных заявок для вас."
-
-    message_id = LAST_MESSAGES.get(chat_id)
-    try:
-        if message_id:
-            await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, reply_markup=kb.as_markup())
-            logger.info(f"Dynamic panel updated chat_id={chat_id} role={role}")
-            return
-    except Exception as e:
-        logger.warning(f"edit_message_text failed, sending new message: {e}")
-
-    try:
-        msg = await bot.send_message(chat_id=chat_id, text=text, reply_markup=kb.as_markup())
-        LAST_MESSAGES[chat_id] = msg.message_id
-        logger.info(f"Dynamic panel sent new message chat_id={chat_id} role={role}")
-    except Exception as e:
-        logger.error(f"Failed to send dynamic panel: {e}")
-
-logger.info("FIX_MARKER_DYNAMIC_PANEL=v1 loaded")
-# -----------------------------------------------------

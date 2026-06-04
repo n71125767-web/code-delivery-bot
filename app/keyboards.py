@@ -341,3 +341,115 @@ def admin_profile_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="🏠 Главное меню", callback_data="admin:panel")
     kb.adjust(1)
     return kb.as_markup()
+
+
+# ---------------- Role menus patch v6 ----------------
+# Эти функции переопределяют простые меню выше. В Python последнее def с тем же именем становится актуальным.
+
+def buyer_inline_menu_keyboard() -> InlineKeyboardMarkup:
+    """Главное inline-меню покупателя в стиле админ-панели."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📦 Активный заказ", callback_data="buyer:active")
+    kb.button(text="🧾 Мои заказы", callback_data="buyer:orders")
+    kb.button(text="👤 Мой профиль", callback_data="buyer:profile")
+    kb.button(text="🆘 Помощь", callback_data="buyer:help")
+    kb.button(text="🔄 Обновить меню", callback_data="buyer:panel")
+    kb.adjust(2, 2, 1)
+    return kb.as_markup()
+
+
+def buyer_back_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📦 Активный заказ", callback_data="buyer:active")
+    kb.button(text="🧾 Мои заказы", callback_data="buyer:orders")
+    kb.button(text="🏠 Главное меню", callback_data="buyer:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def buyer_active_order_keyboard(order_id: int | None = None, status: str | None = None) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    if order_id and status == "waiting_service":
+        kb.button(text="🧩 Выбрать сервис", callback_data=f"svcpage:{order_id}:0")
+    if order_id and status == "number_sent_to_customer":
+        kb.button(text="📩 Код отправлен", callback_data=f"code_sent:{order_id}")
+        kb.button(text="⚠️ Номер не работает", callback_data=f"number_invalid:{order_id}")
+    if order_id and status == "code_sent_to_customer":
+        kb.button(text="✅ OK, всё успешно", callback_data=f"confirm_success:{order_id}")
+        kb.button(text="⚠️ Код не работает", callback_data=f"code_invalid:{order_id}")
+    kb.button(text="🧾 Мои заказы", callback_data="buyer:orders")
+    kb.button(text="🏠 Главное меню", callback_data="buyer:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def supplier_inline_menu_keyboard() -> InlineKeyboardMarkup:
+    """Главное inline-меню поставщика в стиле админ-панели."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📋 Заявки", callback_data="supplier:requests")
+    kb.button(text="⏳ Ожидают", callback_data="supplier:pending:0")
+    kb.button(text="📞 Ждут номер", callback_data="supplier:filter:number:0")
+    kb.button(text="🔑 Ждут код", callback_data="supplier:filter:code:0")
+    kb.button(text="📊 Все активные", callback_data="supplier:filter:active:0")
+    kb.button(text="👤 Мой профиль", callback_data="supplier:profile")
+    kb.button(text="📖 Команды", callback_data="supplier:commands")
+    kb.button(text="🔄 Обновить", callback_data="supplier:panel")
+    kb.adjust(2, 2, 2, 2)
+    return kb.as_markup()
+
+
+def supplier_requests_menu_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⏳ Ожидающие заявки", callback_data="supplier:pending:0")
+    kb.button(text="📊 Все активные", callback_data="supplier:filter:active:0")
+    kb.button(text="📞 Ждут номер", callback_data="supplier:filter:number:0")
+    kb.button(text="🔑 Ждут код", callback_data="supplier:filter:code:0")
+    kb.button(text="🏠 Главное меню", callback_data="supplier:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def supplier_commands_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📋 Заявки", callback_data="supplier:requests")
+    kb.button(text="⏳ Ожидающие", callback_data="supplier:pending:0")
+    kb.button(text="📊 Все активные", callback_data="supplier:filter:active:0")
+    kb.button(text="🏠 Главное меню", callback_data="supplier:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def supplier_filter_keyboard(mode: str = "active", page: int = 0, max_page: int = 0) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📊 Все активные", callback_data="supplier:filter:active:0")
+    kb.button(text="📞 Ждут номер", callback_data="supplier:filter:number:0")
+    kb.button(text="🔑 Ждут код", callback_data="supplier:filter:code:0")
+    if page > 0:
+        kb.button(text="⬅️ Назад", callback_data=f"supplier:filter:{mode}:{page - 1}")
+    if page < max_page:
+        kb.button(text="➡️ Дальше", callback_data=f"supplier:filter:{mode}:{page + 1}")
+    kb.button(text="🔄 Обновить", callback_data=f"supplier:filter:{mode}:{page}")
+    kb.button(text="📋 К разделу заявок", callback_data="supplier:requests")
+    kb.button(text="🏠 Главное меню", callback_data="supplier:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def supplier_orders_keyboard(rows, page: int = 0, max_page: int = 0) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for request, order in rows:
+        if request.request_type == "number":
+            label = f"📞 {_short_button_text(order.product_name)} — номер"
+        else:
+            label = f"🔑 {_short_button_text(order.product_name)} — код"
+        kb.button(text=label, callback_data=f"supplier:req:{request.id}:{page}")
+    if page > 0:
+        kb.button(text="⬅️ Назад", callback_data=f"supplier:pending:{page - 1}")
+    if page < max_page:
+        kb.button(text="➡️ Дальше", callback_data=f"supplier:pending:{page + 1}")
+    kb.button(text="🔄 Обновить", callback_data=f"supplier:pending:{page}")
+    kb.button(text="📋 К разделу заявок", callback_data="supplier:requests")
+    kb.button(text="🏠 Главное меню", callback_data="supplier:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+# -----------------------------------------------------
