@@ -120,13 +120,13 @@ from app.services import (
 )
 
 logger = logging.getLogger(__name__)
-logger.info("FIX_MARKER_ROLE_PANEL_NO_SPAM=v8 loaded")
+logger.info("FIX_MARKER_BUSINESS_PANEL_CONTEXT_FIX=v9 loaded")
 
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 
 # Динамические панели ролей: храним последнее inline-сообщение панели,
 # чтобы команды и callback-кнопки редактировали его, а не спамили новым сообщением.
-ROLE_PANEL_MESSAGES: dict[tuple[str, int], int] = {}
+ROLE_PANEL_MESSAGES: dict[tuple[str, int, str], int] = {}
 REPLY_KEYBOARD_CLEANED: set[int] = set()
 
 
@@ -195,6 +195,7 @@ async def cleanup_reply_keyboard_once(
             "Панель обновлена.",
             business_connection_id=business_connection_id,
             reply_markup=ReplyKeyboardRemove(),
+            allow_normal_fallback=False if business_connection_id else True,
         )
         await maybe_delete_sent(bot, msg, delay=3)
     except Exception as exc:
@@ -222,7 +223,8 @@ async def send_or_edit_role_panel(
     if callback is None:
         await cleanup_reply_keyboard_once(bot, chat_id, business_connection_id)
 
-    key = (role, chat_id)
+    panel_context = business_connection_id or "normal"
+    key = (role, chat_id, panel_context)
 
     # Если пришёл callback — это идеальный вариант, редактируем сообщение кнопки.
     if callback and callback.message:
@@ -280,6 +282,7 @@ async def send_or_edit_role_panel(
         text,
         business_connection_id=business_connection_id,
         reply_markup=reply_markup,
+        allow_normal_fallback=False if business_connection_id else True,
     )
     if msg and getattr(msg, "message_id", None):
         ROLE_PANEL_MESSAGES[key] = msg.message_id
@@ -1189,8 +1192,17 @@ async def send_supplier_request_for_order(bot: Bot, order, business_connection_i
         "Пример: +79990000000"
     )
 
-    ok = await safe_send_message(bot, supplier.telegram_id, supplier_text, actual_business_id, reply_markup=supplier_inline_menu_keyboard())
-    if not ok:
+    ok = await safe_send_message(
+        bot,
+        supplier.telegram_id,
+        supplier_text,
+        actual_business_id,
+        reply_markup=supplier_inline_menu_keyboard(),
+        allow_normal_fallback=False if actual_business_id else True,
+    )
+    # Если есть business_connection_id, НЕ падаем в обычный бот-чат,
+    # иначе уведомления поставщика начинают приходить в бота, а не в Business-чат.
+    if not ok and not actual_business_id:
         ok = await safe_send_message(bot, supplier.telegram_id, supplier_text)
 
     if not ok:
@@ -1216,8 +1228,10 @@ async def send_supplier_request_for_order(bot: Bot, order, business_connection_i
         button_text,
         actual_business_id,
         reply_markup=supplier_new_order_keyboard(supplier_request.id, "number"),
+        allow_normal_fallback=False if actual_business_id else True,
     )
-    if not sent_with_buttons:
+    # Если есть business_connection_id, НЕ отправляем fallback в обычный бот-чат.
+    if not sent_with_buttons and not actual_business_id:
         sent_with_buttons = await safe_send_message(
             bot,
             supplier.telegram_id,

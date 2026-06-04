@@ -11,14 +11,17 @@ async def safe_send_message(
     text: str,
     business_connection_id: str | None = None,
     reply_markup=None,
+    allow_normal_fallback: bool = True,
 ):
     """
     Возвращает Message при успехе или False при ошибке.
 
-    Улучшение v3:
+    Улучшение v9:
     1. Логирует, есть ли inline/reply-кнопки.
     2. Если отправка через business_connection_id не прошла,
-       пробует обычную отправку ботом как fallback.
+       обычный fallback можно отключить через allow_normal_fallback=False.
+       Это важно для Telegram Business: иначе уведомления начинают приходить
+       в обычный чат с ботом, а не в Business-чат аккаунта.
     """
     me = await bot.me()
     has_keyboard = reply_markup is not None
@@ -45,12 +48,21 @@ async def safe_send_message(
             return msg
         except Exception as exc:
             logger.warning(
-                "SEND_FAILED_BUSINESS_TRY_NORMAL chat_id=%s business_connection_id=%s has_keyboard=%s error=%s",
+                "SEND_FAILED_BUSINESS chat_id=%s business_connection_id=%s has_keyboard=%s allow_normal_fallback=%s error=%s",
                 chat_id,
                 business_connection_id,
                 has_keyboard,
+                allow_normal_fallback,
                 exc,
             )
+            if not allow_normal_fallback:
+                logger.info(
+                    "SEND_NORMAL_FALLBACK_DISABLED chat_id=%s business_connection_id=%s has_keyboard=%s",
+                    chat_id,
+                    business_connection_id,
+                    has_keyboard,
+                )
+                return False
 
     try:
         msg = await bot.send_message(
