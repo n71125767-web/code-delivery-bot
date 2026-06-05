@@ -75,3 +75,18 @@ BUYER_ORDERS_LIMIT = int(os.getenv("BUYER_ORDERS_LIMIT", "10"))
 # Release patch v13
 BUG_REPORT_CHAT_IDS = parse_ids(os.getenv("BUG_REPORT_CHAT_IDS", ""))
 SUPPLIER_IMMUNITY_SKIP_AUTODELETE = os.getenv("SUPPLIER_IMMUNITY_SKIP_AUTODELETE", "1").strip() == "1"
+
+
+# Proxyline API integration.
+# ВАЖНО: настоящий ключ задавай только в Render Environment, не коммить в GitHub.
+PROXYLINE_ENABLED = os.getenv("PROXYLINE_ENABLED", "0").strip() == "1"
+PROXYLINE_API_KEY = os.getenv("PROXYLINE_API_KEY", "").strip()
+PROXYLINE_DEFAULT_COUNTRY = os.getenv("PROXYLINE_DEFAULT_COUNTRY", "ru").strip().lower()
+PROXYLINE_DEFAULT_PERIOD = int(os.getenv("PROXYLINE_DEFAULT_PERIOD", "30"))
+PROXYLINE_DEFAULT_COUNT = int(os.getenv("PROXYLINE_DEFAULT_COUNT", "1"))
+PROXYLINE_DEFAULT_IP_VERSION = int(os.getenv("PROXYLINE_DEFAULT_IP_VERSION", "4"))
+PROXYLINE_DEFAULT_TYPE = os.getenv("PROXYLINE_DEFAULT_TYPE", "dedicated").strip().lower()
+PROXYLINE_COUPON = os.getenv("PROXYLINE_COUPON", "").strip()
+# Через JSON можно точно сопоставить названия товаров Admaker с параметрами Proxyline.
+# Пример: {"Прокси RU 30 дней":{"country":"ru","period":30,"count":1,"ip_version":4,"type":"dedicated"}}
+PROXYLINE_PRODUCTS_JSON = os.getenv("PROXYLINE_PRODUCTS_JSON", "").strip()

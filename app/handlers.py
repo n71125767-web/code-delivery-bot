@@ -27,6 +27,9 @@ from app.config import (
     BOT_TOKEN,
     BUG_REPORT_CHAT_IDS,
     SUPPLIER_IMMUNITY_SKIP_AUTODELETE,
+    PROXYLINE_ENABLED,
+    PROXYLINE_API_KEY,
+    PROXYLINE_COUPON,
 )
 from app.database import SessionLocal
 from app.keyboards import (
@@ -70,6 +73,8 @@ from app.keyboards import (
     admin_add_admin_cancel_keyboard,
 )
 from app.parsers import extract_purchase_data, extract_phone, extract_code
+from app.proxyline_products import resolve_proxyline_product, is_proxyline_product
+from app.proxyline import ProxylineService, ProxylineError, format_proxyline_result
 from app.senders import safe_send_message, answer_message
 from app.services import (
     create_or_update_order_from_purchase,
@@ -137,7 +142,8 @@ from app.services import (
 )
 
 logger = logging.getLogger(__name__)
-logger.info("FIX_MARKER_ADMIN_PANEL_BUTTONS=v14 loaded")
+logger.info("FIX_MARKER_FULL_VISUAL_SHOP_STYLE=v15 loaded")
+logger.info("FIX_MARKER_PROXYLINE_AUTO_DELIVERY=v16 loaded")
 
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
@@ -1459,6 +1465,142 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
     await answer_message(bot, message, "Неизвестная команда. Напишите /ping или /admin", business_connection_id)
 
 
+async def process_proxyline_order(bot: Bot, order_id: int, business_connection_id: str | None = None) -> bool:
+    """
+    Автоматическая выдача Proxyline без поставщика.
+
+    Поток:
+    Admaker paid -> Order -> Proxyline API -> buyer -> status=code_sent_to_customer.
+    Заказ НЕ закрывается сразу: покупатель должен нажать «OK, всё успешно».
+    """
+    if not PROXYLINE_ENABLED:
+        return False
+
+    async with SessionLocal() as session:
+        order = await get_order_by_id(session, order_id)
+        if not order:
+            await notify_admins(bot, f"Proxyline: заказ {order_id} не найден.")
+            return False
+
+        product_cfg = resolve_proxyline_product(order.product_name)
+        if not product_cfg:
+            return False
+
+        if order.verification_code and order.status in {"code_sent_to_customer", "confirmed"}:
+            logger.info("PROXYLINE_SKIP_ALREADY_DELIVERED order_id=%s status=%s", order.id, order.status)
+            return True
+
+        if not order.customer_telegram_id and not order.buyer_chat_id:
+            order.status = "problem"
+            order.updated_at = datetime.utcnow()
+            await session.commit()
+            await notify_admins(bot, f"Proxyline: нет buyer_chat_id/customer_telegram_id для заказа #{order.operation_id}.")
+            return False
+
+        if business_connection_id and not order.business_connection_id:
+            order.business_connection_id = business_connection_id
+            await session.commit()
+
+        order_operation_id = order.operation_id
+        order_product_name = order.product_name
+        target_chat_id = order.buyer_chat_id or order.customer_telegram_id
+        target_business_id = order.business_connection_id or business_connection_id or ADMIN_BUSINESS_CONNECTION_ID
+
+    if not PROXYLINE_API_KEY:
+        async with SessionLocal() as session:
+            order = await get_order_by_id(session, order_id)
+            if order:
+                order.status = "problem"
+                order.updated_at = datetime.utcnow()
+                await session.commit()
+        await notify_admins(
+            bot,
+            "Proxyline API не настроен. Добавь PROXYLINE_API_KEY и PROXYLINE_ENABLED=1 в Render Environment.\n\n"
+            f"Заказ: #{order_operation_id}\nТовар: {order_product_name}",
+        )
+        return False
+
+    try:
+        if PROXYLINE_COUPON and not product_cfg.coupon:
+            # dataclass frozen, поэтому создаём новый объект с купоном.
+            from dataclasses import replace
+            product_cfg = replace(product_cfg, coupon=PROXYLINE_COUPON)
+
+        service = ProxylineService(PROXYLINE_API_KEY)
+        available = await service.ips_count(product_cfg)
+        if available < product_cfg.count:
+            raise ProxylineError(
+                f"Недостаточно IP: доступно {available}, нужно {product_cfg.count}. "
+                f"country={product_cfg.country}, type={product_cfg.proxy_type}, ipv{product_cfg.ip_version}"
+            )
+        payload = await service.buy_proxy(product_cfg)
+        proxy_text = format_proxyline_result(payload)
+    except Exception as exc:
+        async with SessionLocal() as session:
+            order = await get_order_by_id(session, order_id)
+            if order:
+                order.status = "problem"
+                order.updated_at = datetime.utcnow()
+                await session.commit()
+        await notify_admins(
+            bot,
+            "Proxyline: ошибка автоматической покупки.\n\n"
+            f"Заказ: #{order_operation_id}\n"
+            f"Товар: {order_product_name}\n"
+            f"Ошибка: {exc}",
+        )
+        logger.exception("PROXYLINE_DELIVERY_FAILED order_id=%s", order_id)
+        return False
+
+    delivery_text = (
+        "✅ › Ваш прокси готов\n\n"
+        "Данные для подключения:\n"
+        f"{proxy_text}\n\n"
+        "Проверьте прокси и подтвердите результат кнопкой ниже."
+    )
+
+    ok = False
+    if target_chat_id:
+        ok = await send_buyer_role_panel(
+            bot,
+            target_chat_id,
+            delivery_text,
+            business_connection_id=target_business_id,
+            reply_markup=confirm_keyboard(order_id),
+        )
+
+    async with SessionLocal() as session:
+        order = await get_order_by_id(session, order_id)
+        if not order:
+            return False
+        order.verification_code = proxy_text
+        order.status = "code_sent_to_customer" if ok else "problem"
+        order.updated_at = datetime.utcnow()
+        await session.commit()
+
+    if ok:
+        await notify_admins(
+            bot,
+            "✅ Proxyline заказ выдан автоматически.\n\n"
+            f"Заказ: #{order_operation_id}\n"
+            f"Товар: {order_product_name}\n"
+            f"Покупатель: {target_chat_id}",
+        )
+        logger.info("PROXYLINE_DELIVERY_OK order_id=%s operation_id=%s", order_id, order_operation_id)
+        return True
+
+    await notify_admins(
+        bot,
+        "Proxyline купил прокси, но не смог отправить покупателю.\n\n"
+        f"Заказ: #{order_operation_id}\n"
+        f"Товар: {order_product_name}\n"
+        f"Покупатель: {target_chat_id}\n"
+        f"Business ID: {target_business_id}\n\n"
+        f"Прокси:\n{proxy_text}",
+    )
+    return False
+
+
 async def process_admaker_message(bot: Bot, message: Message) -> None:
     text = message.text or ""
     data = extract_purchase_data(text)
@@ -1467,8 +1609,26 @@ async def process_admaker_message(bot: Bot, message: Message) -> None:
         await notify_admins(bot, f"Shop-бот прислал сообщение, но покупку распарсить не удалось.\n\nТекст:\n{text}")
         return
 
+    current_business_id = get_business_id(message)
+
     async with SessionLocal() as session:
         order = await create_or_update_order_from_purchase(session, data)
+        if current_business_id and not order.business_connection_id:
+            order.business_connection_id = current_business_id
+            await session.commit()
+            await session.refresh(order)
+
+    if PROXYLINE_ENABLED and is_proxyline_product(order.product_name):
+        await notify_admins(
+            bot,
+            "OK. Покупка Proxyline обработана. Запускаю автоматическую выдачу.\n\n"
+            f"Заказ: #{order.operation_id}\n"
+            f"ID в базе: {order.id}\n"
+            f"Покупатель ID: {order.customer_telegram_id}\n"
+            f"Товар: {order.product_name}",
+        )
+        await process_proxyline_order(bot, order.id, current_business_id)
+        return
 
     await notify_admins(
         bot,
