@@ -1226,3 +1226,41 @@ def buyer_inline_menu_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="📕 FAQ", callback_data="buyer:faq")
     kb.adjust(1)
     return kb.as_markup()
+
+
+# Shop UI navigation fix v20.1
+def buyer_back_to_panel_keyboard() -> InlineKeyboardMarkup:
+    """Навигация из информационных разделов покупателя."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ Назад к магазину", callback_data="buyer:shop")
+    kb.button(text="🏠 Главное меню", callback_data="buyer:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+
+# Reply keyboard main menu v20.2
+def buyer_main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
+    """
+    Постоянная клавиатура под полем ввода.
+
+    Админская кнопка появляется только у пользователей, которые уже
+    прошли серверную проверку is_admin_user().
+    """
+    rows = [
+        [KeyboardButton(text="🛒 Товары")],
+        [KeyboardButton(text="👥 Партнерская программа")],
+        [KeyboardButton(text="✉️ Обратная связь")],
+        [KeyboardButton(text="📕 FAQ")],
+    ]
+
+    if is_admin:
+        rows.append([KeyboardButton(text="⚙️ Админ меню")])
+
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="Выберите раздел",
+        selective=True,
+    )

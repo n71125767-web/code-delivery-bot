@@ -80,6 +80,8 @@ from app.keyboards import (
     buyer_proxy_country_keyboard,
     buyer_proxy_period_keyboard,
     buyer_proxy_confirm_keyboard,
+    buyer_back_to_panel_keyboard,
+    buyer_main_reply_keyboard,
 )
 from app.parsers import extract_purchase_data, extract_phone, extract_code
 from app.proxyline_products import resolve_proxyline_product, is_proxyline_product, ProxylineProduct
@@ -186,6 +188,8 @@ logger.info("FIX_MARKER_DELIVERY_COMMIT_AFTER_SEND=v18.3 loaded")
 
 logger.info("FIX_MARKER_SHOP_CATALOG_MERGE=v19 loaded")
 logger.info("FIX_MARKER_SHOP_UI_ADMIN_CATEGORIES=v20 loaded")
+logger.info("FIX_MARKER_SHOP_UI_NAV_FIX=v20.1 loaded")
+logger.info("FIX_MARKER_REPLY_KEYBOARD_ADMIN_ACCESS=v20.2 loaded")
 SHOP_ADMIN_WAIT: dict[int, tuple[str, int | None]] = {}
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
@@ -1319,6 +1323,9 @@ async def process_admin_command(bot: Bot, message: Message, business_connection_
 
 
 async def is_supplier_user(user_id: int) -> bool:
+    if await process_main_reply_button(bot, message, business_connection_id):
+        return
+
     async with SessionLocal() as session:
         from app.models import Supplier
         from sqlalchemy import select
@@ -1531,6 +1538,104 @@ async def process_supplier_command(bot: Bot, message: Message, business_connecti
     return False
 
 
+
+async def process_main_reply_button(
+    bot: Bot,
+    message: Message,
+    business_connection_id: str | None,
+) -> bool:
+    """
+    Обрабатывает кнопки обычной клавиатуры главного меню.
+
+    Возвращает True, если сообщение было кнопкой меню.
+    """
+    if not message.from_user:
+        return False
+
+    text = (message.text or "").strip()
+    user_id = message.from_user.id
+    admin_access = await is_admin_user(user_id)
+
+    if text == "🛒 Товары":
+        async with SessionLocal() as session:
+            await sync_products_from_orders(session)
+            categories = await list_categories(session)
+
+        await answer_message(
+            bot,
+            message,
+            customer_home_text(),
+            business_connection_id,
+            reply_markup=customer_home_keyboard(
+                categories,
+                is_admin=admin_access,
+            ),
+        )
+        return True
+
+    if text == "👥 Партнерская программа":
+        await answer_message(
+            bot,
+            message,
+            "👥 Партнерская программа\n\n"
+            "Раздел находится в разработке.",
+            business_connection_id,
+            reply_markup=buyer_main_reply_keyboard(is_admin=admin_access),
+        )
+        return True
+
+    if text == "✉️ Обратная связь":
+        await answer_message(
+            bot,
+            message,
+            "✉️ Обратная связь\n\n"
+            "Опишите проблему или предложение командой:\n"
+            "/bug ваш текст\n\n"
+            "Сообщение получат администраторы магазина.",
+            business_connection_id,
+            reply_markup=buyer_main_reply_keyboard(is_admin=admin_access),
+        )
+        return True
+
+    if text == "📕 FAQ":
+        await answer_message(
+            bot,
+            message,
+            "📕 FAQ\n\n"
+            "├ Как купить — нажмите «🛒 Товары»\n"
+            "├ Как посмотреть заказ — откройте меню заказов\n"
+            "├ Где получить прокси — в обычном чате с ботом\n"
+            "└ Как сообщить об ошибке — /bug описание",
+            business_connection_id,
+            reply_markup=buyer_main_reply_keyboard(is_admin=admin_access),
+        )
+        return True
+
+    if text == "⚙️ Админ меню":
+        if not admin_access:
+            # Даже если пользователь вручную отправит текст кнопки,
+            # доступ к панели он не получит.
+            await answer_message(
+                bot,
+                message,
+                "У вас нет доступа к админ-панели.",
+                business_connection_id,
+                reply_markup=buyer_main_reply_keyboard(is_admin=False),
+            )
+            return True
+
+        await answer_message(
+            bot,
+            message,
+            admin_panel_text(),
+            business_connection_id,
+            reply_markup=admin_panel_keyboard(),
+        )
+        return True
+
+    return False
+
+
 async def process_command_message(bot: Bot, message: Message, business_connection_id: str | None) -> None:
     if not message.from_user:
         return
@@ -1552,10 +1657,16 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
         async with SessionLocal() as session:
             await sync_products_from_orders(session)
             categories = await list_categories(session)
-        await send_buyer_role_panel(
-            bot, message.chat.id, shop_main_text(),
-            reply_markup=shop_main_keyboard(categories),
-            business_connection_id=business_connection_id,
+        admin_access = await is_admin_user(user_id)
+        await answer_message(
+            bot,
+            message,
+            customer_home_text(),
+            business_connection_id,
+            reply_markup=customer_home_keyboard(
+                categories,
+                is_admin=admin_access,
+            ),
         )
         return
 
@@ -1580,7 +1691,15 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
             await send_supplier_pending_panel(bot, message, business_connection_id)
             return
 
-        await send_buyer_role_panel(bot, message.chat.id, buyer_main_panel_text(), reply_markup=buyer_inline_menu_keyboard(), business_connection_id=business_connection_id)
+        admin_access = await is_admin_user(user_id)
+        await answer_message(
+            bot,
+            message,
+            "🛍 Магазин\n\n"
+            "Используйте кнопки под полем ввода, чтобы открыть нужный раздел.",
+            business_connection_id,
+            reply_markup=buyer_main_reply_keyboard(is_admin=admin_access),
+        )
         return
 
     if text == "👤 Мой профиль" or text == "/profile":
@@ -2496,10 +2615,17 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         return
 
     if await is_admin_user(user_id) and not text.startswith("/"):
+        # Сначала обрабатываем ввод, который ожидает админка:
+        # ID нового администратора, цену, название товара и т.д.
         if await process_shop_admin_pending_input(bot, message, business_connection_id):
             return
         if await process_admin_pending_input(bot, message, business_connection_id):
             return
+
+        # После этого — обычные кнопки главного меню.
+        if await process_main_reply_button(bot, message, business_connection_id):
+            return
+
         logger.info("IGNORED: admin non-command message to avoid self-cycle")
         return
 
