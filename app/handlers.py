@@ -92,6 +92,12 @@ from app.repositories.product_providers import (
     get_product_provider, bind_product_provider, unbind_product_provider,
     list_product_providers, list_recent_admaker_products,
 )
+
+from app.shop import (
+    shop_main_text, shop_main_keyboard, list_categories, list_products, get_product as get_shop_product,
+    category_text, product_text, products_keyboard, product_keyboard, process_admin_shop_command, sync_products_from_orders,
+)
+
 from app.services import (
     create_or_update_order_from_purchase,
     find_active_order_for_customer,
@@ -164,6 +170,7 @@ logger.info("FIX_MARKER_RELEASE_REBUILD=v18 loaded")
 logger.info("FIX_MARKER_PROXY_BOT_ONLY_SUPPLIER_NO_COOLDOWN=v18.2 loaded")
 logger.info("FIX_MARKER_DELIVERY_COMMIT_AFTER_SEND=v18.3 loaded")
 
+logger.info("FIX_MARKER_SHOP_CATALOG_MERGE=v19 loaded")
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
 
@@ -1454,6 +1461,26 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
         return
 
     if await process_supplier_command(bot, message, business_connection_id):
+        return
+
+    if text == "/shop":
+        async with SessionLocal() as session:
+            await sync_products_from_orders(session)
+            categories = await list_categories(session)
+        await send_buyer_role_panel(
+            bot, message.chat.id, shop_main_text(),
+            reply_markup=shop_main_keyboard(categories),
+            business_connection_id=business_connection_id,
+        )
+        return
+
+    if text.startswith(("/shop_sync", "/shop_categories", "/shop_add_category", "/shop_set_product", "/shop_set_price", "/shop_toggle")):
+        if not await is_admin_user(user_id):
+            await answer_message(bot, message, "Команда только для админа.", business_connection_id)
+            return
+        async with SessionLocal() as session:
+            result = await process_admin_shop_command(session, text)
+        await answer_message(bot, message, result or "Неизвестная команда магазина.", business_connection_id)
         return
 
     if text == "/start":
@@ -3472,6 +3499,51 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         if handled:
             return
         await callback.answer("Команда только для поставщика", show_alert=True)
+        return
+
+    if data == "buyer:shop":
+        async with SessionLocal() as session:
+            await sync_products_from_orders(session)
+            categories = await list_categories(session)
+        await update_or_send(callback, shop_main_text(), reply_markup=shop_main_keyboard(categories))
+        await callback.answer()
+        return
+
+    if data.startswith("buyer:shopcat:"):
+        try:
+            category_id = int(data.split(":")[2])
+        except (ValueError, IndexError):
+            await callback.answer("Некорректная категория", show_alert=True)
+            return
+        async with SessionLocal() as session:
+            categories = await list_categories(session)
+            category = next((x for x in categories if x.id == category_id), None)
+            products = await list_products(session, category_id)
+        if not category:
+            await callback.answer("Категория не найдена", show_alert=True)
+            return
+        await update_or_send(callback, category_text(category, len(products)), reply_markup=products_keyboard(products, category_id))
+        await callback.answer()
+        return
+
+    if data.startswith("buyer:shopproduct:"):
+        try:
+            product_id = int(data.split(":")[2])
+        except (ValueError, IndexError):
+            await callback.answer("Некорректный товар", show_alert=True)
+            return
+        async with SessionLocal() as session:
+            product = await get_shop_product(session, product_id)
+            provider = await get_product_provider(session, product.admaker_product_id) if product else None
+        if not product or not product.is_active:
+            await callback.answer("Товар недоступен", show_alert=True)
+            return
+        await update_or_send(
+            callback,
+            product_text(product, provider.provider_type if provider else None),
+            reply_markup=product_keyboard(product, SHOP_BOT_USERNAME),
+        )
+        await callback.answer()
         return
 
     if data.startswith("buyer:"):

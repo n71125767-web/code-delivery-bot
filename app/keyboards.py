@@ -1187,3 +1187,15 @@ def admin_proxy_settings_keyboard(settings) -> InlineKeyboardMarkup:
     kb.button(text="⬅️ › Назад", callback_data="admin:panel")
     kb.adjust(1)
     return kb.as_markup()
+
+
+# Shop catalog merge v19: final buyer main menu override.
+def buyer_inline_menu_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🛍 › Магазин", callback_data="buyer:shop")
+    kb.button(text="📦 › Активный заказ", callback_data="buyer:active")
+    kb.button(text="🧾 › Мои заказы", callback_data="buyer:orders")
+    kb.button(text="👤 › Мой профиль", callback_data="buyer:profile")
+    kb.button(text="🆘 › Помощь", callback_data="buyer:help")
+    kb.adjust(1)
+    return kb.as_markup()
