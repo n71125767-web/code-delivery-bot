@@ -204,6 +204,8 @@ logger.info("FIX_MARKER_PROXY_CATEGORIES=v20.5 loaded")
 logger.info("FIX_MARKER_STABILIZED_RELEASE=v21 loaded")
 logger.info("FIX_MARKER_PRODUCT_WIZARD_PROXY_CATALOG=v22 loaded")
 logger.info("FIX_MARKER_UI_SELFCHECK_FIX=v22.1 loaded")
+logger.info("FIX_MARKER_CATEGORY_SYNC_FIX=v22.2 loaded")
+logger.info("FIX_MARKER_MCS_SHOP_UI=v22.3 loaded")
 
 def validate_runtime_ui() -> None:
     """
@@ -1629,7 +1631,6 @@ async def process_main_reply_button(
 
     if text in {"🛒 Товар", "🛒 Товары"}:
         async with SessionLocal() as session:
-            await sync_products_from_orders(session)
             categories = await list_categories(session)
 
         await answer_message(
@@ -1656,7 +1657,6 @@ async def process_main_reply_button(
 
     if text == "📱 Номера":
         async with SessionLocal() as session:
-            await sync_products_from_orders(session)
             products = await list_number_products(session)
 
         text_value = "📱 Номера"
@@ -1669,6 +1669,39 @@ async def process_main_reply_button(
             reply_markup=special_products_keyboard(
                 products,
                 back_callback="buyer:panel",
+            ),
+        )
+        return True
+
+    if text == "✉️ Обратная связь":
+        await answer_message(
+            bot,
+            message,
+            "✉️ Обратная связь\n\n"
+            "Опишите вопрос или проблему командой:\n"
+            "/bug ваш текст",
+            business_connection_id,
+            reply_markup=(
+                buyer_inline_menu_keyboard(is_admin=admin_access)
+                if is_business_context
+                else buyer_main_reply_keyboard(is_admin=admin_access)
+            ),
+        )
+        return True
+
+    if text == "📕 FAQ":
+        await answer_message(
+            bot,
+            message,
+            "📕 FAQ\n\n"
+            "Как купить товар — откройте раздел «🛒 Товар».\n"
+            "Как купить прокси — откройте раздел «🌐 Прокси».\n"
+            "Как купить номер — откройте раздел «📱 Номера».",
+            business_connection_id,
+            reply_markup=(
+                buyer_inline_menu_keyboard(is_admin=admin_access)
+                if is_business_context
+                else buyer_main_reply_keyboard(is_admin=admin_access)
             ),
         )
         return True
@@ -1719,7 +1752,6 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
 
     if text == "/shop":
         async with SessionLocal() as session:
-            await sync_products_from_orders(session)
             categories = await list_categories(session)
         admin_access = await is_admin_user(user_id)
         await answer_message(
@@ -1764,8 +1796,8 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
             await send_buyer_role_panel(
                 bot,
                 message.chat.id,
-                "🛍 › Магазин\n\n"
-                "Выберите раздел кнопкой ниже.",
+                "🛍 Добро пожаловать в MCS Shop\n\n"
+                "Выберите нужный раздел кнопкой ниже.",
                 reply_markup=buyer_inline_menu_keyboard(),
                 business_connection_id=business_connection_id,
             )
@@ -1773,11 +1805,8 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
             await answer_message(
                 bot,
                 message,
-                "🛍 Магазин\n\n"
-                "Выберите раздел на клавиатуре:\n"
-                "├ 🛒 Товары\n"
-                "├ 🌐 Прокси\n"
-                "└ 📱 Номера",
+                "🛍 Добро пожаловать в MCS Shop\n\n"
+                "Выберите нужный раздел на панели ниже.",
                 business_connection_id=None,
                 reply_markup=buyer_main_reply_keyboard(is_admin=admin_access),
             )
@@ -4072,7 +4101,6 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
 
     if data == "buyer:shop":
         async with SessionLocal() as session:
-            await sync_products_from_orders(session)
             categories = await list_categories(session)
         admin_access = bool(callback.from_user and await is_admin_user(callback.from_user.id))
         await update_or_send(

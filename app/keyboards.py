@@ -683,13 +683,16 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
 
 def buyer_inline_menu_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="🛒 Товары", callback_data="buyer:shop", style="primary")
+    kb.button(text="🛒 Товар", callback_data="buyer:shop", style="primary")
+    kb.button(text="🌐 Прокси", callback_data="buyer:proxy_catalog", style="primary")
+    kb.button(text="📱 Номера", callback_data="buyer:number_catalog", style="primary")
     kb.button(text="✉️ Обратная связь", callback_data="buyer:feedback", style="primary")
     kb.button(text="📕 FAQ", callback_data="buyer:faq", style="primary")
     if is_admin:
         kb.button(text="⚙️ Админ меню", callback_data="admin:panel", style="primary")
-    kb.adjust(1)
+    kb.adjust(1, 2, 1, 1, 1)
     return kb.as_markup()
+
 
 
 
@@ -708,8 +711,12 @@ def buyer_back_to_panel_keyboard() -> InlineKeyboardMarkup:
 def buyer_main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text="🛒 Товар")],
-        [KeyboardButton(text="🌐 Прокси")],
-        [KeyboardButton(text="📱 Номера")],
+        [
+            KeyboardButton(text="🌐 Прокси"),
+            KeyboardButton(text="📱 Номера"),
+        ],
+        [KeyboardButton(text="✉️ Обратная связь")],
+        [KeyboardButton(text="📕 FAQ")],
     ]
     if is_admin:
         rows.append([KeyboardButton(text="⚙️ Админ меню")])
@@ -720,6 +727,7 @@ def buyer_main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
         input_field_placeholder="Выберите раздел",
         selective=True,
     )
+
 
 
 

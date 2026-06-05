@@ -36,27 +36,27 @@ async def category_counts(session, category_id: int) -> tuple[int, int]:
 
 def customer_home_text() -> str:
     return (
-        "🛍 Магазин\n\n"
-        "Выберите нужный раздел или категорию из списка ниже 👇"
+        "🛍 Добро пожаловать в MCS Shop\n\n"
+        "Выберите нужный раздел на панели ниже."
     )
+
 
 
 def customer_home_keyboard(categories, is_admin: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for row in categories:
-        state = "" if row.is_active else " (скрыто)"
+        if row.name.strip().lower() in {"все товары", "товары"}:
+            continue
+        if not row.is_active:
+            continue
         kb.button(
-            text=f"{row.emoji} {row.name}{state}",
+            text=f"{row.emoji} {row.name}",
             callback_data=f"buyer:shopcat:{row.id}",
+            style="primary",
         )
-    kb.button(text="🛒 Товары", callback_data="buyer:shop")
-    kb.button(text="👥 Партнерская программа", callback_data="buyer:partner")
-    kb.button(text="✉️ Обратная связь", callback_data="buyer:feedback")
-    kb.button(text="📕 FAQ", callback_data="buyer:faq")
-    if is_admin:
-        kb.button(text="⚙️ Админ меню", callback_data="admin:panel")
     kb.adjust(1)
     return kb.as_markup()
+
 
 
 def category_customer_text(category, product_count: int, subcategory_count: int = 0) -> str:

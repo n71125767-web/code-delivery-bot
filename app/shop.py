@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import asyncio
+
 from decimal import Decimal, InvalidOperation
 from urllib.parse import quote
 
 from aiogram.types import InlineKeyboardMarkup, CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 
 from app.models import ShopCategory, ShopProduct, Order, ProductProvider
+
+
+SHOP_SYNC_LOCK = asyncio.Lock()
 
 
 def money(value, currency: str = "RUB") -> str:
@@ -22,42 +28,106 @@ def money(value, currency: str = "RUB") -> str:
 
 
 async def ensure_default_category(session) -> ShopCategory:
-    row = await session.scalar(select(ShopCategory).order_by(ShopCategory.id).limit(1))
-    if row:
+    """
+    Идемпотентно получает системную категорию.
+
+    Сначала ищет именно категорию «Все товары». Если параллельная сессия
+    успела создать её после SELECT, IntegrityError обрабатывается через
+    rollback и повторное чтение.
+    """
+    row = await session.scalar(
+        select(ShopCategory).where(ShopCategory.name == "Все товары")
+    )
+    if row is not None:
         return row
-    row = ShopCategory(name="Все товары", emoji="🛍", sort_order=0, is_active=True)
+
+    row = ShopCategory(
+        name="Все товары",
+        emoji="🛍",
+        sort_order=0,
+        is_active=True,
+    )
     session.add(row)
-    await session.commit()
+
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        row = await session.scalar(
+            select(ShopCategory).where(ShopCategory.name == "Все товары")
+        )
+        if row is None:
+            raise
+        return row
+
     await session.refresh(row)
     return row
 
 
+
 async def sync_products_from_orders(session) -> int:
-    category = await ensure_default_category(session)
-    rows = (await session.execute(
-        select(Order.product_id, Order.product_name, func.max(Order.amount), func.max(Order.currency))
-        .where(Order.product_id.is_not(None))
-        .group_by(Order.product_id, Order.product_name)
-    )).all()
-    created = 0
-    for product_id, product_name, amount, currency in rows:
-        exists = await session.scalar(select(ShopProduct).where(ShopProduct.admaker_product_id == product_id))
-        if exists:
-            if not exists.name and product_name:
-                exists.name = product_name
-            continue
-        session.add(ShopProduct(
-            admaker_product_id=int(product_id),
-            category_id=category.id,
-            name=product_name or f"Товар {product_id}",
-            description="Товар из Admaker Shop",
-            price=amount,
-            currency=currency or "RUB",
-            is_active=True,
-        ))
-        created += 1
-    await session.commit()
-    return created
+    """
+    Явная синхронизация каталога с заказами Admaker.
+
+    Lock защищает от одновременного запуска внутри одного процесса Render.
+    Уникальные ограничения дополнительно защищают базу.
+    """
+    async with SHOP_SYNC_LOCK:
+        category = await ensure_default_category(session)
+
+        rows = (await session.execute(
+            select(
+                Order.product_id,
+                Order.product_name,
+                func.max(Order.amount),
+                func.max(Order.currency),
+            )
+            .where(Order.product_id.is_not(None))
+            .group_by(Order.product_id, Order.product_name)
+        )).all()
+
+        created = 0
+
+        for product_id, product_name, amount, currency in rows:
+            if product_id is None:
+                continue
+
+            product_id = int(product_id)
+            exists = await session.scalar(
+                select(ShopProduct).where(
+                    ShopProduct.admaker_product_id == product_id
+                )
+            )
+
+            if exists is not None:
+                if not exists.name and product_name:
+                    exists.name = product_name
+                continue
+
+            session.add(
+                ShopProduct(
+                    admaker_product_id=product_id,
+                    category_id=category.id,
+                    name=product_name or f"Товар {product_id}",
+                    description="Товар из Admaker Shop",
+                    price=amount,
+                    currency=currency or "RUB",
+                    is_active=True,
+                )
+            )
+            created += 1
+
+        try:
+            await session.commit()
+        except IntegrityError:
+            # Параллельная синхронизация могла успеть вставить тот же товар.
+            # Откатываем текущую транзакцию: следующая синхронизация уже
+            # увидит существующие записи и не продублирует их.
+            await session.rollback()
+            return 0
+
+        return created
+
 
 
 async def list_categories(session):
@@ -316,9 +386,10 @@ async def list_general_products(session, category_id: int | None = None):
 
 def shop_main_text() -> str:
     return (
-        "🛍 Магазин\n\n"
-        "Выберите товар или категорию из списка ниже 👇"
+        "🛍 Добро пожаловать в MCS Shop\n\n"
+        "Выберите нужный раздел на панели ниже."
     )
+
 
 
 def category_text(category: ShopCategory, count: int = 0) -> str:
