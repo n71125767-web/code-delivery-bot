@@ -196,6 +196,66 @@ logger.info("FIX_MARKER_REPLY_KEYBOARD_ADMIN_ACCESS=v20.2 loaded")
 logger.info("FIX_MARKER_REPLY_KEYBOARD_SCOPE_FIX=v20.3 loaded")
 logger.info("FIX_MARKER_MAIN_SECTIONS_COLORED_NAV=v20.4 loaded")
 logger.info("FIX_MARKER_PROXY_CATEGORIES=v20.5 loaded")
+logger.info("FIX_MARKER_STABILIZED_RELEASE=v21 loaded")
+
+def validate_runtime_ui() -> None:
+    """
+    Быстрая проверка связей, которые py_compile не обнаруживает:
+    создаёт основные клавиатуры и проверяет callback_data.
+    Вызывается при импорте handlers.py.
+    """
+    required_callbacks = {
+        "buyer:shop",
+        "buyer:proxy_catalog",
+        "buyer:number_catalog",
+        "buyer:active",
+        "buyer:orders",
+        "buyer:profile",
+    }
+
+    markup = buyer_inline_menu_keyboard()
+    actual_callbacks = {
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+        if button.callback_data
+    }
+
+    missing = required_callbacks - actual_callbacks
+    if missing:
+        raise RuntimeError(
+            f"UI self-check failed: missing callbacks: {sorted(missing)}"
+        )
+
+    normal_markup = buyer_main_reply_keyboard(is_admin=False)
+    admin_markup = buyer_main_reply_keyboard(is_admin=True)
+
+    normal_texts = {
+        button.text
+        for row in normal_markup.keyboard
+        for button in row
+    }
+    admin_texts = {
+        button.text
+        for row in admin_markup.keyboard
+        for button in row
+    }
+
+    if "⚙️ Админ меню" in normal_texts:
+        raise RuntimeError("UI self-check failed: admin button leaked to buyers")
+    if "⚙️ Админ меню" not in admin_texts:
+        raise RuntimeError("UI self-check failed: admin button missing for admins")
+
+    logger.info(
+        "UI_SELF_CHECK_OK inline_callbacks=%s normal_buttons=%s admin_buttons=%s",
+        len(actual_callbacks),
+        len(normal_texts),
+        len(admin_texts),
+    )
+
+
+validate_runtime_ui()
+
 SHOP_ADMIN_WAIT: dict[int, tuple[str, int | None]] = {}
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
@@ -572,11 +632,6 @@ def contains_forbidden_contact(text: str) -> bool:
     return bool(CONTACT_RE.search(text or ""))
 
 
-def admin_panel_text() -> str:
-    return (
-        "Админ-панель\n\n"
-        "Выберите раздел:"
-    )
 
 
 async def update_or_send(callback: CallbackQuery, text: str, reply_markup=None) -> None:
@@ -1347,101 +1402,17 @@ async def send_supplier_reply_buttons(bot: Bot, supplier_id: int) -> None:
     )
 
 
-def supplier_empty_panel_text() -> str:
-    return (
-        "🚚 Панель поставщика\n\n"
-        "Ожидающих заявок сейчас нет.\n\n"
-        "Когда появится новая заявка, бот сам пришлёт уведомление с кнопками.\n"
-        "Пока можно пользоваться меню ниже.\n\n"
-        "Команды:\n"
-        "/supplier — открыть панель поставщика\n"
-        "/pending — заявки в ожидании\n"
-        "/work — все активные заявки\n"
-        "/profile — профиль поставщика\n"
-        "/commands — список команд"
-    )
-
-
-def supplier_commands_text() -> str:
-    return (
-        "📖 Команды поставщика\n\n"
-        "Основные команды:\n"
-        "/start — открыть меню\n"
-        "/supplier — открыть панель поставщика\n"
-        "/pending — заявки в ожидании\n"
-        "/work — все активные заявки\n"
-        "/profile — профиль поставщика\n"
-        "/commands — список команд\n\n"
-        "Как работать:\n"
-        "1. Дождитесь новой заявки или откройте /pending.\n"
-        "2. Нажмите заявку.\n"
-        "3. Нажмите «Взять в работу» или «Отправить номер/код».\n"
-        "4. Отправьте номер или код обычным сообщением.\n\n"
-        "Важно: если нужно отправить номер или код — сначала выберите конкретную заявку кнопкой.\n"
-        "Если заявок нет — это нормально, значит сейчас ничего не ждёт поставщика."
-    )
 
 
 
-def supplier_main_panel_text() -> str:
-    return (
-        "🚚 Панель поставщика\n\n"
-        "Выберите раздел:\n\n"
-        "📋 Заявки — список заявок и фильтры\n"
-        "📞 Ждут номер — заявки, где нужно выдать номер\n"
-        "🔑 Ждут код — заявки, где нужно выдать код\n"
-        "👤 Мой профиль — ваша статистика\n"
-        "📖 Команды — справка по работе"
-    )
 
 
-def supplier_requests_panel_text() -> str:
-    return (
-        "📋 Заявки поставщика\n\n"
-        "Выберите, какие заявки показать.\n"
-        "После выбора конкретной заявки бот будет ждать номер или код обычным сообщением."
-    )
 
 
-def buyer_main_panel_text() -> str:
-    return (
-        "🏠 Меню покупателя\n\n"
-        "Выберите раздел:\n\n"
-        "📦 Активный заказ — текущий заказ и действия\n"
-        "🧾 Мои заказы — история последних заказов\n"
-        "👤 Мой профиль — краткая информация\n"
-        "🆘 Помощь — что делать на каждом этапе"
-    )
 
 
-def format_buyer_active_order_text(order) -> str:
-    if not order:
-        return (
-            "📦 Активный заказ\n\n"
-            "Активного заказа сейчас нет.\n\n"
-            "Если вы уже оплатили заказ, напишите в поддержку или дождитесь обновления данных от shop-бота."
-        )
 
-    status_labels = {
-        "waiting_service": "ожидает выбора сервиса",
-        "waiting_supplier_number": "поставщик готовит номер",
-        "number_sent_to_customer": "номер отправлен, ждём код",
-        "waiting_supplier_code": "поставщик готовит код",
-        "code_sent_to_customer": "код отправлен, ждём подтверждение",
-        "confirmed": "закрыт успешно",
-        "problem": "есть проблема",
-        "cancelled": "отменён",
-    }
-    return (
-        "📦 Активный заказ\n\n"
-        f"Заказ: #{order.operation_id}\n"
-        f"Товар: {order.product_name or 'не указан'}\n"
-        f"Сервис: {order.service_name or 'ещё не выбран'}\n"
-        f"Статус: {status_labels.get(order.status, order.status)}\n"
-        f"Номер: {order.phone_number or 'ещё нет'}\n"
-        f"Код: {order.verification_code or 'ещё нет'}\n\n"
-        "Доступные действия показаны кнопками ниже."
-    )
+
 
 
 SUPPLIER_PANEL_TEXT_BUTTONS = {
@@ -1554,6 +1525,7 @@ async def process_main_reply_button(
     text = (message.text or "").strip()
     user_id = message.from_user.id
     admin_access = await is_admin_user(user_id)
+    is_business_context = bool(business_connection_id)
 
     if text == "🛒 Товары":
         async with SessionLocal() as session:
@@ -1613,7 +1585,11 @@ async def process_main_reply_button(
                 message,
                 "У вас нет доступа к админ-панели.",
                 business_connection_id,
-                reply_markup=buyer_main_reply_keyboard(is_admin=False),
+                reply_markup=(
+                    buyer_inline_menu_keyboard()
+                    if is_business_context
+                    else buyer_main_reply_keyboard(is_admin=False)
+                ),
             )
             return True
 
@@ -1685,17 +1661,31 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
             return
 
         admin_access = await is_admin_user(user_id)
-        await answer_message(
-            bot,
-            message,
-            "🛍 Магазин\n\n"
-            "Выберите раздел на клавиатуре:\n"
-            "├ 🛒 Товары\n"
-            "├ 🌐 Прокси\n"
-            "└ 📱 Номера",
-            business_connection_id,
-            reply_markup=buyer_main_reply_keyboard(is_admin=admin_access),
-        )
+
+        # ReplyKeyboardMarkup не поддерживается для сообщений от имени
+        # Telegram Business. Поэтому normal bot и Business используют
+        # разные, явно разделённые интерфейсы.
+        if business_connection_id:
+            await send_buyer_role_panel(
+                bot,
+                message.chat.id,
+                "🛍 › Магазин\n\n"
+                "Выберите раздел кнопкой ниже.",
+                reply_markup=buyer_inline_menu_keyboard(),
+                business_connection_id=business_connection_id,
+            )
+        else:
+            await answer_message(
+                bot,
+                message,
+                "🛍 Магазин\n\n"
+                "Выберите раздел на клавиатуре:\n"
+                "├ 🛒 Товары\n"
+                "├ 🌐 Прокси\n"
+                "└ 📱 Номера",
+                business_connection_id=None,
+                reply_markup=buyer_main_reply_keyboard(is_admin=admin_access),
+            )
         return
 
     if text == "👤 Мой профиль" or text == "/profile":
@@ -3887,7 +3877,16 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         handled = await handle_supplier_callback(bot, callback)
         if handled:
             return
-        await callback.answer("Команда только для поставщика", show_alert=True)
+
+        logger.warning(
+            "STALE_OR_FORBIDDEN_SUPPLIER_CALLBACK user_id=%s data=%s",
+            callback.from_user.id if callback.from_user else None,
+            data,
+        )
+        await callback.answer(
+            "Кнопка устарела или у вас нет доступа. Откройте /supplier.",
+            show_alert=True,
+        )
         return
 
     if data == "buyer:proxy_catalog":
@@ -4003,7 +4002,16 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         handled = await handle_buyer_callback(bot, callback)
         if handled:
             return
-        await callback.answer("Неизвестная кнопка покупателя", show_alert=True)
+
+        logger.warning(
+            "STALE_BUYER_CALLBACK user_id=%s data=%s",
+            callback.from_user.id if callback.from_user else None,
+            data,
+        )
+        await callback.answer(
+            "Эта кнопка устарела. Откройте главное меню командой /start.",
+            show_alert=True,
+        )
         return
 
     if data.startswith("svcpage:"):
