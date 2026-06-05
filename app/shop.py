@@ -428,11 +428,14 @@ def shop_main_keyboard(categories) -> InlineKeyboardMarkup:
 def products_keyboard(products, category_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for row in products:
-        kb.button(text=f"📦 › {row.name} — {money(row.price, row.currency)}", callback_data=f"buyer:shopproduct:{row.id}")
-    kb.button(text="⬅️ › К категориям", callback_data="buyer:shop", style="danger")
-    kb.button(text="🏠 › Главное меню", callback_data="buyer:panel")
+        kb.button(
+            text=f"📦 {row.name} — {money(row.price, row.currency)}",
+            callback_data=f"buyer:shopproduct:{row.id}",
+        )
+    kb.button(text="⬅️ Назад", callback_data="buyer:shop", style="danger")
     kb.adjust(1)
     return kb.as_markup()
+
 
 
 def product_keyboard(product: ShopProduct, shop_username: str) -> InlineKeyboardMarkup:
@@ -441,11 +444,15 @@ def product_keyboard(product: ShopProduct, shop_username: str) -> InlineKeyboard
     if not url and shop_username:
         url = f"https://t.me/{shop_username.lstrip('@')}"
     if url:
-        kb.button(text="🛒 › Купить в Admaker Shop", url=url, style="success")
-    kb.button(text="⬅️ › Назад к товарам", callback_data=f"buyer:shopcat:{product.category_id or 0}", style="danger")
-    kb.button(text="🏠 › Главное меню", callback_data="buyer:panel")
+        kb.button(text="✅ Купить", url=url, style="success")
+    kb.button(
+        text="⬅️ Назад",
+        callback_data=f"buyer:shopcat:{product.category_id or 0}",
+        style="danger",
+    )
     kb.adjust(1)
     return kb.as_markup()
+
 
 
 async def process_admin_shop_command(session, text: str) -> str | None:

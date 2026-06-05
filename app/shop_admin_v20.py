@@ -36,9 +36,10 @@ async def category_counts(session, category_id: int) -> tuple[int, int]:
 
 def customer_home_text() -> str:
     return (
-        "🛍 Добро пожаловать в MCS Shop\n\n"
-        "Выберите нужный раздел на панели ниже."
+        "🛍 MCS Shop\n\n"
+        "Выберите категорию или нужный раздел."
     )
+
 
 
 
@@ -75,21 +76,23 @@ def category_customer_text(category, product_count: int, subcategory_count: int 
 def admin_shop_text() -> str:
     return (
         "💰 Управление товарами\n\n"
-        "Здесь можно управлять категориями, товарами, их отображением, "
-        "ценами и способом выдачи.\n\n"
-        "Выберите раздел"
+        "Здесь можно создавать категории и товары, "
+        "настраивать цену, валюту и способ выдачи."
     )
+
 
 
 def admin_shop_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="📦 Категории и товары", callback_data="admin:shop:categories")
-    kb.button(text="📋 Список всех товаров", callback_data="admin:shop:products")
-    kb.button(text="🔄 Синхронизация Admaker", callback_data="admin:shop:sync")
+    kb.button(text="📋 Все товары", callback_data="admin:shop:products")
+    kb.button(text="➕ Товар", callback_data="admin:shop:add_product")
     kb.button(text="➕ Категория", callback_data="admin:shop:add_category")
-    kb.button(text="⬅️ Главное меню", callback_data="admin:panel")
-    kb.adjust(1)
+    kb.button(text="🔄 Синхронизация", callback_data="admin:shop:sync")
+    kb.button(text="⬅️ Назад", callback_data="admin:panel", style="danger")
+    kb.adjust(2, 2, 1, 1)
     return kb.as_markup()
+
 
 
 def admin_categories_text(rows) -> str:
@@ -189,19 +192,21 @@ async def product_admin_text(session, product) -> str:
 def admin_product_keyboard(product) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="📝 Название", callback_data=f"admin:shop:product_name:{product.id}")
-    kb.button(text="📝 Описание", callback_data=f"admin:shop:product_desc:{product.id}")
     kb.button(text="💵 Цена", callback_data=f"admin:shop:product_price:{product.id}")
+    kb.button(text="📄 Описание", callback_data=f"admin:shop:product_desc:{product.id}")
     kb.button(
         text="🙈 Скрыть" if product.is_active else "👁 Показать",
         callback_data=f"admin:shop:product_toggle:{product.id}",
     )
-    kb.button(text="🌐 Назначить Proxyline", callback_data=f"admin:shop:product_proxy:{product.id}")
-    kb.button(text="🚚 Назначить поставщика", callback_data=f"admin:shop:product_supplier:{product.id}")
-    kb.button(text="🔗 Убрать поставщика", callback_data=f"admin:shop:product_unbind:{product.id}")
-    kb.button(text="🗑 Удалить товар", callback_data=f"admin:shop:product_delete_prompt:{product.id}")
-    kb.button(text="⬅️ К категории", callback_data=f"admin:shop:category:{product.category_id or 0}")
-    kb.adjust(2, 2, 1, 1, 1, 1)
+    kb.button(text="🌐 Автовыдача", callback_data=f"admin:shop:product_proxy:{product.id}")
+    kb.button(text="🚚 Поставщик", callback_data=f"admin:shop:product_supplier:{product.id}")
+    kb.button(text="🔗 Убрать выдачу", callback_data=f"admin:shop:product_unbind:{product.id}")
+    kb.button(text="🗑 Удалить", callback_data=f"admin:shop:product_delete_prompt:{product.id}")
+    kb.button(text="⬅️ Назад", callback_data=f"admin:shop:category:{product.category_id or 0}", style="danger")
+    kb.adjust(2, 2, 2, 2, 1)
     return kb.as_markup()
+
+
 
 
 async def toggle_category(session, category_id: int):

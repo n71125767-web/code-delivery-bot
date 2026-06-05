@@ -211,6 +211,7 @@ logger.info("FIX_MARKER_CATEGORY_SYNC_FIX=v22.2 loaded")
 logger.info("FIX_MARKER_MCS_SHOP_UI=v22.3 loaded")
 logger.info("FIX_MARKER_BUTTON_COLORS_NAV_ONLY=v22.4 loaded")
 logger.info("FIX_MARKER_CONVENIENCE_RELEASE=v23 loaded")
+logger.info("FIX_MARKER_REFERENCE_STYLE_UI=v24 loaded")
 
 def validate_runtime_ui() -> None:
     """
@@ -1133,19 +1134,19 @@ async def process_shop_admin_pending_input(
             if step == "name":
                 data["name"] = text[:255]
                 state["step"] = "price"
-                await answer_message(bot, message, "Шаг 2. Отправьте цену. Например: 3.10", business_connection_id)
+                await answer_message(bot, message, "📦 Создание товара\n\nШаг 2 из 5. Отправьте цену.\nНапример: 3.10", business_connection_id)
                 return True
             if step == "price":
                 data["price"] = str(Decimal(text.replace(",", ".")))
                 state["step"] = "currency"
-                await answer_message(bot, message, "Шаг 3. Выберите валюту.", business_connection_id, reply_markup=admin_currency_keyboard())
+                await answer_message(bot, message, "📦 Создание товара\n\nШаг 3 из 5. Выберите валюту.", business_connection_id, reply_markup=admin_currency_keyboard())
                 return True
             if step == "admaker_id":
                 data["admaker_id"] = int(text)
                 state["step"] = "category"
                 async with SessionLocal() as session:
                     categories = await all_categories(session)
-                await answer_message(bot, message, "Шаг 5. Выберите категорию.", business_connection_id, reply_markup=admin_category_select_keyboard(categories))
+                await answer_message(bot, message, "📦 Создание товара\n\nШаг 5 из 5. Выберите категорию.", business_connection_id, reply_markup=admin_category_select_keyboard(categories))
                 return True
 
         object_id = state.get("object_id")
@@ -2922,7 +2923,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             return True
         state.setdefault("data", {})["currency"] = currency
         state["step"] = "admaker_id"
-        await update_or_send(callback, "Шаг 4. Отправьте Product ID товара из Admaker.", reply_markup=admin_shop_keyboard())
+        await update_or_send(callback, "📦 Создание товара\n\nШаг 4 из 5. Отправьте Product ID из Admaker.", reply_markup=admin_shop_keyboard())
         await callback.answer()
         return True
 
