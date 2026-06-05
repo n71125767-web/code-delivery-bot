@@ -122,6 +122,12 @@ async def seed_text_templates() -> None:
         "code_sent_supplier": "OK. Код отправлен покупателю.",
         "welcome_start": "Здравствуйте. Чтобы открыть меню и связать заказы, нажмите или отправьте команду /start.",
         "bug_report_hint": "Опишите проблему так: /bug что случилось, на каком шаге, номер заказа если есть.",
+        "proxy_shop_enabled": "1",
+        "proxy_shop_countries": "ru,us,de",
+        "proxy_shop_periods": "30,90,180",
+        "proxy_shop_type": "dedicated",
+        "proxy_shop_count": "1",
+        "proxy_shop_ip_version": "4",
     }
 
     async with SessionLocal() as session:

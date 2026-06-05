@@ -1023,3 +1023,142 @@ def supplier_request_actions_keyboard(request_id: int, request_type: str) -> Inl
 def supplier_new_order_keyboard(request_id: int, request_type: str) -> InlineKeyboardMarkup:
     return supplier_request_actions_keyboard(request_id, request_type)
 # --------------------------------------------------
+
+# ---------------- Proxy shop admin + buyer selection ----------------
+def admin_proxy_settings_keyboard(settings) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(
+        text=("🟢 › Автовыдача включена" if settings.enabled else "🔴 › Автовыдача выключена"),
+        callback_data="admin:proxy:toggle",
+    )
+    kb.button(text="🌍 › Страны", callback_data="admin:proxy:countries")
+    kb.button(text="📅 › Сроки", callback_data="admin:proxy:periods")
+    type_label = "Выделенные" if settings.proxy_type == "dedicated" else "Общие"
+    kb.button(text=f"🔐 › Тип: {type_label}", callback_data="admin:proxy:type")
+    kb.button(text=f"📦 › Количество: {settings.count}", callback_data="admin:proxy:count")
+    kb.button(text=f"🌐 › IPv{settings.ip_version}", callback_data="admin:proxy:ip_version")
+    kb.button(text="🔄 › Обновить", callback_data="admin:proxy")
+    kb.button(text="⬅️ › Назад", callback_data="admin:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_proxy_countries_keyboard(settings, country_labels: dict[str, str]) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for code, label in country_labels.items():
+        selected = code in settings.countries
+        kb.button(text=f"{'✅' if selected else '▫️'} › {label}", callback_data=f"admin:proxy:country:{code}")
+    kb.button(text="⬅️ › К настройкам прокси", callback_data="admin:proxy")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_proxy_periods_keyboard(settings, periods: list[int]) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for period in periods:
+        selected = period in settings.periods
+        kb.button(text=f"{'✅' if selected else '▫️'} › {period} дней", callback_data=f"admin:proxy:period:{period}")
+    kb.button(text="⬅️ › К настройкам прокси", callback_data="admin:proxy")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+def admin_proxy_count_keyboard(count: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="➖", callback_data="admin:proxy:count:minus")
+    kb.button(text=f"📦 {count}", callback_data="admin:proxy")
+    kb.button(text="➕", callback_data="admin:proxy:count:plus")
+    kb.button(text="⬅️ › К настройкам прокси", callback_data="admin:proxy")
+    kb.adjust(3, 1)
+    return kb.as_markup()
+
+
+def buyer_proxy_country_keyboard(order_id: int, countries: list[str], labels: dict[str, str]) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for code in countries:
+        kb.button(text=f"{labels.get(code, code.upper())}", callback_data=f"proxy:country:{order_id}:{code}")
+    kb.button(text="🏠 › Главное меню", callback_data="buyer:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def buyer_proxy_period_keyboard(order_id: int, periods: list[int]) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for period in periods:
+        kb.button(text=f"📅 › {period} дней", callback_data=f"proxy:period:{order_id}:{period}")
+    kb.button(text="⬅️ › Назад к странам", callback_data=f"proxy:back_country:{order_id}")
+    kb.button(text="🏠 › Главное меню", callback_data="buyer:panel")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+def buyer_proxy_confirm_keyboard(order_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ › Купить и выдать", callback_data=f"proxy:confirm:{order_id}")
+    kb.button(text="⬅️ › Изменить срок", callback_data=f"proxy:back_period:{order_id}")
+    kb.button(text="🏠 › Главное меню", callback_data="buyer:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+# Final overrides for Proxyline-enabled menus.
+def admin_panel_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📊 › Статус", callback_data="admin:status")
+    kb.button(text="📈 › Статистика", callback_data="admin:stats")
+    kb.button(text="🧾 › Заказы", callback_data="admin:last_orders")
+    kb.button(text="⚠️ › Проблемы", callback_data="admin:problems")
+    kb.button(text="🌐 › Прокси", callback_data="admin:proxy")
+    kb.button(text="🚚 › Поставщики", callback_data="admin:suppliers")
+    kb.button(text="🧩 › Сервисы", callback_data="admin:services")
+    kb.button(text="📚 › Листы", callback_data="admin:lists")
+    kb.button(text="✏️ › Тексты", callback_data="admin:texts")
+    kb.button(text="👮 › Админы", callback_data="admin:admins")
+    kb.button(text="⚙️ › Настройки", callback_data="admin:settings")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+def buyer_active_order_keyboard(order_id: int | None = None, status: str | None = None) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    if order_id and status == "waiting_proxy_country":
+        kb.button(text="🌍 › Выбрать страну", callback_data=f"proxy:back_country:{order_id}")
+    elif order_id and status == "waiting_proxy_period":
+        kb.button(text="📅 › Выбрать срок", callback_data=f"proxy:back_period:{order_id}")
+    elif order_id and status == "waiting_proxy_confirm":
+        kb.button(text="✅ › Подтвердить прокси", callback_data=f"proxy:confirm:{order_id}")
+        kb.button(text="⬅️ › Изменить срок", callback_data=f"proxy:back_period:{order_id}")
+    elif order_id and status == "waiting_service":
+        kb.button(text="🧩 › Выбрать сервис", callback_data=f"svcpage:{order_id}:0")
+    elif order_id and status == "number_sent_to_customer":
+        kb.button(text="📩 › Код отправлен", callback_data=f"code_sent:{order_id}")
+        kb.button(text="⚠️ › Номер не работает", callback_data=f"number_invalid:{order_id}")
+    elif order_id and status == "code_sent_to_customer":
+        kb.button(text="✅ › Всё успешно", callback_data=f"confirm_success:{order_id}")
+        kb.button(text="⚠️ › Код не работает", callback_data=f"code_invalid:{order_id}")
+    kb.button(text="🧾 › Мои заказы", callback_data="buyer:orders")
+    kb.button(text="🏠 › Главное меню", callback_data="buyer:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def buyer_order_card_keyboard(order_id: int, status: str | None = None) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    if status == "waiting_proxy_country":
+        kb.button(text="🌍 › Выбрать страну", callback_data=f"proxy:back_country:{order_id}")
+    elif status == "waiting_proxy_period":
+        kb.button(text="📅 › Выбрать срок", callback_data=f"proxy:back_period:{order_id}")
+    elif status == "waiting_proxy_confirm":
+        kb.button(text="✅ › Купить и выдать", callback_data=f"proxy:confirm:{order_id}")
+        kb.button(text="⬅️ › Изменить срок", callback_data=f"proxy:back_period:{order_id}")
+    elif status == "waiting_service":
+        kb.button(text="🧩 › Выбрать сервис", callback_data=f"svcpage:{order_id}:0")
+    elif status == "number_sent_to_customer":
+        kb.button(text="📩 › Код отправлен", callback_data=f"code_sent:{order_id}")
+        kb.button(text="⚠️ › Номер не работает", callback_data=f"number_invalid:{order_id}")
+    elif status == "code_sent_to_customer":
+        kb.button(text="✅ › Всё успешно", callback_data=f"confirm_success:{order_id}")
+        kb.button(text="⚠️ › Код не работает", callback_data=f"code_invalid:{order_id}")
+    kb.button(text="⬅️ › К заказам", callback_data="buyer:orders")
+    kb.button(text="🏠 › Главное меню", callback_data="buyer:panel")
+    kb.adjust(1)
+    return kb.as_markup()

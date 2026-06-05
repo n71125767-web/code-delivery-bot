@@ -8,6 +8,10 @@ from app.models import Order, SupplierRequest, Supplier, SupplierProduct, Servic
 
 ACTIVE_CUSTOMER_STATUSES = [
     "waiting_service",
+    "waiting_proxy_country",
+    "waiting_proxy_period",
+    "waiting_proxy_confirm",
+    "proxy_processing",
     "waiting_supplier_number",
     "number_sent_to_customer",
     "waiting_supplier_code",

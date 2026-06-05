@@ -71,10 +71,21 @@ from app.keyboards import (
     admin_admins_keyboard,
     admin_remove_admin_keyboard,
     admin_add_admin_cancel_keyboard,
+    admin_proxy_settings_keyboard,
+    admin_proxy_countries_keyboard,
+    admin_proxy_periods_keyboard,
+    admin_proxy_count_keyboard,
+    buyer_proxy_country_keyboard,
+    buyer_proxy_period_keyboard,
+    buyer_proxy_confirm_keyboard,
 )
 from app.parsers import extract_purchase_data, extract_phone, extract_code
-from app.proxyline_products import resolve_proxyline_product, is_proxyline_product
+from app.proxyline_products import resolve_proxyline_product, is_proxyline_product, ProxylineProduct
 from app.proxyline import ProxylineService, ProxylineError, format_proxyline_result
+from app.proxy_settings import (
+    get_proxy_shop_settings, save_proxy_setting, SUPPORTED_COUNTRIES, SUPPORTED_PERIODS,
+    country_label, selection_dump, selection_load,
+)
 from app.senders import safe_send_message, answer_message
 from app.services import (
     create_or_update_order_from_purchase,
@@ -143,7 +154,7 @@ from app.services import (
 
 logger = logging.getLogger(__name__)
 logger.info("FIX_MARKER_FULL_VISUAL_SHOP_STYLE=v15 loaded")
-logger.info("FIX_MARKER_PROXYLINE_AUTO_DELIVERY=v16 loaded")
+logger.info("FIX_MARKER_PROXYLINE_ADMIN_BUYER_SELECT=v17 loaded")
 
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
@@ -1465,6 +1476,71 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
     await answer_message(bot, message, "Неизвестная команда. Напишите /ping или /admin", business_connection_id)
 
 
+async def proxy_settings_text(session) -> tuple[str, object]:
+    settings = await get_proxy_shop_settings(session)
+    countries = ", ".join(country_label(x) for x in settings.countries)
+    periods = ", ".join(f"{x} дней" for x in settings.periods)
+    proxy_type = "Выделенные" if settings.proxy_type == "dedicated" else "Общие"
+    text = (
+        "🌐 › Настройки прокси\n\n"
+        "Здесь настраивается автоматическая выдача Proxyline покупателям.\n\n"
+        f"Автовыдача: {'включена' if settings.enabled else 'выключена'}\n"
+        f"├ Страны — {countries}\n"
+        f"├ Сроки — {periods}\n"
+        f"├ Тип — {proxy_type}\n"
+        f"├ Количество — {settings.count}\n"
+        f"└ Версия IP — IPv{settings.ip_version}"
+    )
+    return text, settings
+
+
+async def show_proxy_country_selection(bot: Bot, order_id: int, business_connection_id: str | None = None) -> bool:
+    async with SessionLocal() as session:
+        order = await get_order_by_id(session, order_id)
+        settings = await get_proxy_shop_settings(session)
+        if not order or not settings.enabled:
+            return False
+        target_chat_id = order.buyer_chat_id or order.customer_telegram_id
+        target_business_id = order.business_connection_id or business_connection_id or ADMIN_BUSINESS_CONNECTION_ID
+        order.status = "waiting_proxy_country"
+        order.service_name = selection_dump()
+        order.updated_at = datetime.utcnow()
+        await session.commit()
+    if not target_chat_id:
+        return False
+    return await send_buyer_role_panel(
+        bot,
+        target_chat_id,
+        "🌍 › Выбор страны\n\nВыберите страну, в которой должен находиться прокси.",
+        business_connection_id=target_business_id,
+        reply_markup=buyer_proxy_country_keyboard(order_id, settings.countries, SUPPORTED_COUNTRIES),
+    )
+
+
+async def show_proxy_period_selection(callback: CallbackQuery, order_id: int) -> None:
+    async with SessionLocal() as session:
+        order = await get_order_by_id(session, order_id)
+        settings = await get_proxy_shop_settings(session)
+        if not order:
+            await callback.answer("Заказ не найден", show_alert=True)
+            return
+        country, _ = selection_load(order.service_name)
+        if not country:
+            order.status = "waiting_proxy_country"
+            await session.commit()
+            await update_or_send(callback, "Сначала выберите страну.", reply_markup=buyer_proxy_country_keyboard(order_id, settings.countries, SUPPORTED_COUNTRIES))
+            await callback.answer()
+            return
+        order.status = "waiting_proxy_period"
+        await session.commit()
+    await update_or_send(
+        callback,
+        f"📅 › Выбор срока\n\nСтрана: {country_label(country)}\n\nВыберите срок аренды прокси.",
+        reply_markup=buyer_proxy_period_keyboard(order_id, settings.periods),
+    )
+    await callback.answer()
+
+
 async def process_proxyline_order(bot: Bot, order_id: int, business_connection_id: str | None = None) -> bool:
     """
     Автоматическая выдача Proxyline без поставщика.
@@ -1482,9 +1558,27 @@ async def process_proxyline_order(bot: Bot, order_id: int, business_connection_i
             await notify_admins(bot, f"Proxyline: заказ {order_id} не найден.")
             return False
 
-        product_cfg = resolve_proxyline_product(order.product_name)
-        if not product_cfg:
+        base_cfg = resolve_proxyline_product(order.product_name)
+        if not base_cfg:
             return False
+        settings = await get_proxy_shop_settings(session)
+        selected_country, selected_period = selection_load(order.service_name)
+        if not selected_country or not selected_period:
+            return False
+        if selected_country not in settings.countries or selected_period not in settings.periods:
+            order.status = "problem"
+            order.updated_at = datetime.utcnow()
+            await session.commit()
+            await notify_admins(bot, f"Proxyline: выбранные параметры больше недоступны для заказа #{order.operation_id}.")
+            return False
+        product_cfg = ProxylineProduct(
+            country=selected_country,
+            period=selected_period,
+            count=settings.count,
+            ip_version=settings.ip_version,
+            proxy_type=settings.proxy_type,
+            coupon=base_cfg.coupon,
+        )
 
         if order.verification_code and order.status in {"code_sent_to_customer", "confirmed"}:
             logger.info("PROXYLINE_SKIP_ALREADY_DELIVERED order_id=%s status=%s", order.id, order.status)
@@ -1619,15 +1713,25 @@ async def process_admaker_message(bot: Bot, message: Message) -> None:
             await session.refresh(order)
 
     if PROXYLINE_ENABLED and is_proxyline_product(order.product_name):
+        async with SessionLocal() as session:
+            db_order = await get_order_by_id(session, order.id)
+            settings = await get_proxy_shop_settings(session)
+            if db_order:
+                db_order.status = "waiting_proxy_country" if settings.enabled else "problem"
+                db_order.service_name = selection_dump()
+                db_order.updated_at = datetime.utcnow()
+                await session.commit()
         await notify_admins(
             bot,
-            "OK. Покупка Proxyline обработана. Запускаю автоматическую выдачу.\n\n"
-            f"Заказ: #{order.operation_id}\n"
-            f"ID в базе: {order.id}\n"
-            f"Покупатель ID: {order.customer_telegram_id}\n"
-            f"Товар: {order.product_name}",
+            ("OK. Покупка Proxyline обработана. Покупателю предложен выбор страны и срока.\n\n"
+             if settings.enabled else "Proxyline-магазин отключён в админ-панели. Заказ переведён в problem.\n\n")
+            + f"Заказ: #{order.operation_id}\n"
+            + f"ID в базе: {order.id}\n"
+            + f"Покупатель ID: {order.customer_telegram_id}\n"
+            + f"Товар: {order.product_name}",
         )
-        await process_proxyline_order(bot, order.id, current_business_id)
+        if settings.enabled:
+            await show_proxy_country_selection(bot, order.id, current_business_id)
         return
 
     await notify_admins(
@@ -1822,6 +1926,35 @@ async def handle_buyer_message(bot: Bot, message: Message, business_connection_i
 
     if contains_forbidden_contact(text):
         await temp_answer(bot, message, contact_forbidden_text, business_connection_id)
+        return
+
+    async with SessionLocal() as session:
+        active_order = await find_active_order_for_customer(session, user_id, username)
+        if active_order and active_order.status.startswith("waiting_proxy"):
+            active_order.buyer_chat_id = message.chat.id
+            active_order.customer_telegram_id = user_id
+            if business_connection_id:
+                active_order.business_connection_id = business_connection_id
+            await session.commit()
+            settings = await get_proxy_shop_settings(session)
+            status = active_order.status
+            order_id = active_order.id
+            country, period = selection_load(active_order.service_name)
+        else:
+            status = None
+            order_id = None
+            country = None
+            period = None
+            settings = None
+
+    if order_id and status == "waiting_proxy_country":
+        await send_buyer_role_panel(bot, message.chat.id, "🌍 › Выбор страны\n\nВыберите страну, в которой должен находиться прокси.", business_connection_id=business_connection_id, reply_markup=buyer_proxy_country_keyboard(order_id, settings.countries, SUPPORTED_COUNTRIES))
+        return
+    if order_id and status == "waiting_proxy_period":
+        await send_buyer_role_panel(bot, message.chat.id, f"📅 › Выбор срока\n\nСтрана: {country_label(country or settings.countries[0])}\n\nВыберите срок аренды прокси.", business_connection_id=business_connection_id, reply_markup=buyer_proxy_period_keyboard(order_id, settings.periods))
+        return
+    if order_id and status == "waiting_proxy_confirm":
+        await send_buyer_role_panel(bot, message.chat.id, f"✅ › Подтверждение прокси\n\nСтрана: {country_label(country or '')}\nСрок: {period or '?'} дней", business_connection_id=business_connection_id, reply_markup=buyer_proxy_confirm_keyboard(order_id))
         return
 
     async with SessionLocal() as session:
@@ -2142,6 +2275,120 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
     if data == "admin:noop":
         await callback.answer()
+        return True
+
+    if data == "admin:proxy":
+        async with SessionLocal() as session:
+            text, settings = await proxy_settings_text(session)
+        await update_or_send(callback, text, reply_markup=admin_proxy_settings_keyboard(settings))
+        await callback.answer()
+        return True
+
+    if data == "admin:proxy:toggle":
+        async with SessionLocal() as session:
+            settings = await get_proxy_shop_settings(session)
+            await save_proxy_setting(session, "proxy_shop_enabled", "0" if settings.enabled else "1")
+            text, settings = await proxy_settings_text(session)
+        await update_or_send(callback, text, reply_markup=admin_proxy_settings_keyboard(settings))
+        await callback.answer("Настройка обновлена")
+        return True
+
+    if data == "admin:proxy:countries":
+        async with SessionLocal() as session:
+            settings = await get_proxy_shop_settings(session)
+        await update_or_send(callback, "🌍 › Доступные страны\n\nОтметьте страны, которые сможет выбирать покупатель.", reply_markup=admin_proxy_countries_keyboard(settings, SUPPORTED_COUNTRIES))
+        await callback.answer()
+        return True
+
+    if data.startswith("admin:proxy:country:"):
+        code = data.rsplit(":", 1)[1]
+        if code not in SUPPORTED_COUNTRIES:
+            await callback.answer("Неизвестная страна", show_alert=True)
+            return True
+        async with SessionLocal() as session:
+            settings = await get_proxy_shop_settings(session)
+            countries = list(settings.countries)
+            if code in countries:
+                if len(countries) == 1:
+                    await callback.answer("Нужно оставить хотя бы одну страну", show_alert=True)
+                    return True
+                countries.remove(code)
+            else:
+                countries.append(code)
+            await save_proxy_setting(session, "proxy_shop_countries", ",".join(countries))
+            settings = await get_proxy_shop_settings(session)
+        await update_or_send(callback, "🌍 › Доступные страны\n\nОтметьте страны, которые сможет выбирать покупатель.", reply_markup=admin_proxy_countries_keyboard(settings, SUPPORTED_COUNTRIES))
+        await callback.answer("Сохранено")
+        return True
+
+    if data == "admin:proxy:periods":
+        async with SessionLocal() as session:
+            settings = await get_proxy_shop_settings(session)
+        await update_or_send(callback, "📅 › Доступные сроки\n\nОтметьте сроки аренды, доступные покупателю.", reply_markup=admin_proxy_periods_keyboard(settings, SUPPORTED_PERIODS))
+        await callback.answer()
+        return True
+
+    if data.startswith("admin:proxy:period:"):
+        try:
+            period = int(data.rsplit(":", 1)[1])
+        except ValueError:
+            await callback.answer("Некорректный срок", show_alert=True)
+            return True
+        if period not in SUPPORTED_PERIODS:
+            await callback.answer("Недоступный срок", show_alert=True)
+            return True
+        async with SessionLocal() as session:
+            settings = await get_proxy_shop_settings(session)
+            periods = list(settings.periods)
+            if period in periods:
+                if len(periods) == 1:
+                    await callback.answer("Нужно оставить хотя бы один срок", show_alert=True)
+                    return True
+                periods.remove(period)
+            else:
+                periods.append(period)
+                periods.sort()
+            await save_proxy_setting(session, "proxy_shop_periods", ",".join(map(str, periods)))
+            settings = await get_proxy_shop_settings(session)
+        await update_or_send(callback, "📅 › Доступные сроки\n\nОтметьте сроки аренды, доступные покупателю.", reply_markup=admin_proxy_periods_keyboard(settings, SUPPORTED_PERIODS))
+        await callback.answer("Сохранено")
+        return True
+
+    if data == "admin:proxy:type":
+        async with SessionLocal() as session:
+            settings = await get_proxy_shop_settings(session)
+            new_type = "shared" if settings.proxy_type == "dedicated" else "dedicated"
+            await save_proxy_setting(session, "proxy_shop_type", new_type)
+            text, settings = await proxy_settings_text(session)
+        await update_or_send(callback, text, reply_markup=admin_proxy_settings_keyboard(settings))
+        await callback.answer("Тип изменён")
+        return True
+
+    if data == "admin:proxy:count":
+        async with SessionLocal() as session:
+            settings = await get_proxy_shop_settings(session)
+        await update_or_send(callback, "📦 › Количество прокси\n\nСколько прокси покупать на один оплаченный заказ.", reply_markup=admin_proxy_count_keyboard(settings.count))
+        await callback.answer()
+        return True
+
+    if data in {"admin:proxy:count:plus", "admin:proxy:count:minus"}:
+        async with SessionLocal() as session:
+            settings = await get_proxy_shop_settings(session)
+            delta = 1 if data.endswith("plus") else -1
+            count = max(1, min(100, settings.count + delta))
+            await save_proxy_setting(session, "proxy_shop_count", str(count))
+        await update_or_send(callback, "📦 › Количество прокси\n\nСколько прокси покупать на один оплаченный заказ.", reply_markup=admin_proxy_count_keyboard(count))
+        await callback.answer("Сохранено")
+        return True
+
+    if data == "admin:proxy:ip_version":
+        async with SessionLocal() as session:
+            settings = await get_proxy_shop_settings(session)
+            value = 6 if settings.ip_version == 4 else 4
+            await save_proxy_setting(session, "proxy_shop_ip_version", str(value))
+            text, settings = await proxy_settings_text(session)
+        await update_or_send(callback, text, reply_markup=admin_proxy_settings_keyboard(settings))
+        await callback.answer(f"Выбран IPv{value}")
         return True
 
     if data == "admin:admins":
@@ -2811,6 +3058,141 @@ async def handle_buyer_callback(bot: Bot, callback: CallbackQuery) -> bool:
     return False
 
 
+async def handle_proxy_callback(bot: Bot, callback: CallbackQuery) -> bool:
+    if not callback.from_user:
+        return False
+    data = callback.data or ""
+    if not data.startswith("proxy:"):
+        return False
+    parts = data.split(":")
+    if len(parts) < 3:
+        await callback.answer("Некорректная кнопка", show_alert=True)
+        return True
+    action = parts[1]
+    try:
+        order_id = int(parts[2])
+    except ValueError:
+        await callback.answer("Некорректный заказ", show_alert=True)
+        return True
+
+    async with SessionLocal() as session:
+        order = await get_order_by_id(session, order_id)
+        settings = await get_proxy_shop_settings(session)
+        if not order:
+            await callback.answer("Заказ не найден", show_alert=True)
+            return True
+        user_id = callback.from_user.id
+        username = (callback.from_user.username or "").lower().replace("@", "")
+        allowed = order.customer_telegram_id == user_id or order.buyer_chat_id == user_id
+        if not allowed and username and order.customer_username:
+            allowed = order.customer_username.lower().replace("@", "") == username
+        if not allowed:
+            await callback.answer("Это не ваш заказ", show_alert=True)
+            return True
+        if not is_proxyline_product(order.product_name):
+            await callback.answer("Это не Proxyline-заказ", show_alert=True)
+            return True
+        if not settings.enabled:
+            await callback.answer("Автовыдача прокси временно отключена", show_alert=True)
+            return True
+
+        if action == "country":
+            if len(parts) < 4:
+                await callback.answer("Страна не указана", show_alert=True)
+                return True
+            country = parts[3].lower()
+            if country not in settings.countries:
+                await callback.answer("Эта страна сейчас недоступна", show_alert=True)
+                return True
+            order.service_name = selection_dump(country=country)
+            order.status = "waiting_proxy_period"
+            order.updated_at = datetime.utcnow()
+            await session.commit()
+            await update_or_send(
+                callback,
+                f"📅 › Выбор срока\n\nСтрана: {country_label(country)}\n\nВыберите срок аренды прокси.",
+                reply_markup=buyer_proxy_period_keyboard(order.id, settings.periods),
+            )
+            await callback.answer("Страна выбрана")
+            return True
+
+        if action == "period":
+            if len(parts) < 4:
+                await callback.answer("Срок не указан", show_alert=True)
+                return True
+            try:
+                period = int(parts[3])
+            except ValueError:
+                await callback.answer("Некорректный срок", show_alert=True)
+                return True
+            country, _ = selection_load(order.service_name)
+            if not country:
+                order.status = "waiting_proxy_country"
+                await session.commit()
+                await update_or_send(callback, "Сначала выберите страну.", reply_markup=buyer_proxy_country_keyboard(order.id, settings.countries, SUPPORTED_COUNTRIES))
+                await callback.answer()
+                return True
+            if period not in settings.periods:
+                await callback.answer("Этот срок сейчас недоступен", show_alert=True)
+                return True
+            order.service_name = selection_dump(country=country, period=period)
+            order.status = "waiting_proxy_confirm"
+            order.updated_at = datetime.utcnow()
+            await session.commit()
+            proxy_type = "выделенный" if settings.proxy_type == "dedicated" else "общий"
+            text = (
+                "✅ › Подтверждение прокси\n\n"
+                f"Страна: {country_label(country)}\n"
+                f"├ Срок — {period} дней\n"
+                f"├ Тип — {proxy_type}\n"
+                f"├ Количество — {settings.count}\n"
+                f"└ Версия IP — IPv{settings.ip_version}\n\n"
+                "После подтверждения бот купит прокси через Proxyline API и выдаст его в этом чате."
+            )
+            await update_or_send(callback, text, reply_markup=buyer_proxy_confirm_keyboard(order.id))
+            await callback.answer("Срок выбран")
+            return True
+
+        if action == "back_country":
+            order.status = "waiting_proxy_country"
+            order.service_name = selection_dump()
+            order.updated_at = datetime.utcnow()
+            await session.commit()
+            await update_or_send(callback, "🌍 › Выбор страны\n\nВыберите страну, в которой должен находиться прокси.", reply_markup=buyer_proxy_country_keyboard(order.id, settings.countries, SUPPORTED_COUNTRIES))
+            await callback.answer()
+            return True
+
+        if action == "back_period":
+            country, _ = selection_load(order.service_name)
+            if not country:
+                country = settings.countries[0]
+                order.service_name = selection_dump(country=country)
+            order.status = "waiting_proxy_period"
+            order.updated_at = datetime.utcnow()
+            await session.commit()
+            await update_or_send(callback, f"📅 › Выбор срока\n\nСтрана: {country_label(country)}\n\nВыберите срок аренды прокси.", reply_markup=buyer_proxy_period_keyboard(order.id, settings.periods))
+            await callback.answer()
+            return True
+
+        if action == "confirm":
+            country, period = selection_load(order.service_name)
+            if not country or not period:
+                await callback.answer("Сначала выберите страну и срок", show_alert=True)
+                return True
+            if order.status in {"proxy_processing", "code_sent_to_customer", "confirmed"}:
+                await callback.answer("Заказ уже обрабатывается или выдан", show_alert=True)
+                return True
+            order.status = "proxy_processing"
+            order.updated_at = datetime.utcnow()
+            await session.commit()
+            business_id = order.business_connection_id or get_callback_business_id(callback)
+
+    await update_or_send(callback, "⏳ › Покупка прокси\n\nЗапрос отправлен в Proxyline. Не нажимайте кнопку повторно.", reply_markup=buyer_back_keyboard())
+    await callback.answer("Покупаю прокси…")
+    await process_proxyline_order(bot, order_id, business_id)
+    return True
+
+
 async def check_button_cooldown(callback: CallbackQuery, action: str) -> bool:
     if not callback.from_user:
         return True
@@ -2839,6 +3221,11 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             return
 
     logger.info("HANDLED_CALLBACK from_id=%s data=%s", callback.from_user.id if callback.from_user else None, data)
+
+    if data.startswith("proxy:"):
+        handled = await handle_proxy_callback(bot, callback)
+        if handled:
+            return
 
     if data.startswith("admin:"):
         handled = await handle_admin_callback(bot, callback)
