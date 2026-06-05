@@ -5,28 +5,50 @@ os.environ.setdefault("ADMIN_IDS", "1")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test-smoke.db")
 
 from app.keyboards import buyer_inline_menu_keyboard, buyer_main_reply_keyboard
+from app.shop import proxy_main_keyboard
 
 
-def test_buyer_reply_admin_visibility():
-    buyer = buyer_main_reply_keyboard(is_admin=False)
-    admin = buyer_main_reply_keyboard(is_admin=True)
-
-    buyer_texts = {button.text for row in buyer.keyboard for button in row}
-    admin_texts = {button.text for row in admin.keyboard for button in row}
-
-    assert "⚙️ Админ меню" not in buyer_texts
-    assert "⚙️ Админ меню" in admin_texts
-
-
-def test_buyer_inline_callbacks():
-    markup = buyer_inline_menu_keyboard()
-    callbacks = {
+def callback_set(markup):
+    return {
         button.callback_data
         for row in markup.inline_keyboard
         for button in row
         if button.callback_data
     }
 
-    assert "buyer:shop" in callbacks
-    assert "buyer:proxy_catalog" in callbacks
-    assert "buyer:number_catalog" in callbacks
+
+def reply_text_set(markup):
+    return {
+        button.text
+        for row in markup.keyboard
+        for button in row
+    }
+
+
+def test_buyer_inline_menu():
+    buyer = callback_set(buyer_inline_menu_keyboard(is_admin=False))
+    admin = callback_set(buyer_inline_menu_keyboard(is_admin=True))
+
+    assert {"buyer:shop", "buyer:feedback", "buyer:faq"} <= buyer
+    assert "admin:panel" not in buyer
+    assert "admin:panel" in admin
+
+
+def test_main_reply_keyboard():
+    buyer = reply_text_set(buyer_main_reply_keyboard(is_admin=False))
+    admin = reply_text_set(buyer_main_reply_keyboard(is_admin=True))
+
+    assert {"🛒 Товар", "🌐 Прокси", "📱 Номера"} <= buyer
+    assert "⚙️ Админ меню" not in buyer
+    assert "⚙️ Админ меню" in admin
+
+
+def test_proxy_groups():
+    callbacks = callback_set(proxy_main_keyboard())
+
+    assert {
+        "buyer:proxygroup:mtproxy",
+        "buyer:proxygroup:premium",
+        "buyer:proxygroup:standard",
+        "buyer:proxygroup:rotation",
+    } <= callbacks

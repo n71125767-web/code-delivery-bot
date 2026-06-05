@@ -203,60 +203,126 @@ logger.info("FIX_MARKER_MAIN_SECTIONS_COLORED_NAV=v20.4 loaded")
 logger.info("FIX_MARKER_PROXY_CATEGORIES=v20.5 loaded")
 logger.info("FIX_MARKER_STABILIZED_RELEASE=v21 loaded")
 logger.info("FIX_MARKER_PRODUCT_WIZARD_PROXY_CATALOG=v22 loaded")
+logger.info("FIX_MARKER_UI_SELFCHECK_FIX=v22.1 loaded")
 
 def validate_runtime_ui() -> None:
     """
-    Быстрая проверка связей, которые py_compile не обнаруживает:
-    создаёт основные клавиатуры и проверяет callback_data.
-    Вызывается при импорте handlers.py.
-    """
-    required_callbacks = {
-        "buyer:shop",
-        "buyer:proxy_catalog",
-        "buyer:number_catalog",
-        "buyer:active",
-        "buyer:orders",
-        "buyer:profile",
-    }
+    Проверяет актуальный интерфейс V22.
 
-    markup = buyer_inline_menu_keyboard()
-    actual_callbacks = {
+    Inline-панель пользователя:
+    - Товары
+    - Обратная связь
+    - FAQ
+    - Админ меню только при is_admin=True
+
+    Reply-клавиатура:
+    - Товар
+    - Прокси
+    - Номера
+    """
+    buyer_inline = buyer_inline_menu_keyboard(is_admin=False)
+    admin_inline = buyer_inline_menu_keyboard(is_admin=True)
+
+    buyer_inline_callbacks = {
         button.callback_data
-        for row in markup.inline_keyboard
+        for row in buyer_inline.inline_keyboard
+        for button in row
+        if button.callback_data
+    }
+    admin_inline_callbacks = {
+        button.callback_data
+        for row in admin_inline.inline_keyboard
         for button in row
         if button.callback_data
     }
 
-    missing = required_callbacks - actual_callbacks
+    required_buyer_callbacks = {
+        "buyer:shop",
+        "buyer:feedback",
+        "buyer:faq",
+    }
+
+    missing = required_buyer_callbacks - buyer_inline_callbacks
     if missing:
         raise RuntimeError(
-            f"UI self-check failed: missing callbacks: {sorted(missing)}"
+            f"UI self-check failed: missing buyer callbacks: {sorted(missing)}"
         )
 
-    normal_markup = buyer_main_reply_keyboard(is_admin=False)
-    admin_markup = buyer_main_reply_keyboard(is_admin=True)
+    if "admin:panel" in buyer_inline_callbacks:
+        raise RuntimeError(
+            "UI self-check failed: admin callback leaked to buyer inline menu"
+        )
 
-    normal_texts = {
+    if "admin:panel" not in admin_inline_callbacks:
+        raise RuntimeError(
+            "UI self-check failed: admin callback missing in admin inline menu"
+        )
+
+    buyer_reply = buyer_main_reply_keyboard(is_admin=False)
+    admin_reply = buyer_main_reply_keyboard(is_admin=True)
+
+    buyer_reply_texts = {
         button.text
-        for row in normal_markup.keyboard
+        for row in buyer_reply.keyboard
         for button in row
     }
-    admin_texts = {
+    admin_reply_texts = {
         button.text
-        for row in admin_markup.keyboard
+        for row in admin_reply.keyboard
         for button in row
     }
 
-    if "⚙️ Админ меню" in normal_texts:
-        raise RuntimeError("UI self-check failed: admin button leaked to buyers")
-    if "⚙️ Админ меню" not in admin_texts:
-        raise RuntimeError("UI self-check failed: admin button missing for admins")
+    required_reply_buttons = {
+        "🛒 Товар",
+        "🌐 Прокси",
+        "📱 Номера",
+    }
+
+    missing_reply = required_reply_buttons - buyer_reply_texts
+    if missing_reply:
+        raise RuntimeError(
+            f"UI self-check failed: missing reply buttons: {sorted(missing_reply)}"
+        )
+
+    if "⚙️ Админ меню" in buyer_reply_texts:
+        raise RuntimeError(
+            "UI self-check failed: admin reply button leaked to buyer"
+        )
+
+    if "⚙️ Админ меню" not in admin_reply_texts:
+        raise RuntimeError(
+            "UI self-check failed: admin reply button missing for admin"
+        )
+
+    proxy_markup = proxy_main_keyboard()
+    proxy_callbacks = {
+        button.callback_data
+        for row in proxy_markup.inline_keyboard
+        for button in row
+        if button.callback_data
+    }
+
+    required_proxy_callbacks = {
+        "buyer:proxygroup:mtproxy",
+        "buyer:proxygroup:premium",
+        "buyer:proxygroup:standard",
+        "buyer:proxygroup:rotation",
+    }
+
+    missing_proxy = required_proxy_callbacks - proxy_callbacks
+    if missing_proxy:
+        raise RuntimeError(
+            f"UI self-check failed: missing proxy callbacks: {sorted(missing_proxy)}"
+        )
 
     logger.info(
-        "UI_SELF_CHECK_OK inline_callbacks=%s normal_buttons=%s admin_buttons=%s",
-        len(actual_callbacks),
-        len(normal_texts),
-        len(admin_texts),
+        "UI_SELF_CHECK_OK "
+        "buyer_inline=%s admin_inline=%s buyer_reply=%s admin_reply=%s proxy=%s",
+        len(buyer_inline_callbacks),
+        len(admin_inline_callbacks),
+        len(buyer_reply_texts),
+        len(admin_reply_texts),
+        len(proxy_callbacks),
     )
 
 
