@@ -112,6 +112,9 @@ from app.shop_admin_v20 import (
 from app.shop import (
     shop_main_text, shop_main_keyboard, list_categories, list_products, get_product as get_shop_product,
     category_text, product_text, products_keyboard, product_keyboard, process_admin_shop_command, sync_products_from_orders,
+    list_proxy_products, list_number_products, special_catalog_text, special_products_keyboard,
+    proxy_categories_text, proxy_categories_keyboard,
+    list_proxy_products_by_category, proxy_category_title,
 )
 
 from app.services import (
@@ -191,6 +194,8 @@ logger.info("FIX_MARKER_SHOP_UI_ADMIN_CATEGORIES=v20 loaded")
 logger.info("FIX_MARKER_SHOP_UI_NAV_FIX=v20.1 loaded")
 logger.info("FIX_MARKER_REPLY_KEYBOARD_ADMIN_ACCESS=v20.2 loaded")
 logger.info("FIX_MARKER_REPLY_KEYBOARD_SCOPE_FIX=v20.3 loaded")
+logger.info("FIX_MARKER_MAIN_SECTIONS_COLORED_NAV=v20.4 loaded")
+logger.info("FIX_MARKER_PROXY_CATEGORIES=v20.5 loaded")
 SHOP_ADMIN_WAIT: dict[int, tuple[str, int | None]] = {}
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
@@ -1542,11 +1547,7 @@ async def process_main_reply_button(
     message: Message,
     business_connection_id: str | None,
 ) -> bool:
-    """
-    Обрабатывает кнопки обычной клавиатуры главного меню.
-
-    Возвращает True, если сообщение было кнопкой меню.
-    """
+    """Главные кнопки магазина под полем ввода."""
     if not message.from_user:
         return False
 
@@ -1571,48 +1572,42 @@ async def process_main_reply_button(
         )
         return True
 
-    if text == "👥 Партнерская программа":
+    if text == "🌐 Прокси":
         await answer_message(
             bot,
             message,
-            "👥 Партнерская программа\n\n"
-            "Раздел находится в разработке.",
+            proxy_categories_text(),
             business_connection_id,
-            reply_markup=buyer_main_reply_keyboard(is_admin=admin_access),
+            reply_markup=proxy_categories_keyboard(),
         )
         return True
 
-    if text == "✉️ Обратная связь":
-        await answer_message(
-            bot,
-            message,
-            "✉️ Обратная связь\n\n"
-            "Опишите проблему или предложение командой:\n"
-            "/bug ваш текст\n\n"
-            "Сообщение получат администраторы магазина.",
-            business_connection_id,
-            reply_markup=buyer_main_reply_keyboard(is_admin=admin_access),
-        )
-        return True
+    if text == "📱 Номера":
+        async with SessionLocal() as session:
+            await sync_products_from_orders(session)
+            products = await list_number_products(session)
 
-    if text == "📕 FAQ":
+        text_value = special_catalog_text("📱 Номера", len(products))
+        if not products:
+            text_value += (
+                "\n\nТовары с номерами пока не добавлены "
+                "или им не назначен Telegram-поставщик."
+            )
+
         await answer_message(
             bot,
             message,
-            "📕 FAQ\n\n"
-            "├ Как купить — нажмите «🛒 Товары»\n"
-            "├ Как посмотреть заказ — откройте меню заказов\n"
-            "├ Где получить прокси — в обычном чате с ботом\n"
-            "└ Как сообщить об ошибке — /bug описание",
+            text_value,
             business_connection_id,
-            reply_markup=buyer_main_reply_keyboard(is_admin=admin_access),
+            reply_markup=special_products_keyboard(
+                products,
+                back_callback="buyer:panel",
+            ),
         )
         return True
 
     if text == "⚙️ Админ меню":
         if not admin_access:
-            # Даже если пользователь вручную отправит текст кнопки,
-            # доступ к панели он не получит.
             await answer_message(
                 bot,
                 message,
@@ -1694,7 +1689,10 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
             bot,
             message,
             "🛍 Магазин\n\n"
-            "Используйте кнопки под полем ввода, чтобы открыть нужный раздел.",
+            "Выберите раздел на клавиатуре:\n"
+            "├ 🛒 Товары\n"
+            "├ 🌐 Прокси\n"
+            "└ 📱 Номера",
             business_connection_id,
             reply_markup=buyer_main_reply_keyboard(is_admin=admin_access),
         )
@@ -2870,7 +2868,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             await bind_product_provider(session, product.admaker_product_id, product.name, "proxyline", "proxyline")
             text = await product_admin_text(session, product)
         await update_or_send(callback, text, reply_markup=admin_product_keyboard(product))
-        await callback.answer("Proxyline назначен")
+        await callback.answer("Автовыдача прокси назначена")
         return True
 
     if data.startswith("admin:shop:product_supplier:"):
@@ -3890,6 +3888,50 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         if handled:
             return
         await callback.answer("Команда только для поставщика", show_alert=True)
+        return
+
+    if data == "buyer:proxy_catalog":
+        await update_or_send(
+            callback,
+            proxy_categories_text(),
+            reply_markup=proxy_categories_keyboard(),
+        )
+        await callback.answer()
+        return
+
+    if data.startswith("buyer:proxycat:"):
+        category_key = data.split(":")[2]
+        async with SessionLocal() as session:
+            products = await list_proxy_products_by_category(session, category_key)
+
+        title = proxy_category_title(category_key)
+        text_value = special_catalog_text(title, len(products))
+        if not products:
+            text_value += (
+                "\n\nВ этой категории пока нет товаров. "
+                "Добавьте товар в админке и укажите тип в названии."
+            )
+
+        await update_or_send(
+            callback,
+            text_value,
+            reply_markup=special_products_keyboard(
+                products,
+                back_callback="buyer:proxy_catalog",
+            ),
+        )
+        await callback.answer()
+        return
+
+    if data == "buyer:number_catalog":
+        async with SessionLocal() as session:
+            products = await list_number_products(session)
+        await update_or_send(
+            callback,
+            special_catalog_text("📱 Номера", len(products)),
+            reply_markup=special_products_keyboard(products, "buyer:panel"),
+        )
+        await callback.answer()
         return
 
     if data == "buyer:shop":

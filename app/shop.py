@@ -7,7 +7,7 @@ from aiogram.types import InlineKeyboardMarkup, CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select, func
 
-from app.models import ShopCategory, ShopProduct, Order
+from app.models import ShopCategory, ShopProduct, Order, ProductProvider
 
 
 def money(value, currency: str = "RUB") -> str:
@@ -77,6 +77,141 @@ async def get_product(session, product_id: int):
     return await session.scalar(select(ShopProduct).where(ShopProduct.id == product_id))
 
 
+
+async def list_proxy_products(session):
+    """Активные товары, явно назначенные на Proxyline."""
+    stmt = (
+        select(ShopProduct)
+        .join(
+            ProductProvider,
+            ProductProvider.admaker_product_id == ShopProduct.admaker_product_id,
+        )
+        .where(
+            ShopProduct.is_active.is_(True),
+            ProductProvider.enabled.is_(True),
+            ProductProvider.provider_type == "proxyline",
+        )
+        .order_by(ShopProduct.sort_order, ShopProduct.id)
+    )
+    return list((await session.scalars(stmt)).all())
+
+
+async def list_number_products(session):
+    """
+    Товары с ручной выдачей через поставщика.
+    Дополнительно подхватываются товары, в названии которых явно есть
+    «номер», «sms» или «phone», даже если привязка ещё не создана.
+    """
+    all_rows = await list_products(session)
+    provider_rows = list((await session.scalars(
+        select(ProductProvider).where(
+            ProductProvider.enabled.is_(True),
+            ProductProvider.provider_type == "supplier",
+        )
+    )).all())
+    supplier_ids = {row.admaker_product_id for row in provider_rows}
+    keywords = ("номер", "sms", "phone", "sim")
+
+    result = []
+    for row in all_rows:
+        name = (row.name or "").lower()
+        if row.admaker_product_id in supplier_ids or any(word in name for word in keywords):
+            result.append(row)
+    return result
+
+
+
+PROXY_CATEGORY_DEFINITIONS = {
+    "mtproxy": {
+        "title": "🧩 MTProxy",
+        "keywords": ("mtproxy", "mt proxy", "telegram proxy"),
+    },
+    "premium": {
+        "title": "💎 Премиум прокси",
+        "keywords": ("premium", "премиум"),
+    },
+    "standard": {
+        "title": "📦 Стандарт",
+        "keywords": ("standard", "стандарт"),
+    },
+    "residential": {
+        "title": "🏠 Резидентские",
+        "keywords": ("residential", "резидент", "резидентские"),
+    },
+}
+
+
+def proxy_category_title(category_key: str) -> str:
+    row = PROXY_CATEGORY_DEFINITIONS.get(category_key)
+    return row["title"] if row else "🌐 Прокси"
+
+
+async def list_proxy_products_by_category(session, category_key: str):
+    """
+    Возвращает только активные прокси-товары нужной категории.
+    Категория определяется по названию товара.
+    """
+    rows = await list_proxy_products(session)
+    definition = PROXY_CATEGORY_DEFINITIONS.get(category_key)
+    if not definition:
+        return rows
+
+    keywords = definition["keywords"]
+    result = []
+    for row in rows:
+        name = (row.name or "").lower()
+        if any(keyword in name for keyword in keywords):
+            result.append(row)
+    return result
+
+
+def proxy_categories_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🧩 MTProxy", callback_data="buyer:proxycat:mtproxy", style="primary")
+    kb.button(text="💎 Премиум прокси", callback_data="buyer:proxycat:premium", style="primary")
+    kb.button(text="📦 Стандарт", callback_data="buyer:proxycat:standard", style="primary")
+    kb.button(text="🏠 Резидентские", callback_data="buyer:proxycat:residential", style="primary")
+    kb.button(text="⬅️ › Назад", callback_data="buyer:panel", style="danger")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def proxy_categories_text() -> str:
+    return (
+        "🌐 Прокси\n\n"
+        "Выберите тип прокси:\n\n"
+        "├ 🧩 MTProxy\n"
+        "├ 💎 Премиум прокси\n"
+        "├ 📦 Стандарт\n"
+        "└ 🏠 Резидентские"
+    )
+
+
+def special_catalog_text(title: str, count: int) -> str:
+    return (
+        f"{title}\n\n"
+        f"Доступно позиций: {count}\n\n"
+        "Выберите товар кнопкой ниже:"
+    )
+
+
+def special_products_keyboard(products, back_callback: str = "buyer:panel") -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for row in products:
+        kb.button(
+            text=f"📦 › {row.name} — {money(row.price, row.currency)}",
+            callback_data=f"buyer:shopproduct:{row.id}",
+            style="primary",
+        )
+
+    kb.button(
+        text="⬅️ › Назад",
+        callback_data=back_callback,
+        style="danger",
+    )
+    kb.adjust(1)
+    return kb.as_markup()
+
 def shop_main_text() -> str:
     return (
         "🛍 Магазин\n\n"
@@ -111,9 +246,9 @@ def product_text(product: ShopProduct, provider_type: str | None = None) -> str:
 def shop_main_keyboard(categories) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for row in categories:
-        kb.button(text=f"{row.emoji} › {row.name}", callback_data=f"buyer:shopcat:{row.id}")
-    kb.button(text="🧾 › Мои заказы", callback_data="buyer:orders")
-    kb.button(text="🏠 › Главное меню", callback_data="buyer:panel")
+        kb.button(text=f"{row.emoji} › {row.name}", callback_data=f"buyer:shopcat:{row.id}", style="primary")
+    kb.button(text="🧾 › Мои заказы", callback_data="buyer:orders", style="primary")
+    kb.button(text="🏠 › Главное меню", callback_data="buyer:panel", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -121,9 +256,9 @@ def shop_main_keyboard(categories) -> InlineKeyboardMarkup:
 def products_keyboard(products, category_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for row in products:
-        kb.button(text=f"📦 › {row.name} — {money(row.price, row.currency)}", callback_data=f"buyer:shopproduct:{row.id}")
-    kb.button(text="⬅️ › К категориям", callback_data="buyer:shop")
-    kb.button(text="🏠 › Главное меню", callback_data="buyer:panel")
+        kb.button(text=f"📦 › {row.name} — {money(row.price, row.currency)}", callback_data=f"buyer:shopproduct:{row.id}", style="primary")
+    kb.button(text="⬅️ › К категориям", callback_data="buyer:shop", style="danger")
+    kb.button(text="🏠 › Главное меню", callback_data="buyer:panel", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -134,9 +269,9 @@ def product_keyboard(product: ShopProduct, shop_username: str) -> InlineKeyboard
     if not url and shop_username:
         url = f"https://t.me/{shop_username.lstrip('@')}"
     if url:
-        kb.button(text="🛒 › Купить в Admaker Shop", url=url)
-    kb.button(text="⬅️ › Назад к товарам", callback_data=f"buyer:shopcat:{product.category_id or 0}")
-    kb.button(text="🏠 › Главное меню", callback_data="buyer:panel")
+        kb.button(text="🛒 › Купить в Admaker Shop", url=url, style="success")
+    kb.button(text="⬅️ › Назад к товарам", callback_data=f"buyer:shopcat:{product.category_id or 0}", style="danger")
+    kb.button(text="🏠 › Главное меню", callback_data="buyer:panel", style="primary")
     kb.adjust(1)
     return kb.as_markup()
 
