@@ -1,4 +1,5 @@
 import os
+import json
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -90,3 +91,10 @@ PROXYLINE_COUPON = os.getenv("PROXYLINE_COUPON", "").strip()
 # Через JSON можно точно сопоставить названия товаров Admaker с параметрами Proxyline.
 # Пример: {"Прокси RU 30 дней":{"country":"ru","period":30,"count":1,"ip_version":4,"type":"dedicated"}}
 PROXYLINE_PRODUCTS_JSON = os.getenv("PROXYLINE_PRODUCTS_JSON", "").strip()
+
+# JSON mapping UI proxy package key -> Admaker Product ID.
+# Example: {"mt_1m":123,"premium_3m":456}
+try:
+    PROXY_PACKAGE_PRODUCT_IDS = json.loads(os.getenv("PROXY_PACKAGE_PRODUCT_IDS_JSON", "{}") or "{}")
+except Exception:
+    PROXY_PACKAGE_PRODUCT_IDS = {}
