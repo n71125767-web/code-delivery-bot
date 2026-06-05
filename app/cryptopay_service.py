@@ -185,7 +185,7 @@ async def create_purchase_invoice(
     payload = _payload_for(purchase.id, nonce)
     client = crypto_client()
     kwargs: dict[str, Any] = {
-        "amount": float(_decimal(purchase.amount)),
+        "amount": str(_decimal(purchase.amount)),
         "description": f"MCS Shop — {product.name}"[:1024],
         "payload": payload,
         "expires_in": CRYPTO_PAY_INVOICE_EXPIRES_SECONDS,

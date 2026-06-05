@@ -88,7 +88,6 @@ def admin_shop_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="📋 Все товары", callback_data="admin:shop:products")
     kb.button(text="➕ Товар", callback_data="admin:shop:add_product")
     kb.button(text="➕ Категория", callback_data="admin:shop:add_category")
-    kb.button(text="🔄 Синхронизация", callback_data="admin:shop:sync")
     kb.button(text="⬅️ Назад", callback_data="admin:panel", style="danger")
     kb.adjust(2, 2, 1, 1)
     return kb.as_markup()
@@ -156,7 +155,7 @@ def admin_products_text(rows) -> str:
     return (
         "📦 Все товары\n\n"
         + ("\n".join(
-            f"{'✅' if row.is_active else '🙈'} {row.id}. {row.name} — Admaker {row.admaker_product_id}"
+            f"{'✅' if row.is_active else '🙈'} {row.id}. {row.name} — Admaker {row.internal_key}"
             for row in rows
         ) or "Товаров пока нет.")
     )
@@ -174,14 +173,14 @@ def admin_products_keyboard(rows) -> InlineKeyboardMarkup:
 
 
 async def product_admin_text(session, product) -> str:
-    provider = await get_product_provider(session, product.admaker_product_id)
+    provider = await get_product_provider(session, product.internal_key)
     provider_label = "Не назначен"
     if provider:
         provider_label = "Proxyline API" if provider.provider_type == "proxyline" else f"Поставщик {provider.provider_key}"
     return (
         f"📦 Товар: {product.name}\n\n"
         f"ID в каталоге: {product.id}\n"
-        f"Admaker Product ID: {product.admaker_product_id}\n"
+        f"Admaker Product ID: {product.internal_key}\n"
         f"Цена: {product.price or 'не указана'} {product.currency}\n"
         f"Статус: {'показывается' if product.is_active else 'скрыт'}\n"
         f"Выдача: {provider_label}\n\n"
@@ -250,7 +249,7 @@ async def toggle_product(session, product_id: int):
 async def delete_product(session, product_id: int):
     row = await session.get(ShopProduct, product_id)
     if row:
-        await unbind_product_provider(session, row.admaker_product_id)
+        await unbind_product_provider(session, row.internal_key)
         await session.delete(row)
         await session.commit()
     return row
@@ -281,11 +280,11 @@ async def create_product(session, raw: str, category_id: int | None = None):
         price = Decimal(parts[2].replace(",", "."))
     currency = parts[3].upper() if len(parts) >= 4 and parts[3] else "RUB"
     row = await session.scalar(
-        select(ShopProduct).where(ShopProduct.admaker_product_id == admaker_id)
+        select(ShopProduct).where(ShopProduct.internal_key == admaker_id)
     )
     if row is None:
         row = ShopProduct(
-            admaker_product_id=admaker_id,
+            internal_key=admaker_id,
             category_id=category_id,
             name=name,
             price=price,

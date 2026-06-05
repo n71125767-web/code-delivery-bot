@@ -96,7 +96,7 @@ async def sync_products_from_orders(session) -> int:
             product_id = int(product_id)
             exists = await session.scalar(
                 select(ShopProduct).where(
-                    ShopProduct.admaker_product_id == product_id
+                    ShopProduct.internal_key == product_id
                 )
             )
 
@@ -107,7 +107,7 @@ async def sync_products_from_orders(session) -> int:
 
             session.add(
                 ShopProduct(
-                    admaker_product_id=product_id,
+                    internal_key=product_id,
                     category_id=category.id,
                     name=product_name or f"Товар {product_id}",
                     description="Товар из Admaker Shop",
@@ -155,7 +155,7 @@ async def list_proxy_products(session):
         select(ShopProduct)
         .join(
             ProductProvider,
-            ProductProvider.admaker_product_id == ShopProduct.admaker_product_id,
+            ProductProvider.internal_key == ShopProduct.internal_key,
         )
         .where(
             ShopProduct.is_active.is_(True),
@@ -172,18 +172,18 @@ async def list_number_products(session):
     providers = list((await session.scalars(
         select(ProductProvider).where(ProductProvider.enabled.is_(True))
     )).all())
-    supplier_ids = {row.admaker_product_id for row in providers if row.provider_type == "supplier"}
-    proxy_ids = {row.admaker_product_id for row in providers if row.provider_type in {"proxyline", "proxys"}}
+    supplier_ids = {row.internal_key for row in providers if row.provider_type == "supplier"}
+    proxy_ids = {row.internal_key for row in providers if row.provider_type in {"proxyline", "proxys"}}
     number_words = ("номер", "sms", "phone", "sim")
     proxy_words = ("proxy", "прокси", "mtproxy", "резидент", "rotation", "ротац")
     result = []
     for row in rows:
         name = (row.name or "").lower()
-        if row.admaker_product_id in proxy_ids:
+        if row.internal_key in proxy_ids:
             continue
         if any(word in name for word in proxy_words):
             continue
-        if row.admaker_product_id in supplier_ids or any(word in name for word in number_words):
+        if row.internal_key in supplier_ids or any(word in name for word in number_words):
             result.append(row)
     return result
 
@@ -385,11 +385,11 @@ async def list_general_products(session, category_id: int | None = None):
     providers = list((await session.scalars(
         select(ProductProvider).where(ProductProvider.enabled.is_(True))
     )).all())
-    proxy_ids = {row.admaker_product_id for row in providers if row.provider_type in {"proxyline", "proxys"}}
+    proxy_ids = {row.internal_key for row in providers if row.provider_type in {"proxyline", "proxys"}}
     proxy_words = ("proxy", "прокси", "mtproxy", "резидент", "rotation", "ротац")
     return [
         row for row in rows
-        if row.admaker_product_id not in proxy_ids
+        if row.internal_key not in proxy_ids
         and not any(word in (row.name or "").lower() for word in proxy_words)
     ]
 
@@ -485,9 +485,9 @@ async def process_admin_shop_command(session, text: str) -> str | None:
         except ValueError:
             return "ADMAKER_ID и CATEGORY_ID должны быть числами."
         name=parts[3].strip()
-        row=await session.scalar(select(ShopProduct).where(ShopProduct.admaker_product_id==admaker_id))
+        row=await session.scalar(select(ShopProduct).where(ShopProduct.internal_key==admaker_id))
         if row is None:
-            row=ShopProduct(admaker_product_id=admaker_id, category_id=category_id, name=name, is_active=True)
+            row=ShopProduct(internal_key=admaker_id, category_id=category_id, name=name, is_active=True)
             session.add(row)
         else:
             row.category_id=category_id; row.name=name; row.is_active=True
@@ -501,7 +501,7 @@ async def process_admin_shop_command(session, text: str) -> str | None:
         except (ValueError, InvalidOperation):
             return "Некорректный ID или цена."
         currency=parts[3].strip().upper() if len(parts)>3 else "RUB"
-        row=await session.scalar(select(ShopProduct).where(ShopProduct.admaker_product_id==admaker_id))
+        row=await session.scalar(select(ShopProduct).where(ShopProduct.internal_key==admaker_id))
         if not row:
             return "Товар не найден. Сначала /shop_sync или /shop_set_product."
         row.price=price; row.currency=currency
@@ -512,7 +512,7 @@ async def process_admin_shop_command(session, text: str) -> str | None:
             return "Формат: /shop_toggle ADMAKER_ID"
         try: admaker_id=int(parts[1])
         except ValueError: return "ID должен быть числом."
-        row=await session.scalar(select(ShopProduct).where(ShopProduct.admaker_product_id==admaker_id))
+        row=await session.scalar(select(ShopProduct).where(ShopProduct.internal_key==admaker_id))
         if not row: return "Товар не найден."
         row.is_active=not row.is_active
         await session.commit()

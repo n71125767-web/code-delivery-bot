@@ -23,7 +23,7 @@ class Order(Base):
     product_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     product_name: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    amount: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    amount: Mapped[float | None] = mapped_column(Numeric(24, 8), nullable=True)
     currency: Mapped[str | None] = mapped_column(String, nullable=True)
 
     service_name: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -173,7 +173,7 @@ class ProductProvider(Base):
     __tablename__ = "product_providers"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    admaker_product_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    internal_key: Mapped[int] = mapped_column("admaker_product_id", BigInteger, unique=True, index=True)
     product_name: Mapped[str | None] = mapped_column(String, nullable=True)
     provider_type: Mapped[str] = mapped_column(String(30), default="supplier", index=True)
     provider_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -200,11 +200,11 @@ class ShopProduct(Base):
     __tablename__ = "shop_products"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    admaker_product_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    internal_key: Mapped[int] = mapped_column("admaker_product_id", BigInteger, unique=True, index=True)
     category_id: Mapped[int | None] = mapped_column(ForeignKey("shop_categories.id"), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(255), index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    price: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    price: Mapped[float | None] = mapped_column(Numeric(24, 8), nullable=True)
     currency: Mapped[str] = mapped_column(String(10), default="RUB")
     buy_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     product_type: Mapped[str] = mapped_column(String(20), default="static", index=True)
@@ -222,7 +222,7 @@ class ShopProduct(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
     views_count: Mapped[int] = mapped_column(Integer, default=0)
     sales_count: Mapped[int] = mapped_column(Integer, default=0)
-    revenue_total: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    revenue_total: Mapped[float] = mapped_column(Numeric(24, 8), default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

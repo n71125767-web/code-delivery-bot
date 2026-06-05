@@ -9,7 +9,6 @@ from sqlalchemy import select, func
 
 from aiogram import Bot
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.config import (
     ADMIN_IDS,
@@ -100,7 +99,7 @@ from app.proxy_settings import (
 from app.senders import safe_send_message, answer_message
 from app.repositories.product_providers import (
     get_product_provider, bind_product_provider, unbind_product_provider,
-    list_product_providers, list_recent_admaker_products,
+    list_product_providers, list_recent_internal_products,
 )
 
 from app.models import ShopCategory, ShopProduct, BugReport, ProductStockItem, CatalogDisplaySettings
@@ -118,8 +117,7 @@ from app.shop_admin_v20 import (
 )
 from app.shop import (
     shop_main_text, shop_main_keyboard, list_categories, list_products, get_product as get_shop_product,
-    category_text, product_text, products_keyboard, product_keyboard, process_admin_shop_command, sync_products_from_orders,
-    list_proxy_products, list_number_products, special_catalog_text, special_products_keyboard,
+    category_text, product_text, products_keyboard, product_keyboard, process_admin_shop_command,     list_proxy_products, list_number_products, special_catalog_text, special_products_keyboard,
     proxy_categories_text, proxy_categories_keyboard,
     list_proxy_products_by_category, proxy_category_title,
     list_general_products, proxy_main_text, proxy_main_keyboard,
@@ -249,6 +247,7 @@ logger.info("FIX_MARKER_REFERENCE_STYLE_UI=v24 loaded")
 logger.info("FIX_MARKER_REFERENCE_STYLE_UI_FIX=v24.1 loaded")
 logger.info("FIX_MARKER_ADMIN_PRODUCT_SYSTEM=v25 loaded")
 logger.info("FIX_MARKER_CRYPTOPAY_STABLE=v26 loaded")
+logger.info("FIX_MARKER_STANDALONE_STORE=v27 loaded")
 
 def validate_runtime_ui() -> None:
     """
@@ -1144,6 +1143,37 @@ async def process_admin_pending_input(bot: Bot, message: Message, business_conne
 
 
 
+
+def normalize_admin_state(storage: dict, user_id: int, state) -> dict | None:
+    """Convert old tuple states to dict and safely remove invalid values."""
+    if state is None:
+        return None
+    if isinstance(state, dict):
+        state.setdefault("data", {})
+        return state
+    if isinstance(state, tuple):
+        normalized = {
+            "action": state[0] if len(state) > 0 else None,
+            "object_id": state[1] if len(state) > 1 else None,
+            "step": None,
+            "data": {},
+        }
+        storage[user_id] = normalized
+        logger.warning(
+            "LEGACY_ADMIN_STATE_CONVERTED user_id=%s old_state=%r",
+            user_id,
+            state,
+        )
+        return normalized
+    logger.error(
+        "INVALID_ADMIN_STATE_REMOVED user_id=%s state_type=%s state=%r",
+        user_id,
+        type(state).__name__,
+        state,
+    )
+    storage.pop(user_id, None)
+    return None
+
 async def process_catalog_v25_input(
     bot: Bot,
     message: Message,
@@ -1152,7 +1182,11 @@ async def process_catalog_v25_input(
     if not message.from_user:
         return False
     admin_id = message.from_user.id
-    state = CATALOG_V25_STATE.get(admin_id)
+    state = normalize_admin_state(
+        CATALOG_V25_STATE,
+        admin_id,
+        CATALOG_V25_STATE.get(admin_id),
+    )
     if not state:
         return False
 
@@ -1248,10 +1282,10 @@ async def process_catalog_v25_input(
                         await answer_message(bot, message, "Отправьте текст, ссылку, фото, видео или документ.", business_connection_id)
                         return True
 
-                local_admaker_id = -int(datetime.utcnow().timestamp() * 1000000)
+                internal_product_key = int(datetime.utcnow().timestamp() * 1000000)
                 async with SessionLocal() as session:
                     product = ShopProduct(
-                        admaker_product_id=local_admaker_id,
+                        internal_key=internal_product_key,
                         name=data["name"],
                         category_id=data.get("category_id"),
                         product_type=data["product_type"],
@@ -1420,7 +1454,11 @@ async def process_shop_admin_pending_input(
     if not message.from_user:
         return False
     admin_id = message.from_user.id
-    state = SHOP_ADMIN_WAIT.get(admin_id)
+    state = normalize_admin_state(
+        SHOP_ADMIN_WAIT,
+        admin_id,
+        SHOP_ADMIN_WAIT.get(admin_id),
+    )
     if not state:
         return False
     text = (message.text or "").strip()
@@ -1460,8 +1498,8 @@ async def process_shop_admin_pending_input(
                 state["step"] = "currency"
                 await answer_message(bot, message, "📦 Создание товара\n\nШаг 3 из 5. Выберите валюту.", business_connection_id, reply_markup=admin_currency_keyboard())
                 return True
-            if step == "admaker_id":
-                data["admaker_id"] = int(text)
+            if step == "legacy_external_id_disabled":
+                data["internal_key"] = int(text)
                 state["step"] = "category"
                 async with SessionLocal() as session:
                     categories = await all_categories(session)
@@ -1496,7 +1534,7 @@ async def process_shop_admin_pending_input(
             elif action == "product_supplier":
                 row = await session.get(ShopProduct, object_id)
                 supplier_id = int(text)
-                await bind_product_provider(session, row.admaker_product_id, row.name, "supplier", str(supplier_id))
+                await bind_product_provider(session, row.internal_key, row.name, "supplier", str(supplier_id))
                 result = "✅ Поставщик назначен."
             else:
                 return False
@@ -1570,15 +1608,15 @@ async def process_admin_command(bot: Bot, message: Message, business_connection_
             lines = ["🔗 › Поставщики товаров", ""]
             for row in rows:
                 state = "✅" if row.enabled else "⛔"
-                lines.append(f"{state} {row.admaker_product_id} — {row.product_name or 'Товар'} — {row.provider_type}:{row.provider_key or '-'}")
+                lines.append(f"{state} {row.internal_key} — {row.product_name or 'Товар'} — {row.provider_type}:{row.provider_key or '-'}")
             result = "\n".join(lines)
         await answer_message(bot, message, result, business_connection_id)
         return True
 
-    if text == "/admaker_products":
+    if text == "/products":
         async with SessionLocal() as session:
-            rows = await list_recent_admaker_products(session)
-        result = "📦 › Товары Admaker\n\n" + ("\n".join(f"{pid} — {name}" for pid, name in rows) if rows else "Сначала должен прийти хотя бы один оплаченный заказ.")
+            rows = await list_recent_internal_products(session)
+        result = "📦 › Товары внешний магазин\n\n" + ("\n".join(f"{pid} — {name}" for pid, name in rows) if rows else "Сначала должен прийти хотя бы один оплаченный заказ.")
         await answer_message(bot, message, result, business_connection_id)
         return True
 
@@ -1592,9 +1630,9 @@ async def process_admin_command(bot: Bot, message: Message, business_connection_
             await answer_message(bot, message, "PRODUCT_ID должен быть числом.", business_connection_id)
             return True
         async with SessionLocal() as session:
-            recent = dict(await list_recent_admaker_products(session, 100))
+            recent = dict(await list_recent_internal_products(session, 100))
             row = await bind_product_provider(session, product_id, "proxyline", "proxyline", recent.get(product_id))
-        await answer_message(bot, message, f"✅ Товар {row.admaker_product_id} привязан к Proxyline.", business_connection_id)
+        await answer_message(bot, message, f"✅ Товар {row.internal_key} привязан к Proxyline.", business_connection_id)
         return True
 
     if text.startswith("/bind_product_supplier"):
@@ -1607,9 +1645,9 @@ async def process_admin_command(bot: Bot, message: Message, business_connection_
             await answer_message(bot, message, "ID должны быть числами.", business_connection_id)
             return True
         async with SessionLocal() as session:
-            recent = dict(await list_recent_admaker_products(session, 100))
+            recent = dict(await list_recent_internal_products(session, 100))
             row = await bind_product_provider(session, product_id, "supplier", str(supplier_id), recent.get(product_id))
-        await answer_message(bot, message, f"✅ Товар {row.admaker_product_id} привязан к поставщику {supplier_id}.", business_connection_id)
+        await answer_message(bot, message, f"✅ Товар {row.internal_key} привязан к поставщику {supplier_id}.", business_connection_id)
         return True
 
     if text.startswith("/unbind_product"):
@@ -1942,6 +1980,49 @@ async def process_supplier_command(bot: Bot, message: Message, business_connecti
 
 
 
+
+async def standalone_buyer_orders_text(user_id: int) -> str:
+    from app.models import DigitalPurchase
+
+    async with SessionLocal() as session:
+        rows = list((await session.scalars(
+            select(DigitalPurchase)
+            .where(DigitalPurchase.buyer_id == user_id)
+            .order_by(DigitalPurchase.id.desc())
+            .limit(20)
+        )).all())
+        if not rows:
+            return "🧾 Мои заказы\n\nУ вас пока нет заказов."
+
+        product_ids = {row.product_id for row in rows}
+        products = list((await session.scalars(
+            select(ShopProduct).where(ShopProduct.id.in_(product_ids))
+        )).all())
+        product_map = {row.id: row for row in products}
+
+    labels = {
+        "new": "создан",
+        "creating_invoice": "создаётся счёт",
+        "pending_payment": "ожидает оплату",
+        "paid": "оплачен",
+        "delivering": "выдаётся",
+        "delivered": "выдан",
+        "delivery_failed": "ошибка выдачи",
+        "invoice_failed": "ошибка счёта",
+    }
+    lines = ["🧾 Мои заказы", ""]
+    for row in rows:
+        product = product_map.get(row.product_id)
+        lines.extend([
+            f"Заказ #{row.id}",
+            product.name if product else f"Товар #{row.product_id}",
+            f"{row.amount} {row.currency}",
+            f"Статус: {labels.get(row.status, row.status)}",
+            "",
+        ])
+    return "\n".join(lines).strip()
+
+
 async def process_main_reply_button(
     bot: Bot,
     message: Message,
@@ -2001,8 +2082,7 @@ async def process_main_reply_button(
         return True
 
     if text == "🧾 Мои заказы":
-        async with SessionLocal() as session:
-            orders_text = await buyer_orders_text(session, user_id, message.from_user.username, BUYER_ORDERS_LIMIT)
+        orders_text = await standalone_buyer_orders_text(user_id)
         await answer_message(
             bot, message, orders_text, business_connection_id,
             reply_markup=(
@@ -2318,7 +2398,7 @@ async def process_proxyline_order(bot: Bot, order_id: int, business_connection_i
     Автоматическая выдача Proxyline без поставщика.
 
     Поток:
-    Admaker paid -> Order -> Proxyline API -> buyer -> status=code_sent_to_customer.
+    внешний магазин paid -> Order -> Proxyline API -> buyer -> status=code_sent_to_customer.
     Заказ НЕ закрывается сразу: покупатель должен нажать «OK, всё успешно».
     """
     if not PROXYLINE_ENABLED:
@@ -2468,7 +2548,7 @@ async def process_proxyline_order(bot: Bot, order_id: int, business_connection_i
     return False
 
 
-async def process_admaker_message(bot: Bot, message: Message) -> None:
+async def process_legacy_external_shop_message_disabled(bot: Bot, message: Message) -> None:
     text = message.text or ""
     data = extract_purchase_data(text)
 
@@ -2487,7 +2567,7 @@ async def process_admaker_message(bot: Bot, message: Message) -> None:
 
     async with SessionLocal() as session:
         shop_product = await session.scalar(
-            select(ShopProduct).where(ShopProduct.admaker_product_id == order.product_id)
+            select(ShopProduct).where(ShopProduct.internal_key == order.product_id)
         )
         if shop_product and shop_product.price is not None:
             paid_amount = Decimal(str(order.amount or 0))
@@ -2514,7 +2594,7 @@ async def process_admaker_message(bot: Bot, message: Message) -> None:
         explicit_provider = await get_product_provider(session, order.product_id)
         settings = await get_proxy_shop_settings(session)
 
-    # Основной маршрут — только явная привязка по Admaker product_id.
+    # Основной маршрут — только явная привязка по внешний магазин product_id.
     # Legacy-проверка по названию оставлена временно для обратной совместимости.
     route_to_proxyline = bool(
         explicit_provider and explicit_provider.enabled and explicit_provider.provider_type == "proxyline"
@@ -3158,10 +3238,6 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         await process_command_message(bot, message, business_connection_id)
         return
 
-    if username == SHOP_BOT_USERNAME:
-        await process_admaker_message(bot, message)
-        return
-
     if await process_main_reply_button(bot, message, business_connection_id):
         return
 
@@ -3278,7 +3354,11 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data.startswith("v25:type:"):
-        state = CATALOG_V25_STATE.get(callback.from_user.id)
+        state = normalize_admin_state(
+            CATALOG_V25_STATE,
+            callback.from_user.id,
+            CATALOG_V25_STATE.get(callback.from_user.id),
+        )
         if not state or state.get("action") != "product_create":
             await callback.answer("Мастер устарел. Начните заново.", show_alert=True)
             return True
@@ -3295,7 +3375,11 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data.startswith("v25:currency:"):
-        state = CATALOG_V25_STATE.get(callback.from_user.id)
+        state = normalize_admin_state(
+            CATALOG_V25_STATE,
+            callback.from_user.id,
+            CATALOG_V25_STATE.get(callback.from_user.id),
+        )
         if not state:
             await callback.answer("Мастер устарел.", show_alert=True)
             return True
@@ -3325,7 +3409,11 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data == "v25:wizard:back_name":
-        state = CATALOG_V25_STATE.get(callback.from_user.id)
+        state = normalize_admin_state(
+            CATALOG_V25_STATE,
+            callback.from_user.id,
+            CATALOG_V25_STATE.get(callback.from_user.id),
+        )
         if state:
             state["step"] = "name"
         await update_or_send(
@@ -3338,7 +3426,11 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data == "v25:wizard:back_type":
-        state = CATALOG_V25_STATE.get(callback.from_user.id)
+        state = normalize_admin_state(
+            CATALOG_V25_STATE,
+            callback.from_user.id,
+            CATALOG_V25_STATE.get(callback.from_user.id),
+        )
         if state:
             state["step"] = "type"
             await update_or_send(callback, f"📝 Название: {state['data'].get('name','')}\n\nВыберите тип товара:", reply_markup=product_type_keyboard())
@@ -3346,7 +3438,11 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data == "v25:wizard:back_currency":
-        state = CATALOG_V25_STATE.get(callback.from_user.id)
+        state = normalize_admin_state(
+            CATALOG_V25_STATE,
+            callback.from_user.id,
+            CATALOG_V25_STATE.get(callback.from_user.id),
+        )
         if state:
             state["step"] = "currency"
             await update_or_send(callback, "💰 Выберите валюту 👇", reply_markup=catalog_currency_keyboard())
@@ -3354,7 +3450,11 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data == "v25:wizard:back_price":
-        state = CATALOG_V25_STATE.get(callback.from_user.id)
+        state = normalize_admin_state(
+            CATALOG_V25_STATE,
+            callback.from_user.id,
+            CATALOG_V25_STATE.get(callback.from_user.id),
+        )
         if state:
             state["step"] = "price"
             await update_or_send(callback, "Напишите цену товара в чат с ботом.", reply_markup=price_back_keyboard())
@@ -3733,28 +3833,43 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
     if data.startswith("admin:shop:wizard_currency:"):
         currency = data.rsplit(":", 1)[1].upper()
-        state = SHOP_ADMIN_WAIT.get(callback.from_user.id)
+        state = normalize_admin_state(
+            SHOP_ADMIN_WAIT,
+            callback.from_user.id,
+            SHOP_ADMIN_WAIT.get(callback.from_user.id),
+        )
         if not state or state.get("action") != "product_wizard":
             await callback.answer("Мастер устарел", show_alert=True)
             return True
         state.setdefault("data", {})["currency"] = currency
-        state["step"] = "admaker_id"
-        await update_or_send(callback, "📦 Создание товара\n\nШаг 4 из 5. Отправьте Product ID из Admaker.", reply_markup=admin_shop_keyboard())
+        state["data"]["internal_key"] = int(datetime.utcnow().timestamp() * 1000000)
+        state["step"] = "category"
+        async with SessionLocal() as session:
+            categories = await all_categories(session)
+        await update_or_send(
+            callback,
+            "📦 Создание товара\n\nВыберите категорию.",
+            reply_markup=admin_category_select_keyboard(categories),
+        )
         await callback.answer()
         return True
 
     if data.startswith("admin:shop:wizard_category:"):
         category_id = int(data.rsplit(":", 1)[1])
-        state = SHOP_ADMIN_WAIT.get(callback.from_user.id)
+        state = normalize_admin_state(
+            SHOP_ADMIN_WAIT,
+            callback.from_user.id,
+            SHOP_ADMIN_WAIT.get(callback.from_user.id),
+        )
         if not state or state.get("action") != "product_wizard":
             await callback.answer("Мастер устарел", show_alert=True)
             return True
         values = state["data"]
         async with SessionLocal() as session:
-            row = await session.scalar(select(ShopProduct).where(ShopProduct.admaker_product_id == values["admaker_id"]))
+            row = await session.scalar(select(ShopProduct).where(ShopProduct.internal_key == values["internal_key"]))
             if row is None:
                 row = ShopProduct(
-                    admaker_product_id=values["admaker_id"],
+                    internal_key=values["internal_key"],
                     category_id=category_id,
                     name=values["name"],
                     price=Decimal(values["price"]),
@@ -3776,16 +3891,16 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data == "admin:shop":
-        await update_or_send(callback, admin_shop_text(), reply_markup=admin_shop_keyboard())
+        async with SessionLocal() as session:
+            categories, products = await admin_catalog_overview(session)
+        await update_or_send(
+            callback,
+            admin_catalog_text(categories, products),
+            reply_markup=admin_catalog_keyboard(categories, products),
+        )
         await callback.answer()
         return True
 
-    if data == "admin:shop:sync":
-        async with SessionLocal() as session:
-            count = await sync_products_from_orders(session)
-        await callback.answer(f"Добавлено товаров: {count}", show_alert=True)
-        await update_or_send(callback, admin_shop_text(), reply_markup=admin_shop_keyboard())
-        return True
 
     if data == "admin:shop:categories":
         async with SessionLocal() as session:
@@ -3815,7 +3930,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
     if data.startswith("admin:shop:add_product_to:"):
         category_id = int(data.rsplit(":", 1)[1])
-        SHOP_ADMIN_WAIT[callback.from_user.id] = ("add_product_to", category_id)
+        SHOP_ADMIN_WAIT[callback.from_user.id] = {"action": "add_product_to", "object_id": category_id, "step": None, "data": {}}
         await callback.answer()
         await update_or_send(callback, "➕ Товар в категорию\\n\\nФормат:\\nADMAKER_ID | Название | Цена | Валюта", reply_markup=admin_shop_keyboard())
         return True
@@ -3904,13 +4019,12 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
                 await callback.answer("Товар не найден", show_alert=True)
                 return True
             if not product.is_active:
-                provider = await get_product_provider(session, product.admaker_product_id)
+                provider = None
                 missing = []
                 if not product.name: missing.append("название")
                 if product.price is None: missing.append("цена")
                 if not product.currency: missing.append("валюта")
                 if not product.category_id: missing.append("категория")
-                if not provider: missing.append("способ выдачи")
                 if missing:
                     await callback.answer(
                         "Нельзя опубликовать. Не настроено: " + ", ".join(missing),
@@ -3950,7 +4064,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         product_id = int(data.rsplit(":", 1)[1])
         async with SessionLocal() as session:
             product = await session.get(ShopProduct, product_id)
-            await bind_product_provider(session, product.admaker_product_id, product.name, "proxyline", "proxyline")
+            await bind_product_provider(session, product.internal_key, product.name, "proxyline", "proxyline")
             text = await product_admin_text(session, product)
         await update_or_send(callback, text, reply_markup=admin_product_keyboard(product))
         await callback.answer("Автовыдача прокси назначена")
@@ -3967,7 +4081,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         product_id = int(data.rsplit(":", 1)[1])
         async with SessionLocal() as session:
             product = await session.get(ShopProduct, product_id)
-            await unbind_product_provider(session, product.admaker_product_id)
+            await unbind_product_provider(session, product.internal_key)
             text = await product_admin_text(session, product)
         await update_or_send(callback, text, reply_markup=admin_product_keyboard(product))
         await callback.answer("Привязка удалена")
@@ -4004,10 +4118,10 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             rows = await list_product_providers(session)
         if rows:
             text = "🔗 › Привязки товаров\n\n" + "\n".join(
-                f"{'✅' if row.enabled else '⛔'} {row.admaker_product_id} — {row.product_name or 'Товар'} — {row.provider_type}" for row in rows
+                f"{'✅' if row.enabled else '⛔'} {row.internal_key} — {row.product_name or 'Товар'} — {row.provider_type}" for row in rows
             )
         else:
-            text = "🔗 › Привязки товаров\n\nПривязок пока нет. Сначала откройте список товаров Admaker."
+            text = "🔗 › Привязки товаров\n\nПривязок пока нет. Сначала откройте список товаров внешний магазин."
         await update_or_send(callback, text, reply_markup=admin_proxy_products_keyboard())
         await callback.answer()
         return True
@@ -4015,7 +4129,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
     if data == "admin:proxy:products_help":
         text = (
             "🔗 › Привязка товара\n\n"
-            "1. Выполните /admaker_products\n"
+            "1. Выполните /products\n"
             "2. Скопируйте Product ID\n"
             "3. Для Proxyline: /bind_proxyline PRODUCT_ID\n"
             "4. Для поставщика: /bind_product_supplier PRODUCT_ID TELEGRAM_ID\n"
@@ -4768,17 +4882,14 @@ async def handle_buyer_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data == "buyer:orders":
-        async with SessionLocal() as session:
-            orders = await get_buyer_order_rows(session, user_id, username, BUYER_ORDERS_LIMIT)
-
-        if not orders:
-            text = "🧾 Мои заказы\n\nУ вас пока нет заказов."
-            markup = buyer_empty_section_keyboard("buyer:panel")
-        else:
-            text = "🧾 Мои заказы\n\nВыберите заказ кнопкой ниже."
-            markup = buyer_orders_list_keyboard(orders)
-
-        await update_or_send(callback, text, reply_markup=markup)
+        text_value = await standalone_buyer_orders_text(callback.from_user.id)
+        await update_or_send(
+            callback,
+            text_value,
+            reply_markup=buyer_inline_menu_keyboard(
+                is_admin=await is_admin_user(callback.from_user.id)
+            ),
+        )
         await callback.answer()
         return True
 
@@ -5018,7 +5129,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         return
 
     if data == "buyer:noop":
-        await callback.answer("Тариф пока не привязан к товару Admaker.", show_alert=True)
+        await callback.answer("Тариф пока не привязан к товару внешний магазин.", show_alert=True)
         return
 
     if data.startswith("buyer:proxygroup:"):
@@ -5131,7 +5242,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             from app.models import DigitalPurchase
             purchase = await session.get(DigitalPurchase, purchase_id)
             product = await session.get(ShopProduct, purchase.product_id) if purchase else None
-            provider = await get_product_provider(session, product.admaker_product_id) if product else None
+            provider = await get_product_provider(session, product.internal_key) if product else None
         if not product:
             await callback.answer("Товар не найден", show_alert=True)
             return True
@@ -5151,7 +5262,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             return
         async with SessionLocal() as session:
             product = await get_shop_product(session, product_id)
-            provider = await get_product_provider(session, product.admaker_product_id) if product else None
+            provider = await get_product_provider(session, product.internal_key) if product else None
         if not product or not product.is_active:
             await callback.answer("Товар недоступен", show_alert=True)
             return
