@@ -190,6 +190,7 @@ logger.info("FIX_MARKER_SHOP_CATALOG_MERGE=v19 loaded")
 logger.info("FIX_MARKER_SHOP_UI_ADMIN_CATEGORIES=v20 loaded")
 logger.info("FIX_MARKER_SHOP_UI_NAV_FIX=v20.1 loaded")
 logger.info("FIX_MARKER_REPLY_KEYBOARD_ADMIN_ACCESS=v20.2 loaded")
+logger.info("FIX_MARKER_REPLY_KEYBOARD_SCOPE_FIX=v20.3 loaded")
 SHOP_ADMIN_WAIT: dict[int, tuple[str, int | None]] = {}
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
@@ -1323,9 +1324,6 @@ async def process_admin_command(bot: Bot, message: Message, business_connection_
 
 
 async def is_supplier_user(user_id: int) -> bool:
-    if await process_main_reply_button(bot, message, business_connection_id):
-        return
-
     async with SessionLocal() as session:
         from app.models import Supplier
         from sqlalchemy import select
@@ -2639,6 +2637,9 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
 
     if username == SHOP_BOT_USERNAME:
         await process_admaker_message(bot, message)
+        return
+
+    if await process_main_reply_button(bot, message, business_connection_id):
         return
 
     async with SessionLocal() as session:
