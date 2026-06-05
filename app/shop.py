@@ -97,27 +97,25 @@ async def list_proxy_products(session):
 
 
 async def list_number_products(session):
-    """
-    Товары с ручной выдачей через поставщика.
-    Дополнительно подхватываются товары, в названии которых явно есть
-    «номер», «sms» или «phone», даже если привязка ещё не создана.
-    """
-    all_rows = await list_products(session)
-    provider_rows = list((await session.scalars(
-        select(ProductProvider).where(
-            ProductProvider.enabled.is_(True),
-            ProductProvider.provider_type == "supplier",
-        )
+    rows = await list_products(session)
+    providers = list((await session.scalars(
+        select(ProductProvider).where(ProductProvider.enabled.is_(True))
     )).all())
-    supplier_ids = {row.admaker_product_id for row in provider_rows}
-    keywords = ("номер", "sms", "phone", "sim")
-
+    supplier_ids = {row.admaker_product_id for row in providers if row.provider_type == "supplier"}
+    proxy_ids = {row.admaker_product_id for row in providers if row.provider_type in {"proxyline", "proxys"}}
+    number_words = ("номер", "sms", "phone", "sim")
+    proxy_words = ("proxy", "прокси", "mtproxy", "резидент", "rotation", "ротац")
     result = []
-    for row in all_rows:
+    for row in rows:
         name = (row.name or "").lower()
-        if row.admaker_product_id in supplier_ids or any(word in name for word in keywords):
+        if row.admaker_product_id in proxy_ids:
+            continue
+        if any(word in name for word in proxy_words):
+            continue
+        if row.admaker_product_id in supplier_ids or any(word in name for word in number_words):
             result.append(row)
     return result
+
 
 
 
@@ -187,12 +185,9 @@ def proxy_categories_text() -> str:
     )
 
 
-def special_catalog_text(title: str, count: int) -> str:
-    return (
-        f"{title}\n\n"
-        f"Доступно позиций: {count}\n\n"
-        "Выберите товар кнопкой ниже:"
-    )
+def special_catalog_text(title: str, count: int = 0) -> str:
+    return title
+
 
 
 def special_products_keyboard(products, back_callback: str = "buyer:panel") -> InlineKeyboardMarkup:
@@ -212,6 +207,113 @@ def special_products_keyboard(products, back_callback: str = "buyer:panel") -> I
     kb.adjust(1)
     return kb.as_markup()
 
+
+PROXY_PACKAGE_CATEGORIES = {
+    "mtproxy": {
+        "title": "🔐 MTProxy",
+        "provider": "proxyline",
+        "items": [
+            ("mt_1m", "🔑 MTProxy [1 мес.] - 3.1 USD"),
+            ("mt_3m", "🔑 MTProxy [3 мес.] - 9.3 USD"),
+            ("mt_6m", "🔑 MTProxy [6 мес.] - 18.6 USD"),
+            ("mt_9m", "🔑 MTProxy [9 мес.] - 27.90 USD"),
+            ("mt_12m", "🔑 MTProxy [12 мес.] - 37.20 USD"),
+        ],
+    },
+    "premium": {
+        "title": "🏆 PREMIUM",
+        "provider": "proxyline",
+        "items": [
+            ("premium_1m", "🪐 Прокси [1 мес.] - 3.1 USD"),
+            ("premium_3m", "🪐 Прокси [3 мес.] - 9.3 USD"),
+            ("premium_6m", "🪐 Прокси [6 мес.] - 18.6 USD"),
+            ("premium_9m", "🪐 Прокси [9 мес.] - 27.90 USD"),
+            ("premium_12m", "🪐 Прокси [12 мес.] - 37.20 USD"),
+        ],
+    },
+    "standard": {
+        "title": "💯 STANDART",
+        "provider": "proxys",
+        "items": [
+            ("standard_1m", "🎲 Прокси [1 мес.] - 2 USD"),
+            ("standard_2m", "🎲 Прокси [2 мес.] - 2.75 USD"),
+            ("standard_3m", "🎲 Прокси [3 мес.] - 4 USD"),
+        ],
+    },
+    "rotation": {
+        "title": "🌋 ПРОКСИ С РОТАЦИЕЙ",
+        "provider": "proxyline",
+        "items": [
+            ("rotation_1gb", "🌏 Прокси [1 GB] - 14.75 USD"),
+            ("rotation_5gb", "🌏 Прокси [5 GB] - 61.50 USD"),
+            ("rotation_15gb", "🌏 Прокси [15 GB] - 129 USD"),
+        ],
+    },
+}
+
+
+def proxy_main_text() -> str:
+    return "🌐 Прокси"
+
+
+def proxy_main_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for key in ("mtproxy", "premium", "standard", "rotation"):
+        group = PROXY_PACKAGE_CATEGORIES[key]
+        kb.button(text=group["title"], callback_data=f"buyer:proxygroup:{key}", style="primary")
+    kb.button(text="⬅️ Назад", callback_data="buyer:panel", style="danger")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def proxy_group_text(group_key: str) -> str:
+    group = PROXY_PACKAGE_CATEGORIES.get(group_key)
+    return group["title"] if group else "🌐 Прокси"
+
+
+def proxy_group_keyboard(group_key: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    group = PROXY_PACKAGE_CATEGORIES.get(group_key)
+    if group:
+        for package_key, label in group["items"]:
+            kb.button(text=label, callback_data=f"buyer:proxypackage:{group_key}:{package_key}", style="primary")
+    kb.button(text="⬅️ Назад", callback_data="buyer:proxy_catalog", style="danger")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def get_proxy_package(group_key: str, package_key: str):
+    group = PROXY_PACKAGE_CATEGORIES.get(group_key)
+    if not group:
+        return None
+    for key, label in group["items"]:
+        if key == package_key:
+            return {"key": key, "label": label, "provider": group["provider"], "group": group_key}
+    return None
+
+
+def proxy_package_keyboard(group_key: str, shop_username: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    if shop_username:
+        kb.button(text="✅ Купить", url=f"https://t.me/{shop_username.lstrip('@')}", style="success")
+    kb.button(text="⬅️ Назад", callback_data=f"buyer:proxygroup:{group_key}", style="danger")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+async def list_general_products(session, category_id: int | None = None):
+    rows = await list_products(session, category_id)
+    providers = list((await session.scalars(
+        select(ProductProvider).where(ProductProvider.enabled.is_(True))
+    )).all())
+    proxy_ids = {row.admaker_product_id for row in providers if row.provider_type in {"proxyline", "proxys"}}
+    proxy_words = ("proxy", "прокси", "mtproxy", "резидент", "rotation", "ротац")
+    return [
+        row for row in rows
+        if row.admaker_product_id not in proxy_ids
+        and not any(word in (row.name or "").lower() for word in proxy_words)
+    ]
+
 def shop_main_text() -> str:
     return (
         "🛍 Магазин\n\n"
@@ -219,28 +321,18 @@ def shop_main_text() -> str:
     )
 
 
-def category_text(category: ShopCategory, count: int) -> str:
-    description = getattr(category, "description", None) or "Не установлено"
-    return (
-        f"🏷 Категория: {category.emoji} {category.name}\n\n"
-        "📝 Описание:\n"
-        f"{description}\n\n"
-        "📦 Содержимое категории:\n"
-        f"├ Тарифы и услуги — {count}\n"
-        "└ Подкатегории — 0\n\n"
-        "Выберите товар:"
-    )
+def category_text(category: ShopCategory, count: int = 0) -> str:
+    description = getattr(category, "description", None)
+    if description:
+        return f"{category.emoji} {category.name}\n\n{description}"
+    return f"{category.emoji} {category.name}"
+
 
 
 def product_text(product: ShopProduct, provider_type: str | None = None) -> str:
-    provider = "Автоматическая выдача Proxyline" if provider_type == "proxyline" else "Выдача через поставщика"
-    return (
-        f"📦 › {product.name}\n\n"
-        f"{product.description or 'Описание пока не добавлено.'}\n\n"
-        f"Цена: {money(product.price, product.currency)}\n"
-        f"├ ID товара Admaker — {product.admaker_product_id}\n"
-        f"└ Получение — {provider}"
-    )
+    description = product.description or ""
+    return f"{product.name}\n\n{description}\n\n{money(product.price, product.currency)}".strip()
+
 
 
 def shop_main_keyboard(categories) -> InlineKeyboardMarkup:

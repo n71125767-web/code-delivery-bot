@@ -681,17 +681,16 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def buyer_inline_menu_keyboard() -> InlineKeyboardMarkup:
-    """Inline-главная для Telegram Business и динамических сообщений."""
+def buyer_inline_menu_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="🛒 › Товары", callback_data="buyer:shop", style="primary")
-    kb.button(text="🌐 › Прокси", callback_data="buyer:proxy_catalog", style="primary")
-    kb.button(text="📱 › Номера", callback_data="buyer:number_catalog", style="primary")
-    kb.button(text="📦 › Активный заказ", callback_data="buyer:active")
-    kb.button(text="🧾 › Мои заказы", callback_data="buyer:orders")
-    kb.button(text="👤 › Профиль", callback_data="buyer:profile")
+    kb.button(text="🛒 Товары", callback_data="buyer:shop", style="primary")
+    kb.button(text="✉️ Обратная связь", callback_data="buyer:feedback", style="primary")
+    kb.button(text="📕 FAQ", callback_data="buyer:faq", style="primary")
+    if is_admin:
+        kb.button(text="⚙️ Админ меню", callback_data="admin:panel", style="primary")
     kb.adjust(1)
     return kb.as_markup()
+
 
 
 # Shop UI navigation fix v20.1
@@ -707,22 +706,13 @@ def buyer_back_to_panel_keyboard() -> InlineKeyboardMarkup:
 
 # Main sections reply keyboard v20.4
 def buyer_main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
-    """
-    Постоянное главное меню под полем ввода.
-
-    Кнопка админки добавляется только после серверной проверки прав.
-    """
     rows = [
-        [
-            KeyboardButton(text="🛒 Товары"),
-            KeyboardButton(text="🌐 Прокси"),
-        ],
+        [KeyboardButton(text="🛒 Товар")],
+        [KeyboardButton(text="🌐 Прокси")],
         [KeyboardButton(text="📱 Номера")],
     ]
-
     if is_admin:
         rows.append([KeyboardButton(text="⚙️ Админ меню")])
-
     return ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,
@@ -730,3 +720,23 @@ def buyer_main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
         input_field_placeholder="Выберите раздел",
         selective=True,
     )
+
+
+
+def admin_currency_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for code in ("USD", "RUB", "EUR", "USDT"):
+        kb.button(text=code, callback_data=f"admin:shop:wizard_currency:{code}", style="primary")
+    kb.button(text="❌ Отмена", callback_data="admin:shop:wizard_cancel", style="danger")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+def admin_category_select_keyboard(categories) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for row in categories:
+        kb.button(text=f"{row.emoji} {row.name}", callback_data=f"admin:shop:wizard_category:{row.id}", style="primary")
+    kb.button(text="➕ Новая категория", callback_data="admin:shop:add_category", style="success")
+    kb.button(text="❌ Отмена", callback_data="admin:shop:wizard_cancel", style="danger")
+    kb.adjust(1)
+    return kb.as_markup()
