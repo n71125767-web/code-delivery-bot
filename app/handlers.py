@@ -161,6 +161,8 @@ logger = logging.getLogger(__name__)
 logger.info("FIX_MARKER_FULL_VISUAL_SHOP_STYLE=v15 loaded")
 logger.info("FIX_MARKER_PROXYLINE_ADMIN_BUYER_SELECT=v17 loaded")
 logger.info("FIX_MARKER_RELEASE_REBUILD=v18 loaded")
+logger.info("FIX_MARKER_PROXY_BOT_ONLY_SUPPLIER_NO_COOLDOWN=v18.2 loaded")
+logger.info("FIX_MARKER_DELIVERY_COMMIT_AFTER_SEND=v18.3 loaded")
 
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
@@ -1571,8 +1573,11 @@ async def show_proxy_country_selection(bot: Bot, order_id: int, business_connect
         settings = await get_proxy_shop_settings(session)
         if not order or not settings.enabled:
             return False
-        target_chat_id = order.buyer_chat_id or order.customer_telegram_id
-        target_business_id = order.business_connection_id or business_connection_id or ADMIN_BUSINESS_CONNECTION_ID
+        # Proxyline работает только в обычном чате с ботом.
+        # Telegram ID покупателя одновременно является chat_id после /start.
+        target_chat_id = order.customer_telegram_id or order.buyer_chat_id
+        order.buyer_chat_id = target_chat_id
+        order.business_connection_id = None
         order.status = "waiting_proxy_country"
         order.service_name = selection_dump()
         order.updated_at = datetime.utcnow()
@@ -1583,7 +1588,7 @@ async def show_proxy_country_selection(bot: Bot, order_id: int, business_connect
         bot,
         target_chat_id,
         "🌍 › Выбор страны\n\nВыберите страну, в которой должен находиться прокси.",
-        business_connection_id=target_business_id,
+        business_connection_id=None,
         reply_markup=buyer_proxy_country_keyboard(order_id, settings.countries, SUPPORTED_COUNTRIES),
     )
 
@@ -1662,14 +1667,15 @@ async def process_proxyline_order(bot: Bot, order_id: int, business_connection_i
             await notify_admins(bot, f"Proxyline: нет buyer_chat_id/customer_telegram_id для заказа #{order.operation_id}.")
             return False
 
-        if business_connection_id and not order.business_connection_id:
-            order.business_connection_id = business_connection_id
-            await session.commit()
+        # Proxyline выдаётся только в обычном чате с ботом.
+        target_chat_id = order.customer_telegram_id or order.buyer_chat_id
+        order.buyer_chat_id = target_chat_id
+        order.business_connection_id = None
+        await session.commit()
 
         order_operation_id = order.operation_id
         order_product_name = order.product_name
-        target_chat_id = order.buyer_chat_id or order.customer_telegram_id
-        target_business_id = order.business_connection_id or business_connection_id or ADMIN_BUSINESS_CONNECTION_ID
+        target_business_id = None
 
     if not PROXYLINE_API_KEY:
         async with SessionLocal() as session:
@@ -1801,6 +1807,9 @@ async def process_admaker_message(bot: Bot, message: Message) -> None:
             if db_order:
                 db_order.status = "waiting_proxy_country" if settings.enabled else "problem"
                 db_order.service_name = selection_dump()
+                # Proxyline flow is strictly in the normal bot chat.
+                db_order.buyer_chat_id = db_order.customer_telegram_id or db_order.buyer_chat_id
+                db_order.business_connection_id = None
                 db_order.updated_at = datetime.utcnow()
                 await session.commit()
         await notify_admins(
@@ -1813,7 +1822,16 @@ async def process_admaker_message(bot: Bot, message: Message) -> None:
             + f"Товар: {order.product_name}",
         )
         if settings.enabled:
-            await show_proxy_country_selection(bot, order.id, current_business_id)
+            sent = await show_proxy_country_selection(bot, order.id, None)
+            if not sent:
+                await notify_admins(
+                    bot,
+                    "⚠️ Proxyline: не удалось открыть выбор в обычном боте.\n\n"
+                    f"Заказ: #{order.operation_id}\n"
+                    f"Покупатель ID: {order.customer_telegram_id}\n\n"
+                    "Покупатель должен открыть обычный чат с ботом и нажать /start. "
+                    "Заказ сохранён и продолжится после /start.",
+                )
         return
 
     await notify_admins(
@@ -2013,21 +2031,43 @@ async def handle_buyer_message(bot: Bot, message: Message, business_connection_i
     async with SessionLocal() as session:
         active_order = await find_active_order_for_customer(session, user_id, username)
         if active_order and active_order.status.startswith("waiting_proxy"):
-            active_order.buyer_chat_id = message.chat.id
-            active_order.customer_telegram_id = user_id
+            # Выбор и выдача Proxyline выполняются только в обычном чате с ботом.
             if business_connection_id:
-                active_order.business_connection_id = business_connection_id
-            await session.commit()
-            settings = await get_proxy_shop_settings(session)
-            status = active_order.status
-            order_id = active_order.id
-            country, period = selection_load(active_order.service_name)
+                settings = None
+                status = "proxy_business_redirect"
+                order_id = active_order.id
+                country, period = selection_load(active_order.service_name)
+            else:
+                active_order.buyer_chat_id = message.chat.id
+                active_order.customer_telegram_id = user_id
+                active_order.business_connection_id = None
+                await session.commit()
+                settings = await get_proxy_shop_settings(session)
+                status = active_order.status
+                order_id = active_order.id
+                country, period = selection_load(active_order.service_name)
         else:
             status = None
             order_id = None
             country = None
             period = None
             settings = None
+
+    if order_id and status == "proxy_business_redirect":
+        try:
+            me = await bot.get_me()
+            bot_link = f"@{me.username}" if me.username else "обычный чат с ботом"
+        except Exception:
+            bot_link = "обычный чат с ботом"
+        await temp_answer(
+            bot,
+            message,
+            "🌐 › Выдача прокси\n\n"
+            f"Страну, срок и получение прокси нужно выполнить в {bot_link}.\n"
+            "Откройте бота и нажмите /start.",
+            business_connection_id,
+        )
+        return
 
     if order_id and status == "waiting_proxy_country":
         await send_buyer_role_panel(bot, message.chat.id, "🌍 › Выбор страны\n\nВыберите страну, в которой должен находиться прокси.", business_connection_id=business_connection_id, reply_markup=buyer_proxy_country_keyboard(order_id, settings.countries, SUPPORTED_COUNTRIES))
@@ -2103,34 +2143,71 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
                 await answer_message(bot, message, "Заказ уже закрыт.", business_connection_id)
                 return
 
+            # Сохраняем номер, но статус меняем только после реальной доставки.
             order.phone_number = phone
+            order.updated_at = datetime.utcnow()
+            await session.commit()
+            await session.refresh(order)
+
+            target_chat_id = order.buyer_chat_id or order.customer_telegram_id
+            target_business_id = order.business_connection_id
+
+            ok = False
+            if target_chat_id and target_business_id:
+                ok = bool(await safe_send_message(
+                    bot,
+                    target_chat_id,
+                    phone,
+                    business_connection_id=target_business_id,
+                    reply_markup=number_keyboard(order.id),
+                    allow_normal_fallback=False,
+                ))
+
+            if not ok and order.customer_telegram_id:
+                normal_sent = await safe_send_message(
+                    bot,
+                    order.customer_telegram_id,
+                    phone,
+                    business_connection_id=None,
+                    reply_markup=number_keyboard(order.id),
+                    allow_normal_fallback=True,
+                )
+                ok = bool(normal_sent)
+
+            if not ok:
+                order.status = "waiting_supplier_number"
+                order.updated_at = datetime.utcnow()
+                await session.commit()
+                await answer_message(
+                    bot, message,
+                    "Номер сохранён, но Telegram не доставил его покупателю. "
+                    "Заявка оставлена в разделе «Ждут номер» — попробуйте повторно.",
+                    business_connection_id,
+                )
+                await notify_admins(
+                    bot,
+                    "⚠️ Не удалось доставить номер покупателю.\n"
+                    f"Заказ: #{order.operation_id}\n"
+                    f"buyer_chat_id: {order.buyer_chat_id}\n"
+                    f"customer_telegram_id: {order.customer_telegram_id}\n"
+                    f"buyer_business_connection_id: {target_business_id or 'нет'}",
+                )
+                logger.error(
+                    "BUYER_NUMBER_DELIVERY_FAILED order_id=%s buyer_chat_id=%s customer_id=%s business_id=%s",
+                    order.id, order.buyer_chat_id, order.customer_telegram_id, target_business_id,
+                )
+                return
+
             order.status = "number_sent_to_customer"
             order.updated_at = datetime.utcnow()
             number_request.status = "answered"
             number_request.answered_at = datetime.utcnow()
             await session.commit()
             await session.refresh(order)
-
-            target_chat_id = order.buyer_chat_id or order.customer_telegram_id
-            target_business_id = order.business_connection_id or business_connection_id or ADMIN_BUSINESS_CONNECTION_ID
-
-            ok = False
-            if target_chat_id:
-                ok = await safe_send_message(
-                    bot,
-                    target_chat_id,
-                    phone,
-                    business_connection_id=target_business_id,
-                    reply_markup=number_keyboard(order.id),
-                )
-
-            if not ok:
-                await answer_message(bot, message, "Номер принят, но не смог отправить покупателю.", business_connection_id)
-                await notify_admins(
-                    bot,
-                    f"Не смог отправить номер покупателю.\nЗаказ #{order.operation_id}\nbusiness_connection_id: {target_business_id}",
-                )
-                return
+            logger.info(
+                "BUYER_NUMBER_DELIVERY_OK order_id=%s buyer_chat_id=%s",
+                order.id, target_chat_id,
+            )
 
             sent = await send_supplier_role_panel(bot, message.chat.id, "OK. Номер отправлен покупателю.", reply_markup=supplier_inline_menu_keyboard(), business_connection_id=business_connection_id)
             try:
@@ -2166,41 +2243,86 @@ async def handle_supplier_message(bot: Bot, message: Message, business_connectio
                 await answer_message(bot, message, "Заказ уже закрыт.", business_connection_id)
                 return
 
+            # Сохраняем код, но НЕ меняем статус заявки до подтверждённой доставки.
+            # Раньше статус code_sent_to_customer выставлялся заранее, поэтому при ошибке
+            # Telegram заявка исчезала у поставщика, хотя покупатель ничего не получил.
             order.verification_code = code
-            # НЕ закрываем заказ после кода от поставщика.
-            # Это состояние означает: код отправлен покупателю, ждём кнопку «OK, всё успешно»
-            # или «Код не работает».
+            order.updated_at = datetime.utcnow()
+            await session.commit()
+            await session.refresh(order)
+
+            target_chat_id = order.buyer_chat_id or order.customer_telegram_id
+            # Используем только Business-соединение покупателя. Нельзя подставлять
+            # соединение текущего поставщика — это может направить сообщение не туда.
+            target_business_id = order.business_connection_id
+
+            delivery_text = (
+                f"🔑 Код по заказу #{order.operation_id}:\n\n"
+                f"{code}\n\n"
+                "Проверьте код и подтвердите результат кнопкой ниже."
+            )
+
+            ok = False
+            if target_chat_id and target_business_id:
+                ok = bool(await send_buyer_role_panel(
+                    bot,
+                    target_chat_id,
+                    delivery_text,
+                    business_connection_id=target_business_id,
+                    reply_markup=confirm_keyboard(order.id),
+                ))
+
+            # Резервная доставка в обычный чат с ботом. Она сработает только если
+            # покупатель ранее нажал /start. Это безопаснее, чем терять код.
+            if not ok and order.customer_telegram_id:
+                normal_sent = await safe_send_message(
+                    bot,
+                    order.customer_telegram_id,
+                    delivery_text,
+                    business_connection_id=None,
+                    reply_markup=confirm_keyboard(order.id),
+                    allow_normal_fallback=True,
+                )
+                ok = bool(normal_sent)
+
+            if not ok:
+                # Оставляем статус waiting_supplier_code и активный запрос.
+                # Поставщик сможет повторить отправку, код при этом сохранён в заказе.
+                order.status = "waiting_supplier_code"
+                order.updated_at = datetime.utcnow()
+                await session.commit()
+                await answer_message(
+                    bot,
+                    message,
+                    "Код сохранён, но Telegram не доставил его покупателю. "
+                    "Заявка оставлена в разделе «Ждут код» — попробуйте повторно.",
+                    business_connection_id,
+                )
+                await notify_admins(
+                    bot,
+                    "⚠️ Не удалось доставить код покупателю.\n"
+                    f"Заказ: #{order.operation_id}\n"
+                    f"buyer_chat_id: {order.buyer_chat_id}\n"
+                    f"customer_telegram_id: {order.customer_telegram_id}\n"
+                    f"buyer_business_connection_id: {target_business_id or 'нет'}",
+                )
+                logger.error(
+                    "BUYER_CODE_DELIVERY_FAILED order_id=%s buyer_chat_id=%s customer_id=%s business_id=%s",
+                    order.id, order.buyer_chat_id, order.customer_telegram_id, target_business_id,
+                )
+                return
+
+            # Только после фактической доставки меняем статус и закрываем запрос кода.
             order.status = "code_sent_to_customer"
             order.updated_at = datetime.utcnow()
             await mark_code_waiting_buyer_confirm(session, code_request.id)
             await session.commit()
             await session.refresh(order)
             await session.refresh(code_request)
-
-            target_chat_id = order.buyer_chat_id or order.customer_telegram_id
-            target_business_id = order.business_connection_id or business_connection_id or ADMIN_BUSINESS_CONNECTION_ID
-
-            ok = False
-            if target_chat_id:
-                ok = await send_buyer_role_panel(
-                    bot,
-                    target_chat_id,
-                    (
-                        f"🔑 Код по заказу #{order.operation_id}:\n\n"
-                        f"{code}\n\n"
-                        "Проверьте код и подтвердите результат кнопкой ниже."
-                    ),
-                    business_connection_id=target_business_id,
-                    reply_markup=confirm_keyboard(order.id),
-                )
-
-            if not ok:
-                await answer_message(bot, message, "Код принят, но не смог отправить покупателю.", business_connection_id)
-                await notify_admins(
-                    bot,
-                    f"Не смог отправить код покупателю.\nЗаказ #{order.operation_id}\nbusiness_connection_id: {target_business_id}",
-                )
-                return
+            logger.info(
+                "BUYER_CODE_DELIVERY_OK order_id=%s buyer_chat_id=%s normal_fallback=%s",
+                order.id, target_chat_id, not bool(target_business_id),
+            )
 
             sent = await send_supplier_role_panel(
                 bot,
@@ -3325,8 +3447,9 @@ async def check_button_cooldown(callback: CallbackQuery, action: str) -> bool:
 async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
     data = callback.data or ""
 
-    # BUTTON_COOLDOWN_APPLIED
-    if data and not data.startswith("admin:"):
+    # Админы и поставщики работают без cooldown на inline-кнопках.
+    # Для покупателя защита от случайного многократного нажатия сохраняется.
+    if data and not data.startswith(("admin:", "supplier:")):
         if not await check_button_cooldown(callback, data.split(":")[0]):
             return
 
