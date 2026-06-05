@@ -425,16 +425,23 @@ def shop_main_keyboard(categories) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def products_keyboard(products, category_id: int) -> InlineKeyboardMarkup:
+def products_keyboard(
+    products,
+    category_id: int,
+    columns_count: int = 1,
+) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for row in products:
         kb.button(
             text=f"📦 {row.name} — {money(row.price, row.currency)}",
             callback_data=f"buyer:shopproduct:{row.id}",
         )
+    if not products:
+        kb.button(text="Товаров пока нет", callback_data="buyer:noop")
     kb.button(text="⬅️ Назад", callback_data="buyer:shop", style="danger")
-    kb.adjust(1)
+    kb.adjust(max(1, min(int(columns_count or 1), 3)))
     return kb.as_markup()
+
 
 
 

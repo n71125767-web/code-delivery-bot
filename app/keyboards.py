@@ -667,18 +667,17 @@ def admin_proxy_settings_keyboard(settings) -> InlineKeyboardMarkup:
 # Shop UI/admin v20 overrides
 def admin_panel_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="💰 Управление товарами", callback_data="admin:shop")
-    kb.button(text="💳 Способы оплаты", callback_data="admin:settings")
-    kb.button(text="📊 Заказы и оплаты", callback_data="admin:last_orders")
+    kb.button(text="💰 Управление товарами", callback_data="v25:catalog")
+    kb.button(text="🪙 Способы оплаты", callback_data="admin:payment_methods")
+    kb.button(text="📊 Оплата", callback_data="admin:payments")
     kb.button(text="📢 Рассылка", callback_data="admin:broadcast")
-    kb.button(text="🚚 Поставщики", callback_data="admin:suppliers")
-    kb.button(text="🌐 Прокси", callback_data="admin:proxy")
+    kb.button(text="⚙️ Настройки", callback_data="admin:store_settings")
     kb.button(text="👮 Администраторы", callback_data="admin:admins")
     kb.button(text="⚠️ Проблемы", callback_data="admin:problems")
-    kb.button(text="⚙️ Настройки", callback_data="admin:settings")
     kb.button(text="🏠 Главное меню", callback_data="buyer:panel")
     kb.adjust(2)
     return kb.as_markup()
+
 
 
 
@@ -721,6 +720,10 @@ def buyer_main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     ]
     if is_admin:
         rows.append([KeyboardButton(text="💰 Управление товарами")])
+        rows.append([
+            KeyboardButton(text="💳 Оплата"),
+            KeyboardButton(text="📢 Рассылка"),
+        ])
         rows.append([KeyboardButton(text="⚙️ Админ меню")])
     return ReplyKeyboardMarkup(
         keyboard=rows,
@@ -729,6 +732,7 @@ def buyer_main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
         input_field_placeholder="Выберите раздел",
         selective=True,
     )
+
 
 
 

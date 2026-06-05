@@ -157,6 +157,15 @@ from app.cryptopay_service import (
 )
 from app.payment_keyboards import invoice_keyboard, payment_result_keyboard
 
+from app.admin_reference_v28 import (
+    broadcast_preview_keyboard,
+    payment_methods_keyboard,
+    payment_methods_text,
+    payments_keyboard,
+    payments_text,
+    store_settings_keyboard,
+)
+
 from app.services import (
     create_or_update_order_from_purchase,
     find_active_order_for_customer,
@@ -248,6 +257,7 @@ logger.info("FIX_MARKER_REFERENCE_STYLE_UI_FIX=v24.1 loaded")
 logger.info("FIX_MARKER_ADMIN_PRODUCT_SYSTEM=v25 loaded")
 logger.info("FIX_MARKER_CRYPTOPAY_STABLE=v26 loaded")
 logger.info("FIX_MARKER_STANDALONE_STORE=v27 loaded")
+logger.info("FIX_MARKER_MCS_REFERENCE=v28 loaded")
 
 def validate_runtime_ui() -> None:
     """
@@ -387,6 +397,7 @@ validate_runtime_ui()
 
 SHOP_ADMIN_WAIT: dict[int, dict] = {}
 CATALOG_V25_STATE: dict[int, dict] = {}
+ADMIN_BROADCAST_V28: dict[int, dict] = {}
 BUYER_FEEDBACK_WAIT: set[int] = set()
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
@@ -1173,6 +1184,40 @@ def normalize_admin_state(storage: dict, user_id: int, state) -> dict | None:
     )
     storage.pop(user_id, None)
     return None
+
+
+async def process_broadcast_v28_input(
+    bot: Bot,
+    message: Message,
+    business_connection_id: str | None,
+) -> bool:
+    if not message.from_user:
+        return False
+    state = ADMIN_BROADCAST_V28.get(message.from_user.id)
+    if not state:
+        return False
+
+    text = (message.text or message.caption or "").strip()
+    if not text:
+        await answer_message(
+            bot,
+            message,
+            "Для рассылки отправьте текстовое сообщение.",
+            business_connection_id,
+        )
+        return True
+
+    state["text"] = text
+    state["step"] = "confirm"
+    await answer_message(
+        bot,
+        message,
+        "📢 Предварительный просмотр рассылки\\n\\n" + text,
+        business_connection_id,
+        reply_markup=broadcast_preview_keyboard(),
+    )
+    return True
+
 
 async def process_catalog_v25_input(
     bot: Bot,
@@ -2123,6 +2168,36 @@ async def process_main_reply_button(
                 if is_business_context
                 else buyer_main_reply_keyboard(is_admin=admin_access)
             ),
+        )
+        return True
+
+    if text == "💳 Оплата":
+        if not admin_access:
+            await answer_message(bot, message, "У вас нет доступа.", business_connection_id)
+            return True
+        async with SessionLocal() as session:
+            text_value = await payments_text(session)
+        await answer_message(
+            bot,
+            message,
+            text_value,
+            business_connection_id,
+            reply_markup=payments_keyboard(),
+        )
+        return True
+
+    if text == "📢 Рассылка":
+        if not admin_access:
+            await answer_message(bot, message, "У вас нет доступа.", business_connection_id)
+            return True
+        ADMIN_BROADCAST_V28[user_id] = {"step": "content"}
+        await answer_message(
+            bot,
+            message,
+            "📢 Создание рассылки\n\n"
+            "Отправьте текст сообщения для рассылки.\n"
+            "После этого откроется предварительный просмотр.",
+            business_connection_id,
         )
         return True
 
@@ -3216,6 +3291,8 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
     if await is_admin_user(user_id) and not text.startswith("/"):
         # Сначала обрабатываем ввод, который ожидает админка:
         # ID нового администратора, цену, название товара и т.д.
+        if await process_broadcast_v28_input(bot, message, business_connection_id):
+            return
         if await process_catalog_v25_input(bot, message, business_connection_id):
             return
         if await process_shop_admin_pending_input(bot, message, business_connection_id):
@@ -4455,6 +4532,114 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         await callback.answer()
         return True
 
+    if data == "admin:payment_methods":
+        await update_or_send(
+            callback,
+            payment_methods_text(),
+            reply_markup=payment_methods_keyboard(),
+        )
+        await callback.answer()
+        return True
+
+    if data == "admin:payments":
+        async with SessionLocal() as session:
+            text_value = await payments_text(session)
+        await update_or_send(
+            callback,
+            text_value,
+            reply_markup=payments_keyboard(),
+        )
+        await callback.answer()
+        return True
+
+    if data == "admin:store_settings":
+        await update_or_send(
+            callback,
+            "⚙️ Настройки магазина\n\nВыберите нужный раздел.",
+            reply_markup=store_settings_keyboard(),
+        )
+        await callback.answer()
+        return True
+
+    if data == "admin:broadcast":
+        ADMIN_BROADCAST_V28[callback.from_user.id] = {"step": "content"}
+        await update_or_send(
+            callback,
+            "📢 Создание рассылки\n\n"
+            "Отправьте текст сообщения в чат с ботом.\n"
+            "После этого откроется предварительный просмотр.",
+            reply_markup=admin_back_keyboard(),
+        )
+        await callback.answer()
+        return True
+
+    if data == "v28:broadcast_confirm":
+        state = ADMIN_BROADCAST_V28.get(callback.from_user.id)
+        if not state or not state.get("text"):
+            await callback.answer("Текст рассылки не найден.", show_alert=True)
+            return True
+
+        broadcast_text = state["text"]
+        async with SessionLocal() as session:
+            from app.models import DigitalPurchase, Order
+            digital_ids = set((await session.scalars(
+                select(DigitalPurchase.buyer_id).distinct()
+            )).all())
+            old_ids = set((await session.scalars(
+                select(Order.customer_telegram_id)
+                .where(Order.customer_telegram_id.is_not(None))
+                .distinct()
+            )).all())
+            recipients = {
+                int(user_id)
+                for user_id in digital_ids | old_ids
+                if user_id
+            }
+
+        sent = 0
+        failed = 0
+        for recipient_id in recipients:
+            try:
+                await bot.send_message(recipient_id, broadcast_text)
+                sent += 1
+            except Exception:
+                failed += 1
+
+        ADMIN_BROADCAST_V28.pop(callback.from_user.id, None)
+        await update_or_send(
+            callback,
+            "📢 Рассылка завершена\n\n"
+            f"Получателей: {len(recipients)}\n"
+            f"Отправлено: {sent}\n"
+            f"Ошибок: {failed}",
+            reply_markup=admin_panel_keyboard(),
+        )
+        await callback.answer("Рассылка завершена")
+        return True
+
+    if data == "v28:uncategorized":
+        async with SessionLocal() as session:
+            products = list((await session.scalars(
+                select(ShopProduct)
+                .where(ShopProduct.category_id.is_(None))
+                .order_by(ShopProduct.sort_order, ShopProduct.id)
+            )).all())
+        kb = InlineKeyboardBuilder()
+        for product in products:
+            kb.button(
+                text=f"{'🟢' if product.is_active else '⚪'} {product.name}",
+                callback_data=f"v25:product:{product.id}",
+            )
+        kb.button(text="⬅️ Назад", callback_data="v25:catalog", style="danger")
+        kb.adjust(1)
+        await update_or_send(
+            callback,
+            "📁 Товары без категории",
+            reply_markup=kb.as_markup(),
+        )
+        await callback.answer()
+        return True
+
     if data == "admin:suppliers":
         await update_or_send(callback, "🚚 Поставщики\n\nВыберите действие:", reply_markup=admin_suppliers_keyboard())
         await callback.answer()
@@ -5188,7 +5373,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         if not category:
             await callback.answer("Категория не найдена", show_alert=True)
             return
-        await update_or_send(callback, category_text(category, len(products)), reply_markup=products_keyboard(products, category_id))
+        await update_or_send(callback, category_text(category, len(products)), reply_markup=products_keyboard(products, category_id, display_settings.columns_count))
         await callback.answer()
         return
 
@@ -5573,10 +5758,10 @@ logger.info("FIX_MARKER_FULL_VISUAL_SHOP_STYLE=v15 loaded")
 
 def admin_panel_text() -> str:
     return (
-        "⚙️ › Админ-панель\n\n"
-        "Здесь вы можете управлять магазином, поставщиками, заказами, сервисами и текстами.\n\n"
-        "Выберите раздел"
+        "⚙️ Админ меню\n\n"
+        "Управляйте товарами, оплатами, настройками и рассылками."
     )
+
 
 
 def supplier_empty_panel_text() -> str:

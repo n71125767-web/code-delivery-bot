@@ -36,41 +36,46 @@ async def category_counts(session, category_id: int) -> tuple[int, int]:
 
 def customer_home_text() -> str:
     return (
-        "🛍 MCS Shop\n\n"
-        "Выберите категорию или нужный раздел."
+        "🛍 Добро пожаловать в MCS Shop\n\n"
+        "Выберите нужный раздел или категорию из списка ниже 👇"
     )
 
 
 
 
-def customer_home_keyboard(categories, is_admin: bool = False) -> InlineKeyboardMarkup:
+
+def customer_home_keyboard(
+    categories,
+    is_admin: bool = False,
+    columns_count: int = 1,
+) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    visible = []
     for row in categories:
         if row.name.strip().lower() in {"все товары", "товары"}:
             continue
         if not row.is_active:
             continue
+        visible.append(row)
         kb.button(
             text=f"{row.emoji} {row.name}",
             callback_data=f"buyer:shopcat:{row.id}",
-            style="primary",
         )
-    kb.adjust(1)
+
+    if not visible:
+        kb.button(text="Товары временно отсутствуют", callback_data="buyer:noop")
+
+    kb.adjust(max(1, min(int(columns_count or 1), 3)))
     return kb.as_markup()
 
 
 
+
 def category_customer_text(category, product_count: int, subcategory_count: int = 0) -> str:
-    description = getattr(category, "description", None) or "Не установлено"
-    return (
-        f"🏷 Категория: {category.emoji} {category.name}\n\n"
-        "📝 Описание:\n"
-        f"{description}\n\n"
-        "📦 Содержимое категории:\n"
-        f"├ Тарифы и услуги — {product_count}\n"
-        f"└ Подкатегории — {subcategory_count}\n\n"
-        "Выберите товар:"
-    )
+    if category.description:
+        return f"{category.emoji} {category.name}\n\n{category.description}\n\nВыберите товар 👇"
+    return f"{category.emoji} {category.name}\n\nВыберите товар 👇"
+
 
 
 def admin_shop_text() -> str:
