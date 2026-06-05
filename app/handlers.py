@@ -5,6 +5,7 @@ import re
 from datetime import datetime
 
 import aiohttp
+from sqlalchemy import select, func
 
 from aiogram import Bot
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
@@ -101,7 +102,7 @@ from app.repositories.product_providers import (
     list_product_providers, list_recent_admaker_products,
 )
 
-from app.models import ShopCategory, ShopProduct, BugReport
+from app.models import ShopCategory, ShopProduct, BugReport, ProductStockItem, CatalogDisplaySettings
 
 from app.shop_admin_v20 import (
     customer_home_text, customer_home_keyboard,
@@ -123,6 +124,30 @@ from app.shop import (
     list_general_products, proxy_main_text, proxy_main_keyboard,
     proxy_group_text, proxy_group_keyboard, get_proxy_package,
     proxy_package_keyboard,
+)
+
+from app.catalog_v25 import (
+    CURRENCIES,
+    admin_catalog_overview,
+    admin_catalog_text,
+    admin_catalog_keyboard,
+    product_type_keyboard,
+    currency_keyboard as catalog_currency_keyboard,
+    price_back_keyboard,
+    content_back_keyboard,
+    product_card_text as v25_product_card_text,
+    product_card_keyboard as v25_product_card_keyboard,
+    advanced_keyboard,
+    delete_confirm_keyboard as v25_delete_confirm_keyboard,
+    category_card_text,
+    category_card_keyboard,
+    view_settings_text,
+    view_settings_keyboard,
+    sort_keyboard,
+    get_display_settings,
+    stock_count as v25_stock_count,
+    add_text_stock,
+    next_stock_item,
 )
 
 from app.services import (
@@ -213,6 +238,7 @@ logger.info("FIX_MARKER_BUTTON_COLORS_NAV_ONLY=v22.4 loaded")
 logger.info("FIX_MARKER_CONVENIENCE_RELEASE=v23 loaded")
 logger.info("FIX_MARKER_REFERENCE_STYLE_UI=v24 loaded")
 logger.info("FIX_MARKER_REFERENCE_STYLE_UI_FIX=v24.1 loaded")
+logger.info("FIX_MARKER_ADMIN_PRODUCT_SYSTEM=v25 loaded")
 
 def validate_runtime_ui() -> None:
     """
@@ -351,6 +377,7 @@ def validate_runtime_ui() -> None:
 validate_runtime_ui()
 
 SHOP_ADMIN_WAIT: dict[int, dict] = {}
+CATALOG_V25_STATE: dict[int, dict] = {}
 BUYER_FEEDBACK_WAIT: set[int] = set()
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
@@ -1106,6 +1133,274 @@ async def process_admin_pending_input(bot: Bot, message: Message, business_conne
 
 
 
+
+async def process_catalog_v25_input(
+    bot: Bot,
+    message: Message,
+    business_connection_id: str | None,
+) -> bool:
+    if not message.from_user:
+        return False
+    admin_id = message.from_user.id
+    state = CATALOG_V25_STATE.get(admin_id)
+    if not state:
+        return False
+
+    action = state.get("action")
+    step = state.get("step")
+    data = state.setdefault("data", {})
+    text = (message.text or message.caption or "").strip()
+
+    try:
+        if action == "product_create":
+            if step == "name":
+                if not text or len(text) > 64:
+                    await answer_message(bot, message, "Название должно быть от 1 до 64 символов.", business_connection_id)
+                    return True
+                data["name"] = text
+                state["step"] = "type"
+                await answer_message(
+                    bot, message,
+                    f"📝 Название: {text}\n\n"
+                    "Выберите тип товара:\n\n"
+                    "♾️ Статический товар\n"
+                    "Всем покупателям выдается один и тот же контент.\n\n"
+                    "📦 Количественный товар\n"
+                    "Каждому покупателю выдается уникальная позиция по очереди.\n\n"
+                    "Выберите тип 👇",
+                    business_connection_id,
+                    reply_markup=product_type_keyboard(),
+                )
+                return True
+
+            if step == "price":
+                try:
+                    price = Decimal(text.replace(",", "."))
+                except Exception:
+                    await answer_message(bot, message, "Введите цену числом. Например: 0.1", business_connection_id, reply_markup=price_back_keyboard())
+                    return True
+                if price < Decimal("0.1"):
+                    await answer_message(bot, message, f"Минимальная цена: 0.1 {data['currency']}", business_connection_id, reply_markup=price_back_keyboard())
+                    return True
+                data["price"] = str(price)
+                state["step"] = "content"
+                prompt = (
+                    f"📦 Название: {data['name']}\n"
+                    f"💰 Цена: {price} {data['currency']}\n\n"
+                )
+                if data["product_type"] == "static":
+                    prompt += (
+                        "Отправьте контент для покупателя\n\n"
+                        "Это то, что получит клиент после оплаты:\n"
+                        "• Текст или ссылка\n"
+                        "• Фото или видео\n"
+                        "• Документ или архив\n\n"
+                        "💡 Отправьте контент в чат с ботом 👇"
+                    )
+                else:
+                    prompt += (
+                        "Отправьте позиции товара, каждую с новой строки.\n\n"
+                        "Пример:\nKEY-001\nKEY-002\nKEY-003"
+                    )
+                await answer_message(bot, message, prompt, business_connection_id, reply_markup=content_back_keyboard())
+                return True
+
+            if step == "content":
+                content_type = None
+                content_text = None
+                content_file_id = None
+                stock_lines = []
+
+                if data["product_type"] == "quantity":
+                    if not text:
+                        await answer_message(bot, message, "Для количественного товара отправьте позиции текстом, каждую с новой строки.", business_connection_id)
+                        return True
+                    stock_lines = [line.strip() for line in text.splitlines() if line.strip()]
+                    if not stock_lines:
+                        return True
+                else:
+                    if message.photo:
+                        content_type = "photo"
+                        content_file_id = message.photo[-1].file_id
+                        content_text = message.caption
+                    elif message.video:
+                        content_type = "video"
+                        content_file_id = message.video.file_id
+                        content_text = message.caption
+                    elif message.document:
+                        content_type = "document"
+                        content_file_id = message.document.file_id
+                        content_text = message.caption
+                    elif text:
+                        content_type = "text"
+                        content_text = text
+                    else:
+                        await answer_message(bot, message, "Отправьте текст, ссылку, фото, видео или документ.", business_connection_id)
+                        return True
+
+                local_admaker_id = -int(datetime.utcnow().timestamp() * 1000000)
+                async with SessionLocal() as session:
+                    product = ShopProduct(
+                        admaker_product_id=local_admaker_id,
+                        name=data["name"],
+                        product_type=data["product_type"],
+                        price=Decimal(data["price"]),
+                        currency=data["currency"],
+                        content_type=content_type,
+                        content_text=content_text,
+                        content_file_id=content_file_id,
+                        is_active=False,
+                        payment_enabled=True,
+                    )
+                    session.add(product)
+                    await session.flush()
+                    if stock_lines:
+                        for line in stock_lines:
+                            session.add(ProductStockItem(
+                                product_id=product.id,
+                                content_type="text",
+                                content_text=line,
+                                status="available",
+                            ))
+                    await session.commit()
+                    await session.refresh(product)
+                    count = await v25_stock_count(session, product.id)
+
+                CATALOG_V25_STATE.pop(admin_id, None)
+                await answer_message(
+                    bot, message,
+                    v25_product_card_text(product, count),
+                    business_connection_id,
+                    reply_markup=v25_product_card_keyboard(product),
+                )
+                return True
+
+        if action == "category_create":
+            if step == "name":
+                if not text or len(text) > 64:
+                    await answer_message(bot, message, "Название категории должно быть до 64 символов.", business_connection_id)
+                    return True
+                data["name"] = text
+                state["step"] = "description"
+                await answer_message(bot, message, f"📁 Название: {text}\n\nОтправьте описание категории или слово «пропустить».", business_connection_id)
+                return True
+            if step == "description":
+                description = None if text.lower() == "пропустить" else text
+                async with SessionLocal() as session:
+                    category = ShopCategory(name=data["name"], emoji="📦", description=description, is_active=True)
+                    session.add(category)
+                    await session.commit()
+                    await session.refresh(category)
+                CATALOG_V25_STATE.pop(admin_id, None)
+                await answer_message(bot, message, category_card_text(category, 0), business_connection_id, reply_markup=category_card_keyboard(category.id, category.is_active))
+                return True
+
+        object_id = state.get("object_id")
+        async with SessionLocal() as session:
+            product = await session.get(ShopProduct, object_id) if object_id else None
+            category = await session.get(ShopCategory, object_id) if object_id else None
+
+            if action == "edit_product_name" and product:
+                product.name = text[:64]
+            elif action == "edit_product_price" and product:
+                product.price = Decimal(text.replace(",", "."))
+            elif action == "edit_product_description" and product:
+                product.description = text
+            elif action == "edit_product_note" and product:
+                product.note = text
+            elif action == "edit_product_old_price" and product:
+                product.old_price = Decimal(text.replace(",", "."))
+            elif action == "edit_product_position" and product:
+                product.sort_order = int(text)
+            elif action == "edit_payment_systems" and product:
+                product.payment_systems = text
+            elif action == "edit_payment_description" and product:
+                product.payment_description = text
+            elif action == "edit_product_content" and product:
+                if message.photo:
+                    product.content_type = "photo"; product.content_file_id = message.photo[-1].file_id; product.content_text = message.caption
+                elif message.video:
+                    product.content_type = "video"; product.content_file_id = message.video.file_id; product.content_text = message.caption
+                elif message.document:
+                    product.content_type = "document"; product.content_file_id = message.document.file_id; product.content_text = message.caption
+                else:
+                    product.content_type = "text"; product.content_text = text
+            elif action == "edit_product_photo" and product and message.photo:
+                product.photo_file_id = message.photo[-1].file_id
+            elif action == "edit_product_video" and product and message.video:
+                product.video_file_id = message.video.file_id
+            elif action == "add_stock" and product:
+                count_added = await add_text_stock(session, product.id, text)
+                if count_added:
+                    product.payment_enabled = True
+            elif action == "category_name" and category:
+                category.name = text[:64]
+            elif action == "category_description" and category:
+                category.description = text
+            elif action == "category_photo" and category and message.photo:
+                category.photo_file_id = message.photo[-1].file_id
+            elif action == "give_product" and product:
+                target = text.replace("@", "").strip()
+                target_id = int(target) if target.isdigit() else None
+                if target_id is None:
+                    await answer_message(bot, message, "Для надежной выдачи отправьте числовой Telegram ID пользователя.", business_connection_id)
+                    return True
+                if product.product_type == "quantity":
+                    stock = await next_stock_item(session, product.id)
+                    if not stock:
+                        product.payment_enabled = False
+                        await session.commit()
+                        await answer_message(bot, message, "Нет доступных позиций. Оплата товара приостановлена.", business_connection_id)
+                        return True
+                    ok = await safe_send_message(bot, target_id, stock.content_text or "Товар", allow_normal_fallback=True)
+                    if ok:
+                        stock.status = "delivered"
+                        stock.delivered_to = target_id
+                        stock.delivered_at = datetime.utcnow()
+                        product.sales_count += 1
+                        remaining = await v25_stock_count(session, product.id)
+                        if remaining <= 1:
+                            product.payment_enabled = False
+                else:
+                    if product.content_type == "text":
+                        ok = await safe_send_message(bot, target_id, product.content_text or "Товар", allow_normal_fallback=True)
+                    elif product.content_type == "photo":
+                        ok = await bot.send_photo(target_id, product.content_file_id, caption=product.content_text)
+                    elif product.content_type == "video":
+                        ok = await bot.send_video(target_id, product.content_file_id, caption=product.content_text)
+                    elif product.content_type == "document":
+                        ok = await bot.send_document(target_id, product.content_file_id, caption=product.content_text)
+                    else:
+                        ok = False
+                    if ok:
+                        product.sales_count += 1
+                await session.commit()
+                CATALOG_V25_STATE.pop(admin_id, None)
+                await answer_message(bot, message, "✅ Товар выдан пользователю.", business_connection_id)
+                return True
+            else:
+                return False
+
+            await session.commit()
+            if product:
+                await session.refresh(product)
+                count = await v25_stock_count(session, product.id)
+                CATALOG_V25_STATE.pop(admin_id, None)
+                await answer_message(bot, message, v25_product_card_text(product, count), business_connection_id, reply_markup=v25_product_card_keyboard(product))
+                return True
+            if category:
+                await session.refresh(category)
+                product_count = int(await session.scalar(select(func.count(ShopProduct.id)).where(ShopProduct.category_id == category.id)) or 0)
+                CATALOG_V25_STATE.pop(admin_id, None)
+                await answer_message(bot, message, category_card_text(category, product_count), business_connection_id, reply_markup=category_card_keyboard(category.id, category.is_active))
+                return True
+    except Exception as exc:
+        logger.exception("CATALOG_V25_INPUT_FAILED admin_id=%s action=%s step=%s", admin_id, action, step)
+        await answer_message(bot, message, f"❌ Не удалось сохранить: {exc}\n\nПовторите ввод или откройте меню заново.", business_connection_id)
+        return True
+
+    return False
+
 async def process_shop_admin_pending_input(
     bot: Bot,
     message: Message,
@@ -1509,7 +1804,7 @@ async def process_admin_command(bot: Bot, message: Message, business_connection_
 async def is_supplier_user(user_id: int) -> bool:
     async with SessionLocal() as session:
         from app.models import Supplier
-        from sqlalchemy import select
+        from sqlalchemy import select, func
         result = await session.execute(select(Supplier).where(Supplier.telegram_id == user_id, Supplier.is_active == True))
         return result.scalars().first() is not None
 
@@ -1737,6 +2032,21 @@ async def process_main_reply_button(
                 if is_business_context
                 else buyer_main_reply_keyboard(is_admin=admin_access)
             ),
+        )
+        return True
+
+    if text == "💰 Управление товарами":
+        if not admin_access:
+            await answer_message(bot, message, "У вас нет доступа.", business_connection_id)
+            return True
+        async with SessionLocal() as session:
+            categories, products = await admin_catalog_overview(session)
+        await answer_message(
+            bot,
+            message,
+            admin_catalog_text(categories, products),
+            business_connection_id,
+            reply_markup=admin_catalog_keyboard(categories, products),
         )
         return True
 
@@ -2815,6 +3125,8 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
     if await is_admin_user(user_id) and not text.startswith("/"):
         # Сначала обрабатываем ввод, который ожидает админка:
         # ID нового администратора, цену, название товара и т.д.
+        if await process_catalog_v25_input(bot, message, business_connection_id):
+            return
         if await process_shop_admin_pending_input(bot, message, business_connection_id):
             return
         if await process_admin_pending_input(bot, message, business_connection_id):
@@ -2844,7 +3156,7 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
 
     async with SessionLocal() as session:
         from app.models import Supplier
-        from sqlalchemy import select
+        from sqlalchemy import select, func
         result = await session.execute(select(Supplier).where(Supplier.telegram_id == user_id, Supplier.is_active == True))
         supplier = result.scalars().first()
 
@@ -2921,6 +3233,393 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
     if data == "admin:noop":
         await callback.answer()
         return True
+
+    if data == "v25:catalog":
+        async with SessionLocal() as session:
+            categories, products = await admin_catalog_overview(session)
+        await update_or_send(callback, admin_catalog_text(categories, products), reply_markup=admin_catalog_keyboard(categories, products))
+        await callback.answer()
+        return True
+
+    if data == "v25:add_product":
+        CATALOG_V25_STATE[callback.from_user.id] = {"action": "product_create", "step": "name", "data": {}}
+        await update_or_send(
+            callback,
+            "📦 Создание товара\n\n"
+            "Напишите название в чат с ботом (до 64 символов)\n\n"
+            "💡 Рекомендация:\n"
+            "• Делайте короче — название показывается на кнопке покупателю\n"
+            "• Emoji отображаются ✅, форматирование текста — нет ❌",
+            reply_markup=content_back_keyboard(),
+        )
+        await callback.answer()
+        return True
+
+    if data == "v25:add_category":
+        CATALOG_V25_STATE[callback.from_user.id] = {"action": "category_create", "step": "name", "data": {}}
+        await update_or_send(
+            callback,
+            "📁 Создание категории\n\n"
+            "Напишите название категории в чат с ботом (до 64 символов).",
+            reply_markup=content_back_keyboard(),
+        )
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:type:"):
+        state = CATALOG_V25_STATE.get(callback.from_user.id)
+        if not state or state.get("action") != "product_create":
+            await callback.answer("Мастер устарел. Начните заново.", show_alert=True)
+            return True
+        product_type = data.rsplit(":", 1)[1]
+        state["data"]["product_type"] = product_type
+        state["step"] = "currency"
+        await update_or_send(
+            callback,
+            f"📦 Название товара: {state['data']['name']}\n\n"
+            "💰 Выберите валюту 👇",
+            reply_markup=catalog_currency_keyboard(),
+        )
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:currency:"):
+        state = CATALOG_V25_STATE.get(callback.from_user.id)
+        if not state:
+            await callback.answer("Мастер устарел.", show_alert=True)
+            return True
+        currency = data.rsplit(":", 1)[1]
+        if state.get("action") == "product_create":
+            state["data"]["currency"] = currency
+            state["step"] = "price"
+            await update_or_send(
+                callback,
+                f"📦 Название: {state['data']['name']}\n"
+                f"💰 Валюта: {currency}\n\n"
+                "Напишите цену товара в чат с ботом\n\n"
+                f"💡 Минимальная цена: 0.1 {currency}\n"
+                "🔙 Кнопка «Назад» вернет к выбору валюты",
+                reply_markup=price_back_keyboard(),
+            )
+        elif state.get("action") == "edit_currency":
+            async with SessionLocal() as session:
+                product = await session.get(ShopProduct, state["object_id"])
+                product.currency = currency
+                await session.commit()
+                await session.refresh(product)
+                count = await v25_stock_count(session, product.id)
+            CATALOG_V25_STATE.pop(callback.from_user.id, None)
+            await update_or_send(callback, v25_product_card_text(product, count), reply_markup=v25_product_card_keyboard(product))
+        await callback.answer()
+        return True
+
+    if data == "v25:wizard:back_type":
+        state = CATALOG_V25_STATE.get(callback.from_user.id)
+        if state:
+            state["step"] = "type"
+            await update_or_send(callback, f"📝 Название: {state['data'].get('name','')}\n\nВыберите тип товара:", reply_markup=product_type_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "v25:wizard:back_currency":
+        state = CATALOG_V25_STATE.get(callback.from_user.id)
+        if state:
+            state["step"] = "currency"
+            await update_or_send(callback, "💰 Выберите валюту 👇", reply_markup=catalog_currency_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "v25:wizard:back_price":
+        state = CATALOG_V25_STATE.get(callback.from_user.id)
+        if state:
+            state["step"] = "price"
+            await update_or_send(callback, "Напишите цену товара в чат с ботом.", reply_markup=price_back_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:product:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            product = await session.get(ShopProduct, product_id)
+            if not product:
+                await callback.answer("Товар не найден.", show_alert=True)
+                return True
+            count = await v25_stock_count(session, product.id)
+        await update_or_send(callback, v25_product_card_text(product, count), reply_markup=v25_product_card_keyboard(product))
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:give:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        CATALOG_V25_STATE[callback.from_user.id] = {"action": "give_product", "object_id": product_id}
+        await update_or_send(
+            callback,
+            "🎁 Выдача товара пользователю\n\n"
+            "Отправьте в чат с ботом:\n"
+            "• ID пользователя (числовой)\n\n"
+            "💡 Для количественного товара будет выдана одна позиция из списка.",
+            reply_markup=content_back_keyboard(),
+        )
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:edit_content:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        CATALOG_V25_STATE[callback.from_user.id] = {"action": "edit_product_content", "object_id": product_id}
+        await update_or_send(callback, "Отправьте новый контент: текст, ссылку, фото, видео или документ.", reply_markup=content_back_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:edit_name:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        CATALOG_V25_STATE[callback.from_user.id] = {"action": "edit_product_name", "object_id": product_id}
+        await update_or_send(callback, "Отправьте новое название товара.", reply_markup=content_back_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:edit_price:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        CATALOG_V25_STATE[callback.from_user.id] = {"action": "edit_product_price", "object_id": product_id}
+        await update_or_send(callback, "Отправьте новую цену.", reply_markup=content_back_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:edit_description:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        CATALOG_V25_STATE[callback.from_user.id] = {"action": "edit_product_description", "object_id": product_id}
+        await update_or_send(callback, "Отправьте описание товара.", reply_markup=content_back_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:edit_note:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        CATALOG_V25_STATE[callback.from_user.id] = {"action": "edit_product_note", "object_id": product_id}
+        await update_or_send(callback, "Отправьте примечание товара.", reply_markup=content_back_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:edit_photo:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        CATALOG_V25_STATE[callback.from_user.id] = {"action": "edit_product_photo", "object_id": product_id}
+        await update_or_send(callback, "Отправьте фото товара.", reply_markup=content_back_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:edit_video:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        CATALOG_V25_STATE[callback.from_user.id] = {"action": "edit_product_video", "object_id": product_id}
+        await update_or_send(callback, "Отправьте видео товара.", reply_markup=content_back_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:edit_currency:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        CATALOG_V25_STATE[callback.from_user.id] = {"action": "edit_currency", "object_id": product_id}
+        await update_or_send(callback, "Выберите валюту.", reply_markup=catalog_currency_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:stock:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        CATALOG_V25_STATE[callback.from_user.id] = {"action": "add_stock", "object_id": product_id}
+        await update_or_send(callback, "Отправьте новые позиции, каждую с новой строки.", reply_markup=content_back_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:toggle_payment:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            product = await session.get(ShopProduct, product_id)
+            product.payment_enabled = not product.payment_enabled
+            await session.commit()
+            await session.refresh(product)
+            count = await v25_stock_count(session, product.id)
+        await update_or_send(callback, v25_product_card_text(product, count), reply_markup=v25_product_card_keyboard(product))
+        await callback.answer("Настройка оплаты изменена")
+        return True
+
+    if data.startswith("v25:toggle_visible:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            product = await session.get(ShopProduct, product_id)
+            if not product.is_active and (product.price is None or not product.currency):
+                await callback.answer("Сначала настройте цену и валюту.", show_alert=True)
+                return True
+            if product.product_type == "static" and not (product.content_text or product.content_file_id):
+                await callback.answer("Сначала добавьте контент.", show_alert=True)
+                return True
+            if product.product_type == "quantity" and await v25_stock_count(session, product.id) == 0:
+                await callback.answer("Сначала добавьте позиции.", show_alert=True)
+                return True
+            product.is_active = not product.is_active
+            await session.commit()
+            await session.refresh(product)
+            count = await v25_stock_count(session, product.id)
+        await update_or_send(callback, v25_product_card_text(product, count), reply_markup=v25_product_card_keyboard(product))
+        await callback.answer("Статус товара изменен")
+        return True
+
+    if data.startswith("v25:advanced:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        await update_or_send(callback, "⚙️ Расширенные настройки", reply_markup=advanced_keyboard(product_id))
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:payment_systems:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        CATALOG_V25_STATE[callback.from_user.id] = {"action": "edit_payment_systems", "object_id": product_id}
+        await update_or_send(callback, "Отправьте платежные системы через запятую.", reply_markup=content_back_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:payment_description:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        CATALOG_V25_STATE[callback.from_user.id] = {"action": "edit_payment_description", "object_id": product_id}
+        await update_or_send(callback, "Отправьте описание платежа.", reply_markup=content_back_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:old_price:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        CATALOG_V25_STATE[callback.from_user.id] = {"action": "edit_product_old_price", "object_id": product_id}
+        await update_or_send(callback, "Отправьте старую цену числом.", reply_markup=content_back_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:position:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        CATALOG_V25_STATE[callback.from_user.id] = {"action": "edit_product_position", "object_id": product_id}
+        await update_or_send(callback, "Отправьте позицию товара числом.", reply_markup=content_back_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:stats:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            product = await session.get(ShopProduct, product_id)
+            count = await v25_stock_count(session, product.id)
+        await update_or_send(
+            callback,
+            f"📊 Статистика товара\n\n"
+            f"Просмотров: {product.views_count}\n"
+            f"Продаж: {product.sales_count}\n"
+            f"Выручка: {product.revenue_total} {product.currency}\n"
+            f"Остаток: {count}",
+            reply_markup=advanced_keyboard(product_id),
+        )
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:delete_prompt:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        await update_or_send(callback, "Удалить товар без возможности восстановления?", reply_markup=v25_delete_confirm_keyboard(product_id))
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:delete_confirm:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            product = await session.get(ShopProduct, product_id)
+            if product:
+                stock_rows = list((await session.scalars(select(ProductStockItem).where(ProductStockItem.product_id == product_id))).all())
+                for row in stock_rows:
+                    await session.delete(row)
+                await session.delete(product)
+                await session.commit()
+            categories, products = await admin_catalog_overview(session)
+        await update_or_send(callback, admin_catalog_text(categories, products), reply_markup=admin_catalog_keyboard(categories, products))
+        await callback.answer("Товар удален")
+        return True
+
+    if data.startswith("v25:category:"):
+        category_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            category = await session.get(ShopCategory, category_id)
+            count = int(await session.scalar(select(func.count(ShopProduct.id)).where(ShopProduct.category_id == category_id)) or 0)
+        await update_or_send(callback, category_card_text(category, count), reply_markup=category_card_keyboard(category.id, category.is_active))
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:category_name:"):
+        category_id = int(data.rsplit(":", 1)[1])
+        CATALOG_V25_STATE[callback.from_user.id] = {"action": "category_name", "object_id": category_id}
+        await update_or_send(callback, "Отправьте новое название категории.", reply_markup=content_back_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:category_description:"):
+        category_id = int(data.rsplit(":", 1)[1])
+        CATALOG_V25_STATE[callback.from_user.id] = {"action": "category_description", "object_id": category_id}
+        await update_or_send(callback, "Отправьте описание категории.", reply_markup=content_back_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:category_photo:"):
+        category_id = int(data.rsplit(":", 1)[1])
+        CATALOG_V25_STATE[callback.from_user.id] = {"action": "category_photo", "object_id": category_id}
+        await update_or_send(callback, "Отправьте фото категории.", reply_markup=content_back_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:category_toggle:"):
+        category_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            category = await session.get(ShopCategory, category_id)
+            category.is_active = not category.is_active
+            await session.commit()
+            count = int(await session.scalar(select(func.count(ShopProduct.id)).where(ShopProduct.category_id == category_id)) or 0)
+        await update_or_send(callback, category_card_text(category, count), reply_markup=category_card_keyboard(category.id, category.is_active))
+        await callback.answer("Статус категории изменен")
+        return True
+
+    if data.startswith("v25:category_add_product:"):
+        category_id = int(data.rsplit(":", 1)[1])
+        CATALOG_V25_STATE[callback.from_user.id] = {"action": "product_create", "step": "name", "data": {"category_id": category_id}}
+        await update_or_send(callback, "📦 Создание товара\n\nНапишите название товара.", reply_markup=content_back_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "v25:view_settings":
+        async with SessionLocal() as session:
+            settings = await get_display_settings(session)
+        await update_or_send(callback, view_settings_text(settings), reply_markup=view_settings_keyboard(settings))
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:columns:"):
+        count = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            settings = await get_display_settings(session)
+            settings.columns_count = count
+            await session.commit()
+        await update_or_send(callback, view_settings_text(settings), reply_markup=view_settings_keyboard(settings))
+        await callback.answer("Сохранено")
+        return True
+
+    if data == "v25:search_toggle":
+        async with SessionLocal() as session:
+            settings = await get_display_settings(session)
+            settings.search_enabled = not settings.search_enabled
+            await session.commit()
+        await update_or_send(callback, view_settings_text(settings), reply_markup=view_settings_keyboard(settings))
+        await callback.answer("Сохранено")
+        return True
+
+    if data == "v25:sort":
+        await update_or_send(callback, "Выберите порядок сортировки.", reply_markup=sort_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:sort_set:"):
+        mode = data.rsplit(":", 1)[1]
+        async with SessionLocal() as session:
+            settings = await get_display_settings(session)
+            settings.sort_mode = mode
+            await session.commit()
+        await update_or_send(callback, view_settings_text(settings), reply_markup=view_settings_keyboard(settings))
+        await callback.answer("Сортировка сохранена")
+        return True
+
 
     if data == "admin:shop:wizard_cancel":
         SHOP_ADMIN_WAIT.pop(callback.from_user.id, None)

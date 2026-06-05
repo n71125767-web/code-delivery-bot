@@ -3,7 +3,7 @@ from sqlalchemy import text, select
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 from app.config import DATABASE_URL, SUPPLIER_IDS, SERVICE_OPTIONS, ADMIN_IDS
-from app.models import Base, Supplier, ServiceOption, TextTemplate, AdminUser
+from app.models import Base, Supplier, ServiceOption, TextTemplate, AdminUser, CatalogDisplaySettings
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,7 @@ async def init_db() -> None:
     await seed_env_admins()
     await seed_services()
     await seed_text_templates()
+    await seed_catalog_display_settings()
 
 
 async def _sqlite_migrations(conn) -> None:
@@ -64,6 +65,47 @@ async def _sqlite_migrations(conn) -> None:
     admin_columns_result = await conn.execute(text("PRAGMA table_info(admin_users)"))
     admin_columns = {row[1] for row in admin_columns_result.fetchall()}
     # Таблица создаётся через Base.metadata.create_all. Этот блок оставлен для будущих SQLite-миграций.
+
+    category_columns_result = await conn.execute(text("PRAGMA table_info(shop_categories)"))
+    category_columns = {row[1] for row in category_columns_result.fetchall()}
+    category_migrations = {
+        "description": "ALTER TABLE shop_categories ADD COLUMN description TEXT",
+        "photo_file_id": "ALTER TABLE shop_categories ADD COLUMN photo_file_id VARCHAR(500)",
+        "parent_id": "ALTER TABLE shop_categories ADD COLUMN parent_id INTEGER",
+    }
+    for column, sql in category_migrations.items():
+        if column not in category_columns:
+            try:
+                await conn.execute(text(sql))
+                logger.info("Migration applied: %s", sql)
+            except Exception as exc:
+                logger.warning("Migration skipped: %s; error=%s", sql, exc)
+
+    product_columns_result = await conn.execute(text("PRAGMA table_info(shop_products)"))
+    product_columns = {row[1] for row in product_columns_result.fetchall()}
+    product_migrations = {
+        "product_type": "ALTER TABLE shop_products ADD COLUMN product_type VARCHAR(20) DEFAULT 'static'",
+        "content_type": "ALTER TABLE shop_products ADD COLUMN content_type VARCHAR(30)",
+        "content_text": "ALTER TABLE shop_products ADD COLUMN content_text TEXT",
+        "content_file_id": "ALTER TABLE shop_products ADD COLUMN content_file_id VARCHAR(500)",
+        "photo_file_id": "ALTER TABLE shop_products ADD COLUMN photo_file_id VARCHAR(500)",
+        "video_file_id": "ALTER TABLE shop_products ADD COLUMN video_file_id VARCHAR(500)",
+        "note": "ALTER TABLE shop_products ADD COLUMN note TEXT",
+        "old_price": "ALTER TABLE shop_products ADD COLUMN old_price NUMERIC(12,2)",
+        "payment_enabled": "ALTER TABLE shop_products ADD COLUMN payment_enabled BOOLEAN DEFAULT 1",
+        "payment_systems": "ALTER TABLE shop_products ADD COLUMN payment_systems TEXT",
+        "payment_description": "ALTER TABLE shop_products ADD COLUMN payment_description TEXT",
+        "views_count": "ALTER TABLE shop_products ADD COLUMN views_count INTEGER DEFAULT 0",
+        "sales_count": "ALTER TABLE shop_products ADD COLUMN sales_count INTEGER DEFAULT 0",
+        "revenue_total": "ALTER TABLE shop_products ADD COLUMN revenue_total NUMERIC(14,2) DEFAULT 0",
+    }
+    for column, sql in product_migrations.items():
+        if column not in product_columns:
+            try:
+                await conn.execute(text(sql))
+                logger.info("Migration applied: %s", sql)
+            except Exception as exc:
+                logger.warning("Migration skipped: %s; error=%s", sql, exc)
 
     bug_columns_result = await conn.execute(text("PRAGMA table_info(bug_reports)"))
     bug_columns = {row[1] for row in bug_columns_result.fetchall()}
@@ -142,3 +184,11 @@ async def seed_text_templates() -> None:
 async def get_session() -> AsyncSession:
     async with SessionLocal() as session:
         yield session
+
+
+async def seed_catalog_display_settings() -> None:
+    async with SessionLocal() as session:
+        exists = await session.scalar(select(CatalogDisplaySettings).limit(1))
+        if not exists:
+            session.add(CatalogDisplaySettings(columns_count=1, sort_mode="position", search_enabled=True))
+            await session.commit()

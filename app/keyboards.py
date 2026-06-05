@@ -715,17 +715,12 @@ def buyer_back_to_panel_keyboard() -> InlineKeyboardMarkup:
 def buyer_main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text="🛒 Товары")],
-        [
-            KeyboardButton(text="🌐 Прокси"),
-            KeyboardButton(text="📱 Номера"),
-        ],
+        [KeyboardButton(text="🌐 Прокси"), KeyboardButton(text="📱 Номера")],
         [KeyboardButton(text="🧾 Мои заказы")],
-        [
-            KeyboardButton(text="✉️ Обратная связь"),
-            KeyboardButton(text="📕 FAQ"),
-        ],
+        [KeyboardButton(text="✉️ Обратная связь"), KeyboardButton(text="📕 FAQ")],
     ]
     if is_admin:
+        rows.append([KeyboardButton(text="💰 Управление товарами")])
         rows.append([KeyboardButton(text="⚙️ Админ меню")])
     return ReplyKeyboardMarkup(
         keyboard=rows,
@@ -734,6 +729,7 @@ def buyer_main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
         input_field_placeholder="Выберите раздел",
         selective=True,
     )
+
 
 
 

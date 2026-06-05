@@ -188,6 +188,9 @@ class ShopCategory(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
     emoji: Mapped[str] = mapped_column(String(20), default="📦")
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    photo_file_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("shop_categories.id"), nullable=True, index=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -204,7 +207,45 @@ class ShopProduct(Base):
     price: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
     currency: Mapped[str] = mapped_column(String(10), default="RUB")
     buy_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    product_type: Mapped[str] = mapped_column(String(20), default="static", index=True)
+    content_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    content_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_file_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    photo_file_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    video_file_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    old_price: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    payment_enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    payment_systems: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payment_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    views_count: Mapped[int] = mapped_column(Integer, default=0)
+    sales_count: Mapped[int] = mapped_column(Integer, default=0)
+    revenue_total: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ProductStockItem(Base):
+    __tablename__ = "product_stock_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("shop_products.id"), index=True)
+    content_type: Mapped[str] = mapped_column(String(30), default="text")
+    content_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_file_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="available", index=True)
+    delivered_to: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class CatalogDisplaySettings(Base):
+    __tablename__ = "catalog_display_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    columns_count: Mapped[int] = mapped_column(Integer, default=1)
+    sort_mode: Mapped[str] = mapped_column(String(30), default="position")
+    search_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
