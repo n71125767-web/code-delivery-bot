@@ -38,7 +38,7 @@ def test_main_reply_keyboard():
     buyer = reply_text_set(buyer_main_reply_keyboard(is_admin=False))
     admin = reply_text_set(buyer_main_reply_keyboard(is_admin=True))
 
-    assert {"🛒 Товар", "🌐 Прокси", "📱 Номера"} <= buyer
+    assert {"🛒 Товары", "🌐 Прокси", "📱 Номера"} <= buyer
     assert "⚙️ Админ меню" not in buyer
     assert "⚙️ Админ меню" in admin
 

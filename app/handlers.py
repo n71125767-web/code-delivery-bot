@@ -212,6 +212,7 @@ logger.info("FIX_MARKER_MCS_SHOP_UI=v22.3 loaded")
 logger.info("FIX_MARKER_BUTTON_COLORS_NAV_ONLY=v22.4 loaded")
 logger.info("FIX_MARKER_CONVENIENCE_RELEASE=v23 loaded")
 logger.info("FIX_MARKER_REFERENCE_STYLE_UI=v24 loaded")
+logger.info("FIX_MARKER_REFERENCE_STYLE_UI_FIX=v24.1 loaded")
 
 def validate_runtime_ui() -> None:
     """
@@ -282,12 +283,24 @@ def validate_runtime_ui() -> None:
     }
 
     required_reply_buttons = {
-        "🛒 Товар",
+        "🛒 Товары",
         "🌐 Прокси",
         "📱 Номера",
     }
 
-    missing_reply = required_reply_buttons - buyer_reply_texts
+    # Совместимость со старыми сообщениями: обработчик принимает и
+    # «🛒 Товар», и «🛒 Товары», но актуальная клавиатура показывает «🛒 Товары».
+    has_product_button = bool(
+        {"🛒 Товар", "🛒 Товары"} & buyer_reply_texts
+    )
+    missing_reply = {
+        button
+        for button in required_reply_buttons
+        if (
+            button not in buyer_reply_texts
+            and not (button == "🛒 Товары" and has_product_button)
+        )
+    }
     if missing_reply:
         raise RuntimeError(
             f"UI self-check failed: missing reply buttons: {sorted(missing_reply)}"
