@@ -1199,3 +1199,30 @@ def buyer_inline_menu_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="🆘 › Помощь", callback_data="buyer:help")
     kb.adjust(1)
     return kb.as_markup()
+
+
+# Shop UI/admin v20 overrides
+def admin_panel_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="💰 Управление товарами", callback_data="admin:shop")
+    kb.button(text="💵 Способы оплаты", callback_data="admin:settings")
+    kb.button(text="📊 Оплата и заказы", callback_data="admin:last_orders")
+    kb.button(text="⚙️ Настройки", callback_data="admin:settings")
+    kb.button(text="📢 Рассылка", callback_data="admin:broadcast")
+    kb.button(text="🚚 Поставщики", callback_data="admin:suppliers")
+    kb.button(text="🌐 Прокси", callback_data="admin:proxy")
+    kb.button(text="👮 Админы", callback_data="admin:admins")
+    kb.button(text="⚠️ Проблемы", callback_data="admin:problems")
+    kb.button(text="⬅️ Главное меню", callback_data="buyer:shop")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+def buyer_inline_menu_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🛒 Товары", callback_data="buyer:shop")
+    kb.button(text="👥 Партнерская программа", callback_data="buyer:partner")
+    kb.button(text="✉️ Обратная связь", callback_data="buyer:feedback")
+    kb.button(text="📕 FAQ", callback_data="buyer:faq")
+    kb.adjust(1)
+    return kb.as_markup()

@@ -1,4 +1,5 @@
 import asyncio
+from decimal import Decimal
 import logging
 import re
 from datetime import datetime
@@ -93,6 +94,19 @@ from app.repositories.product_providers import (
     list_product_providers, list_recent_admaker_products,
 )
 
+from app.models import ShopCategory, ShopProduct
+
+from app.shop_admin_v20 import (
+    customer_home_text, customer_home_keyboard,
+    admin_shop_text, admin_shop_keyboard,
+    all_categories, all_products, category_counts,
+    admin_categories_text, admin_categories_keyboard,
+    admin_category_text, admin_category_keyboard,
+    admin_products_text, admin_products_keyboard,
+    product_admin_text, admin_product_keyboard,
+    toggle_category, move_category, delete_category,
+    toggle_product, delete_product, create_category, create_product,
+)
 from app.shop import (
     shop_main_text, shop_main_keyboard, list_categories, list_products, get_product as get_shop_product,
     category_text, product_text, products_keyboard, product_keyboard, process_admin_shop_command, sync_products_from_orders,
@@ -171,6 +185,8 @@ logger.info("FIX_MARKER_PROXY_BOT_ONLY_SUPPLIER_NO_COOLDOWN=v18.2 loaded")
 logger.info("FIX_MARKER_DELIVERY_COMMIT_AFTER_SEND=v18.3 loaded")
 
 logger.info("FIX_MARKER_SHOP_CATALOG_MERGE=v19 loaded")
+logger.info("FIX_MARKER_SHOP_UI_ADMIN_CATEGORIES=v20 loaded")
+SHOP_ADMIN_WAIT: dict[int, tuple[str, int | None]] = {}
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
 
@@ -928,6 +944,75 @@ async def process_admin_pending_input(bot: Bot, message: Message, business_conne
     return True
 
 
+
+
+async def process_shop_admin_pending_input(bot: Bot, message: Message, business_connection_id: str | None) -> bool:
+    if not message.from_user:
+        return False
+    state = SHOP_ADMIN_WAIT.get(message.from_user.id)
+    if not state:
+        return False
+    action, object_id = state
+    text = (message.text or "").strip()
+    if text.lower() in {"отмена", "/cancel", "cancel"}:
+        SHOP_ADMIN_WAIT.pop(message.from_user.id, None)
+        await answer_message(bot, message, "Действие отменено.", business_connection_id, reply_markup=admin_shop_keyboard())
+        return True
+    try:
+        async with SessionLocal() as session:
+            if action == "add_category":
+                row = await create_category(session, text)
+                result = f"✅ Категория «{row.name}» добавлена."
+            elif action in {"add_product", "add_product_to"}:
+                row = await create_product(session, text, object_id)
+                result = f"✅ Товар «{row.name}» сохранён."
+            elif action == "category_name":
+                row = await session.get(ShopCategory, object_id)
+                if not row: raise ValueError("Категория не найдена")
+                row.name = text[:120]
+                await session.commit()
+                result = "✅ Название категории обновлено."
+            elif action == "product_name":
+                row = await session.get(ShopProduct, object_id)
+                if not row: raise ValueError("Товар не найден")
+                row.name = text[:255]
+                await session.commit()
+                result = "✅ Название товара обновлено."
+            elif action == "product_desc":
+                row = await session.get(ShopProduct, object_id)
+                if not row: raise ValueError("Товар не найден")
+                row.description = text
+                await session.commit()
+                result = "✅ Описание товара обновлено."
+            elif action == "product_price":
+                row = await session.get(ShopProduct, object_id)
+                if not row: raise ValueError("Товар не найден")
+                parts = text.split()
+                row.price = Decimal(parts[0].replace(",", "."))
+                if len(parts) > 1: row.currency = parts[1].upper()
+                await session.commit()
+                result = "✅ Цена товара обновлена."
+            elif action == "product_supplier":
+                row = await session.get(ShopProduct, object_id)
+                if not row: raise ValueError("Товар не найден")
+                supplier_id = int(text)
+                await bind_product_provider(
+                    session, row.admaker_product_id, row.name,
+                    "supplier", str(supplier_id),
+                )
+                result = f"✅ Назначен поставщик {supplier_id}."
+            else:
+                raise ValueError("Неизвестное действие")
+    except Exception as exc:
+        await answer_message(
+            bot, message,
+            f"❌ Не удалось сохранить: {exc}\\n\\nОтправьте данные ещё раз или напишите Отмена.",
+            business_connection_id,
+        )
+        return True
+    SHOP_ADMIN_WAIT.pop(message.from_user.id, None)
+    await answer_message(bot, message, result, business_connection_id, reply_markup=admin_shop_keyboard())
+    return True
 
 async def process_admin_command(bot: Bot, message: Message, business_connection_id: str | None) -> bool:
     if not message.from_user or not await is_admin_user(message.from_user.id):
@@ -2411,6 +2496,8 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         return
 
     if await is_admin_user(user_id) and not text.startswith("/"):
+        if await process_shop_admin_pending_input(bot, message, business_connection_id):
+            return
         if await process_admin_pending_input(bot, message, business_connection_id):
             return
         logger.info("IGNORED: admin non-command message to avoid self-cycle")
@@ -2506,6 +2593,183 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
     if data == "admin:noop":
         await callback.answer()
+        return True
+
+    if data == "admin:shop":
+        await update_or_send(callback, admin_shop_text(), reply_markup=admin_shop_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "admin:shop:sync":
+        async with SessionLocal() as session:
+            count = await sync_products_from_orders(session)
+        await callback.answer(f"Добавлено товаров: {count}", show_alert=True)
+        await update_or_send(callback, admin_shop_text(), reply_markup=admin_shop_keyboard())
+        return True
+
+    if data == "admin:shop:categories":
+        async with SessionLocal() as session:
+            rows = await all_categories(session)
+        await update_or_send(callback, admin_categories_text(rows), reply_markup=admin_categories_keyboard(rows))
+        await callback.answer()
+        return True
+
+    if data == "admin:shop:products":
+        async with SessionLocal() as session:
+            rows = await all_products(session)
+        await update_or_send(callback, admin_products_text(rows), reply_markup=admin_products_keyboard(rows))
+        await callback.answer()
+        return True
+
+    if data == "admin:shop:add_category":
+        SHOP_ADMIN_WAIT[callback.from_user.id] = ("add_category", None)
+        await callback.answer()
+        await update_or_send(callback, "➕ Категория\\n\\nОтправьте название. Можно вместе с эмодзи:\\n📱 Номера\\n\\nДля отмены: Отмена", reply_markup=admin_shop_keyboard())
+        return True
+
+    if data == "admin:shop:add_product":
+        SHOP_ADMIN_WAIT[callback.from_user.id] = ("add_product", None)
+        await callback.answer()
+        await update_or_send(callback, "➕ Товар\\n\\nФормат:\\nADMAKER_ID | Название | Цена | Валюта\\n\\nПример:\\n613092 | Прокси IPv4 | 500 | RUB", reply_markup=admin_shop_keyboard())
+        return True
+
+    if data.startswith("admin:shop:add_product_to:"):
+        category_id = int(data.rsplit(":", 1)[1])
+        SHOP_ADMIN_WAIT[callback.from_user.id] = ("add_product_to", category_id)
+        await callback.answer()
+        await update_or_send(callback, "➕ Товар в категорию\\n\\nФормат:\\nADMAKER_ID | Название | Цена | Валюта", reply_markup=admin_shop_keyboard())
+        return True
+
+    if data.startswith("admin:shop:category:"):
+        category_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            category = await session.get(ShopCategory, category_id)
+            products = await all_products(session, category_id)
+            count, _ = await category_counts(session, category_id)
+        if not category:
+            await callback.answer("Категория не найдена", show_alert=True)
+            return True
+        await update_or_send(callback, admin_category_text(category, count), reply_markup=admin_category_keyboard(category, products))
+        await callback.answer()
+        return True
+
+    if data.startswith("admin:shop:category_toggle:"):
+        category_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            category = await toggle_category(session, category_id)
+            products = await all_products(session, category_id)
+            count, _ = await category_counts(session, category_id)
+        await update_or_send(callback, admin_category_text(category, count), reply_markup=admin_category_keyboard(category, products))
+        await callback.answer("Статус категории изменён")
+        return True
+
+    if data.startswith("admin:shop:category_up:") or data.startswith("admin:shop:category_down:"):
+        category_id = int(data.rsplit(":", 1)[1])
+        delta = -10 if "category_up" in data else 10
+        async with SessionLocal() as session:
+            category = await move_category(session, category_id, delta)
+            products = await all_products(session, category_id)
+            count, _ = await category_counts(session, category_id)
+        await update_or_send(callback, admin_category_text(category, count), reply_markup=admin_category_keyboard(category, products))
+        await callback.answer("Позиция изменена")
+        return True
+
+    if data.startswith("admin:shop:category_delete:"):
+        category_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            ok, result = await delete_category(session, category_id)
+            rows = await all_categories(session)
+        await callback.answer(result, show_alert=not ok)
+        await update_or_send(callback, admin_categories_text(rows), reply_markup=admin_categories_keyboard(rows))
+        return True
+
+    if data.startswith("admin:shop:category_name:"):
+        category_id = int(data.rsplit(":", 1)[1])
+        SHOP_ADMIN_WAIT[callback.from_user.id] = ("category_name", category_id)
+        await update_or_send(callback, "📝 Отправьте новое название категории.", reply_markup=admin_shop_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("admin:shop:category_desc:"):
+        await callback.answer("Описание категории будет добавлено после миграции базы.", show_alert=True)
+        return True
+
+    if data.startswith("admin:shop:product:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            product = await session.get(ShopProduct, product_id)
+            text = await product_admin_text(session, product) if product else "Товар не найден."
+        if not product:
+            await callback.answer("Товар не найден", show_alert=True)
+            return True
+        await update_or_send(callback, text, reply_markup=admin_product_keyboard(product))
+        await callback.answer()
+        return True
+
+    if data.startswith("admin:shop:product_toggle:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            product = await toggle_product(session, product_id)
+            text = await product_admin_text(session, product)
+        await update_or_send(callback, text, reply_markup=admin_product_keyboard(product))
+        await callback.answer("Статус товара изменён")
+        return True
+
+    if data.startswith("admin:shop:product_name:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        SHOP_ADMIN_WAIT[callback.from_user.id] = ("product_name", product_id)
+        await update_or_send(callback, "📝 Отправьте новое название товара.", reply_markup=admin_shop_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("admin:shop:product_desc:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        SHOP_ADMIN_WAIT[callback.from_user.id] = ("product_desc", product_id)
+        await update_or_send(callback, "📝 Отправьте новое описание товара.", reply_markup=admin_shop_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("admin:shop:product_price:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        SHOP_ADMIN_WAIT[callback.from_user.id] = ("product_price", product_id)
+        await update_or_send(callback, "💵 Отправьте цену и валюту:\\n500 RUB", reply_markup=admin_shop_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("admin:shop:product_proxy:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            product = await session.get(ShopProduct, product_id)
+            await bind_product_provider(session, product.admaker_product_id, product.name, "proxyline", "proxyline")
+            text = await product_admin_text(session, product)
+        await update_or_send(callback, text, reply_markup=admin_product_keyboard(product))
+        await callback.answer("Proxyline назначен")
+        return True
+
+    if data.startswith("admin:shop:product_supplier:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        SHOP_ADMIN_WAIT[callback.from_user.id] = ("product_supplier", product_id)
+        await update_or_send(callback, "🚚 Отправьте Telegram ID поставщика.", reply_markup=admin_shop_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("admin:shop:product_unbind:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            product = await session.get(ShopProduct, product_id)
+            await unbind_product_provider(session, product.admaker_product_id)
+            text = await product_admin_text(session, product)
+        await update_or_send(callback, text, reply_markup=admin_product_keyboard(product))
+        await callback.answer("Привязка удалена")
+        return True
+
+    if data.startswith("admin:shop:product_delete:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            await delete_product(session, product_id)
+            rows = await all_products(session)
+        await update_or_send(callback, admin_products_text(rows), reply_markup=admin_products_keyboard(rows))
+        await callback.answer("Товар удалён")
         return True
 
     if data == "admin:proxy":
@@ -3505,7 +3769,12 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         async with SessionLocal() as session:
             await sync_products_from_orders(session)
             categories = await list_categories(session)
-        await update_or_send(callback, shop_main_text(), reply_markup=shop_main_keyboard(categories))
+        admin_access = bool(callback.from_user and await is_admin_user(callback.from_user.id))
+        await update_or_send(
+            callback,
+            customer_home_text(),
+            reply_markup=customer_home_keyboard(categories, is_admin=admin_access),
+        )
         await callback.answer()
         return
 
@@ -3543,6 +3812,21 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             product_text(product, provider.provider_type if provider else None),
             reply_markup=product_keyboard(product, SHOP_BOT_USERNAME),
         )
+        await callback.answer()
+        return
+
+    if data == "buyer:partner":
+        await update_or_send(callback, "👥 Партнерская программа\n\nРаздел находится в разработке.", reply_markup=buyer_back_to_panel_keyboard())
+        await callback.answer()
+        return
+
+    if data == "buyer:feedback":
+        await update_or_send(callback, "✉️ Обратная связь\n\nОпишите вопрос в чате поддержки или используйте /bug для сообщения об ошибке.", reply_markup=buyer_back_to_panel_keyboard())
+        await callback.answer()
+        return
+
+    if data == "buyer:faq":
+        await update_or_send(callback, "📕 FAQ\n\n├ Как купить — откройте категорию и карточку товара\n├ Где заказ — раздел «Мои заказы»\n└ Поддержка — раздел «Обратная связь»", reply_markup=buyer_back_to_panel_keyboard())
         await callback.answer()
         return
 

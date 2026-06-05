@@ -79,17 +79,21 @@ async def get_product(session, product_id: int):
 
 def shop_main_text() -> str:
     return (
-        "🛍 › Магазин\n\n"
-        "Здесь вы можете посмотреть доступные товары и перейти к покупке через Admaker Shop.\n\n"
-        "Выберите раздел"
+        "🛍 Магазин\n\n"
+        "Выберите товар или категорию из списка ниже 👇"
     )
 
 
 def category_text(category: ShopCategory, count: int) -> str:
+    description = getattr(category, "description", None) or "Не установлено"
     return (
-        f"{category.emoji} › {category.name}\n\n"
-        f"Доступно товаров: {count}\n\n"
-        "Выберите товар кнопкой ниже"
+        f"🏷 Категория: {category.emoji} {category.name}\n\n"
+        "📝 Описание:\n"
+        f"{description}\n\n"
+        "📦 Содержимое категории:\n"
+        f"├ Тарифы и услуги — {count}\n"
+        "└ Подкатегории — 0\n\n"
+        "Выберите товар:"
     )
 
 
