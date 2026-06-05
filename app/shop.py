@@ -440,11 +440,14 @@ def products_keyboard(products, category_id: int) -> InlineKeyboardMarkup:
 
 def product_keyboard(product: ShopProduct, shop_username: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    url = product.buy_url
-    if not url and shop_username:
-        url = f"https://t.me/{shop_username.lstrip('@')}"
-    if url:
-        kb.button(text="✅ Купить", url=url, style="success")
+    if product.is_active and product.payment_enabled:
+        kb.button(
+            text="✅ Купить",
+            callback_data=f"buyer:buy:{product.id}",
+            style="success",
+        )
+    else:
+        kb.button(text="⏸ Покупка недоступна", callback_data="buyer:noop")
     kb.button(
         text="⬅️ Назад",
         callback_data=f"buyer:shopcat:{product.category_id or 0}",
@@ -452,6 +455,7 @@ def product_keyboard(product: ShopProduct, shop_username: str) -> InlineKeyboard
     )
     kb.adjust(1)
     return kb.as_markup()
+
 
 
 

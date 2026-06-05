@@ -9,6 +9,7 @@ from sqlalchemy import select, func
 
 from aiogram import Bot
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.config import (
     ADMIN_IDS,
@@ -150,6 +151,14 @@ from app.catalog_v25 import (
     next_stock_item,
 )
 
+from app.cryptopay_service import (
+    PaymentConfigurationError,
+    PaymentValidationError,
+    check_purchase_payment,
+    create_purchase_invoice,
+)
+from app.payment_keyboards import invoice_keyboard, payment_result_keyboard
+
 from app.services import (
     create_or_update_order_from_purchase,
     find_active_order_for_customer,
@@ -239,6 +248,7 @@ logger.info("FIX_MARKER_CONVENIENCE_RELEASE=v23 loaded")
 logger.info("FIX_MARKER_REFERENCE_STYLE_UI=v24 loaded")
 logger.info("FIX_MARKER_REFERENCE_STYLE_UI_FIX=v24.1 loaded")
 logger.info("FIX_MARKER_ADMIN_PRODUCT_SYSTEM=v25 loaded")
+logger.info("FIX_MARKER_CRYPTOPAY_STABLE=v26 loaded")
 
 def validate_runtime_ui() -> None:
     """
@@ -1243,6 +1253,7 @@ async def process_catalog_v25_input(
                     product = ShopProduct(
                         admaker_product_id=local_admaker_id,
                         name=data["name"],
+                        category_id=data.get("category_id"),
                         product_type=data["product_type"],
                         price=Decimal(data["price"]),
                         currency=data["currency"],
@@ -1359,7 +1370,7 @@ async def process_catalog_v25_input(
                         stock.delivered_at = datetime.utcnow()
                         product.sales_count += 1
                         remaining = await v25_stock_count(session, product.id)
-                        if remaining <= 1:
+                        if remaining <= 0:
                             product.payment_enabled = False
                 else:
                     if product.content_type == "text":
@@ -3313,6 +3324,19 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         await callback.answer()
         return True
 
+    if data == "v25:wizard:back_name":
+        state = CATALOG_V25_STATE.get(callback.from_user.id)
+        if state:
+            state["step"] = "name"
+        await update_or_send(
+            callback,
+            "📦 Создание товара\n\n"
+            "Напишите название в чат с ботом (до 64 символов).",
+            reply_markup=content_back_keyboard(),
+        )
+        await callback.answer()
+        return True
+
     if data == "v25:wizard:back_type":
         state = CATALOG_V25_STATE.get(callback.from_user.id)
         if state:
@@ -3419,6 +3443,46 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         await callback.answer()
         return True
 
+    if data.startswith("v25:edit_category:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            categories = list((await session.scalars(
+                select(ShopCategory).order_by(ShopCategory.sort_order, ShopCategory.id)
+            )).all())
+        kb = InlineKeyboardBuilder()
+        for category in categories:
+            kb.button(
+                text=f"{category.emoji} {category.name}",
+                callback_data=f"v25:set_category:{product_id}:{category.id}",
+            )
+        kb.button(text="📁 Без категории", callback_data=f"v25:set_category:{product_id}:0")
+        kb.button(text="⬅️ Назад", callback_data=f"v25:product:{product_id}", style="danger")
+        kb.adjust(1)
+        await update_or_send(callback, "Выберите категорию товара.", reply_markup=kb.as_markup())
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:set_category:"):
+        _, _, product_id_raw, category_id_raw = data.split(":")
+        product_id = int(product_id_raw)
+        category_id = int(category_id_raw)
+        async with SessionLocal() as session:
+            product = await session.get(ShopProduct, product_id)
+            if not product:
+                await callback.answer("Товар не найден", show_alert=True)
+                return True
+            product.category_id = category_id or None
+            await session.commit()
+            await session.refresh(product)
+            count = await v25_stock_count(session, product.id)
+        await update_or_send(
+            callback,
+            v25_product_card_text(product, count),
+            reply_markup=v25_product_card_keyboard(product),
+        )
+        await callback.answer("Категория сохранена")
+        return True
+
     if data.startswith("v25:stock:"):
         product_id = int(data.rsplit(":", 1)[1])
         CATALOG_V25_STATE[callback.from_user.id] = {"action": "add_stock", "object_id": product_id}
@@ -3430,6 +3494,11 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         product_id = int(data.rsplit(":", 1)[1])
         async with SessionLocal() as session:
             product = await session.get(ShopProduct, product_id)
+            if not product.payment_enabled and product.product_type == "quantity":
+                available = await v25_stock_count(session, product.id)
+                if available <= 0:
+                    await callback.answer("Сначала добавьте позиции товара.", show_alert=True)
+                    return True
             product.payment_enabled = not product.payment_enabled
             await session.commit()
             await session.refresh(product)
@@ -3570,6 +3639,41 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             count = int(await session.scalar(select(func.count(ShopProduct.id)).where(ShopProduct.category_id == category_id)) or 0)
         await update_or_send(callback, category_card_text(category, count), reply_markup=category_card_keyboard(category.id, category.is_active))
         await callback.answer("Статус категории изменен")
+        return True
+
+    if data.startswith("v25:category_delete_prompt:"):
+        category_id = int(data.rsplit(":", 1)[1])
+        kb = InlineKeyboardBuilder()
+        kb.button(text="✅ Удалить", callback_data=f"v25:category_delete_confirm:{category_id}", style="danger")
+        kb.button(text="⬅️ Отмена", callback_data=f"v25:category:{category_id}", style="danger")
+        kb.adjust(1)
+        await update_or_send(
+            callback,
+            "Удалить категорию?\n\nТовары будут перемещены в «Без категории».",
+            reply_markup=kb.as_markup(),
+        )
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:category_delete_confirm:"):
+        category_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            products = list((await session.scalars(
+                select(ShopProduct).where(ShopProduct.category_id == category_id)
+            )).all())
+            for product in products:
+                product.category_id = None
+            category = await session.get(ShopCategory, category_id)
+            if category:
+                await session.delete(category)
+            await session.commit()
+            categories, products = await admin_catalog_overview(session)
+        await update_or_send(
+            callback,
+            admin_catalog_text(categories, products),
+            reply_markup=admin_catalog_keyboard(categories, products),
+        )
+        await callback.answer("Категория удалена")
         return True
 
     if data.startswith("v25:category_add_product:"):
@@ -4976,6 +5080,68 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         await update_or_send(callback, category_text(category, len(products)), reply_markup=products_keyboard(products, category_id))
         await callback.answer()
         return
+
+    if data.startswith("buyer:buy:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        try:
+            purchase, payment = await create_purchase_invoice(
+                buyer_id=callback.from_user.id,
+                buyer_username=callback.from_user.username,
+                product_id=product_id,
+            )
+        except (PaymentConfigurationError, PaymentValidationError) as exc:
+            await callback.answer(str(exc), show_alert=True)
+            return True
+        except Exception:
+            logger.exception("CREATE_CRYPTO_INVOICE_FAILED product_id=%s buyer_id=%s", product_id, callback.from_user.id)
+            await callback.answer("Не удалось создать счёт. Администратор уже может проверить ошибку.", show_alert=True)
+            return True
+
+        await update_or_send(
+            callback,
+            "💳 Счёт создан\n\n"
+            f"Заказ: #{purchase.id}\n"
+            f"Сумма: {purchase.amount} {purchase.currency}\n\n"
+            "После оплаты нажмите «Проверить оплату». "
+            "Webhook также обработает платёж автоматически.",
+            reply_markup=invoice_keyboard(payment.invoice_url, purchase.id),
+        )
+        await callback.answer()
+        return True
+
+    if data.startswith("payment:check:"):
+        purchase_id = int(data.rsplit(":", 1)[1])
+        try:
+            result_text = await check_purchase_payment(bot, purchase_id)
+        except Exception as exc:
+            logger.exception("PAYMENT_MANUAL_CHECK_FAILED purchase_id=%s", purchase_id)
+            await callback.answer(f"Проверка не выполнена: {exc}", show_alert=True)
+            return True
+        await update_or_send(
+            callback,
+            f"💳 Проверка оплаты\n\n{result_text}",
+            reply_markup=payment_result_keyboard(),
+        )
+        await callback.answer()
+        return True
+
+    if data.startswith("payment:back:"):
+        purchase_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            from app.models import DigitalPurchase
+            purchase = await session.get(DigitalPurchase, purchase_id)
+            product = await session.get(ShopProduct, purchase.product_id) if purchase else None
+            provider = await get_product_provider(session, product.admaker_product_id) if product else None
+        if not product:
+            await callback.answer("Товар не найден", show_alert=True)
+            return True
+        await update_or_send(
+            callback,
+            product_text(product, provider.provider_type if provider else None),
+            reply_markup=product_keyboard(product, SHOP_BOT_USERNAME),
+        )
+        await callback.answer()
+        return True
 
     if data.startswith("buyer:shopproduct:"):
         try:

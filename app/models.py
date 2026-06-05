@@ -249,3 +249,77 @@ class CatalogDisplaySettings(Base):
     sort_mode: Mapped[str] = mapped_column(String(30), default="position")
     search_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class DigitalPurchase(Base):
+    __tablename__ = "digital_purchases"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    buyer_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    buyer_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("shop_products.id"), index=True)
+    stock_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("product_stock_items.id"),
+        nullable=True,
+        index=True,
+    )
+    amount: Mapped[float] = mapped_column(Numeric(24, 8))
+    currency: Mapped[str] = mapped_column(String(10))
+    status: Mapped[str] = mapped_column(String(30), default="new", index=True)
+    delivery_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class CryptoPayment(Base):
+    __tablename__ = "crypto_payments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    purchase_id: Mapped[int] = mapped_column(
+        ForeignKey("digital_purchases.id"),
+        unique=True,
+        index=True,
+    )
+    provider: Mapped[str] = mapped_column(String(30), default="cryptopay")
+    invoice_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    invoice_url: Mapped[str] = mapped_column(String(1000))
+    amount: Mapped[float] = mapped_column(Numeric(24, 8))
+    currency_type: Mapped[str] = mapped_column(String(20))
+    asset: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    fiat: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="active", index=True)
+    payload: Mapped[str] = mapped_column(Text)
+    raw_response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider_created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class PaymentEvent(Base):
+    __tablename__ = "payment_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    invoice_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(50), index=True)
+    request_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    processed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    error_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AdminAuditLog(Base):
+    __tablename__ = "admin_audit_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    admin_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    action: Mapped[str] = mapped_column(String(80), index=True)
+    resource_type: Mapped[str] = mapped_column(String(50), index=True)
+    resource_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
