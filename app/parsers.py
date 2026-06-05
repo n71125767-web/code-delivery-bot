@@ -1,116 +1,62 @@
 import re
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 
-def search_int(pattern: str, text: str) -> int | None:
-    match = re.search(pattern, text, flags=re.IGNORECASE)
-    if not match:
-        return None
-    try:
-        return int(match.group(1))
-    except ValueError:
-        return None
-
-
-def search_str(pattern: str, text: str) -> str | None:
-    match = re.search(pattern, text, flags=re.IGNORECASE)
-    if not match:
-        return None
-    value = match.group(1).strip()
-    return value if value else None
+def _search(pattern: str, text: str, flags: int = re.I | re.M):
+    match = re.search(pattern, text, flags)
+    return match.group(1).strip() if match else None
 
 
 def extract_purchase_data(text: str) -> dict | None:
-    """
-    Парсер уведомления Admaker/shop-бота.
-    Сейчас принимает только сообщения, где есть PAID/ОПЛАЧЕН.
-    Под твой точный формат можно расширить regex ниже.
-    """
-    upper = text.upper()
-    if "PAID" not in upper and "ОПЛАЧ" not in upper:
+    if not text:
         return None
-
-    operation_id = (
-        search_int(r"ID операции:\s*(\d+)", text)
-        or search_int(r"Операци[яи][:\s#]*(\d+)", text)
-        or search_int(r"Заказ[а-я\s#№:]*(\d+)", text)
-    )
-
-    external_id = search_str(r"Внешний ID:\s*([^\n]+)", text)
-
-    customer_telegram_id = (
-        search_int(r"ID пользователя:\s*(\d+)", text)
-        or search_int(r"Покупатель ID:\s*(\d+)", text)
-        or search_int(r"user[_\s-]?id[:\s]*(\d+)", text)
-    )
-
-    customer_username = (
-        search_str(r"Пользователь:\s*@?([A-Za-z0-9_]+)", text)
-        or search_str(r"Username:\s*@?([A-Za-z0-9_]+)", text)
-        or search_str(r"@([A-Za-z0-9_]{3,})", text)
-    )
-
-    product_id = search_int(r"ID товара:\s*(\d+)", text)
-
-    product_name = (
-        search_str(r"Купил:\s*(.+)", text)
-        or search_str(r"Товар:\s*(.+)", text)
-        or search_str(r"Название:\s*(.+)", text)
-    )
-
-    amount_raw = search_str(r"Сумма:\s*([\d.,]+)", text)
-    amount = None
-    if amount_raw:
-        try:
-            amount = Decimal(amount_raw.replace(",", "."))
-        except Exception:
-            amount = None
-
-    currency = search_str(r"Сумма:\s*[\d.,]+\s*([A-ZА-Яа-я]+)", text)
-
-    if not operation_id:
+    operation = _search(r"(?:ID\s*операции|Заказ|Operation\s*ID)\s*[:#№-]*\s*(\d+)", text)
+    status = _search(r"Статус\s*:\s*([A-ZА-Я_]+)", text)
+    paid_marker = bool(re.search(r"(?:Статус\s*:\s*PAID|Новая\s+покупка|Оплачен\s*:)", text, re.I))
+    if not operation or not paid_marker:
         return None
-
+    product_id = _search(r"ID\s*товара\s*:\s*(\d+)", text)
+    user_id = _search(r"ID\s*пользователя\s*:\s*(\d+)", text) or _search(r"(?<!Внешний\s)ID\s*:\s*(\d+)", text)
+    username = _search(r"Пользователь\s*:\s*@?([A-Za-z0-9_]+)", text)
+    product_name = _search(r"(?:Купил|Товар)\s*:\s*(.+)", text)
+    external_id = _search(r"Внешний\s*ID\s*:\s*([^\n]+)", text)
+    amount_raw = _search(r"Сумма\s*:\s*([0-9.,]+)", text)
+    currency = _search(r"Сумма\s*:\s*[0-9.,]+\s*([A-Z]{3,5})", text)
+    try:
+        amount = float(Decimal(amount_raw.replace(',', '.'))) if amount_raw else None
+    except (InvalidOperation, ValueError):
+        amount = None
     return {
-        "operation_id": operation_id,
-        "external_id": external_id,
-        "customer_telegram_id": customer_telegram_id,
-        "customer_username": customer_username,
-        "product_id": product_id,
-        "product_name": product_name or "Без названия",
-        "amount": amount,
-        "currency": currency,
-        "raw_message": text,
+        'operation_id': int(operation),
+        'external_id': external_id,
+        'customer_telegram_id': int(user_id) if user_id else None,
+        'customer_username': username,
+        'product_id': int(product_id) if product_id else None,
+        'product_name': product_name,
+        'amount': amount,
+        'currency': currency,
+        'status': status or 'PAID',
+        'raw_message': text,
     }
 
 
 def extract_phone(text: str) -> str | None:
-    match = re.search(r"(\+?\d[\d\s\-\(\)]{8,}\d)", text)
-    if not match:
+    if not text:
         return None
-
-    phone = match.group(1)
-    phone = re.sub(r"[^\d+]", "", phone)
-
-    if phone.startswith("++"):
-        phone = phone.replace("++", "+")
-
-    if len(re.sub(r"\D", "", phone)) < 9:
-        return None
-
-    return phone
+    candidates = re.findall(r"\+?\d[\d\s()\-]{7,18}\d", text)
+    for item in candidates:
+        normalized = ('+' if item.strip().startswith('+') else '') + re.sub(r'\D', '', item)
+        digits = re.sub(r'\D', '', normalized)
+        if 8 <= len(digits) <= 15:
+            return normalized
+    return None
 
 
 def extract_code(text: str) -> str | None:
-    patterns = [
-        r"код[:\s\-]*([0-9]{4,8})",
-        r"code[:\s\-]*([0-9]{4,8})",
-        r"\b([0-9]{4,8})\b",
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if match:
-            return match.group(1)
-
-    return None
+    if not text:
+        return None
+    explicit = re.search(r"(?:код|code)\s*[:#-]?\s*(\d{3,10})", text, re.I)
+    if explicit:
+        return explicit.group(1)
+    values = re.findall(r"(?<!\d)(\d{3,10})(?!\d)", text)
+    return values[-1] if values else None

@@ -167,3 +167,16 @@ class BugReport(Base):
     text: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String, default="new", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ProductProvider(Base):
+    __tablename__ = "product_providers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    admaker_product_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    product_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    provider_type: Mapped[str] = mapped_column(String(30), default="supplier", index=True)
+    provider_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

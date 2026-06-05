@@ -75,6 +75,7 @@ from app.keyboards import (
     admin_proxy_countries_keyboard,
     admin_proxy_periods_keyboard,
     admin_proxy_count_keyboard,
+    admin_proxy_products_keyboard,
     buyer_proxy_country_keyboard,
     buyer_proxy_period_keyboard,
     buyer_proxy_confirm_keyboard,
@@ -87,6 +88,10 @@ from app.proxy_settings import (
     country_label, selection_dump, selection_load,
 )
 from app.senders import safe_send_message, answer_message
+from app.repositories.product_providers import (
+    get_product_provider, bind_product_provider, unbind_product_provider,
+    list_product_providers, list_recent_admaker_products,
+)
 from app.services import (
     create_or_update_order_from_purchase,
     find_active_order_for_customer,
@@ -155,6 +160,7 @@ from app.services import (
 logger = logging.getLogger(__name__)
 logger.info("FIX_MARKER_FULL_VISUAL_SHOP_STYLE=v15 loaded")
 logger.info("FIX_MARKER_PROXYLINE_ADMIN_BUYER_SELECT=v17 loaded")
+logger.info("FIX_MARKER_RELEASE_REBUILD=v18 loaded")
 
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
@@ -967,6 +973,71 @@ async def process_admin_command(bot: Bot, message: Message, business_connection_
         await answer_message(bot, message, "OK. Доп.админ выключен." if ok else "Доп.админ не найден.", business_connection_id)
         return True
 
+    if text == "/product_providers":
+        async with SessionLocal() as session:
+            rows = await list_product_providers(session)
+        if not rows:
+            result = "🔗 › Поставщики товаров\n\nПривязок пока нет."
+        else:
+            lines = ["🔗 › Поставщики товаров", ""]
+            for row in rows:
+                state = "✅" if row.enabled else "⛔"
+                lines.append(f"{state} {row.admaker_product_id} — {row.product_name or 'Товар'} — {row.provider_type}:{row.provider_key or '-'}")
+            result = "\n".join(lines)
+        await answer_message(bot, message, result, business_connection_id)
+        return True
+
+    if text == "/admaker_products":
+        async with SessionLocal() as session:
+            rows = await list_recent_admaker_products(session)
+        result = "📦 › Товары Admaker\n\n" + ("\n".join(f"{pid} — {name}" for pid, name in rows) if rows else "Сначала должен прийти хотя бы один оплаченный заказ.")
+        await answer_message(bot, message, result, business_connection_id)
+        return True
+
+    if text.startswith("/bind_proxyline"):
+        if len(parts) != 2:
+            await answer_message(bot, message, "Формат: /bind_proxyline PRODUCT_ID", business_connection_id)
+            return True
+        try:
+            product_id = int(parts[1])
+        except ValueError:
+            await answer_message(bot, message, "PRODUCT_ID должен быть числом.", business_connection_id)
+            return True
+        async with SessionLocal() as session:
+            recent = dict(await list_recent_admaker_products(session, 100))
+            row = await bind_product_provider(session, product_id, "proxyline", "proxyline", recent.get(product_id))
+        await answer_message(bot, message, f"✅ Товар {row.admaker_product_id} привязан к Proxyline.", business_connection_id)
+        return True
+
+    if text.startswith("/bind_product_supplier"):
+        if len(parts) != 3:
+            await answer_message(bot, message, "Формат: /bind_product_supplier PRODUCT_ID SUPPLIER_TELEGRAM_ID", business_connection_id)
+            return True
+        try:
+            product_id, supplier_id = int(parts[1]), int(parts[2])
+        except ValueError:
+            await answer_message(bot, message, "ID должны быть числами.", business_connection_id)
+            return True
+        async with SessionLocal() as session:
+            recent = dict(await list_recent_admaker_products(session, 100))
+            row = await bind_product_provider(session, product_id, "supplier", str(supplier_id), recent.get(product_id))
+        await answer_message(bot, message, f"✅ Товар {row.admaker_product_id} привязан к поставщику {supplier_id}.", business_connection_id)
+        return True
+
+    if text.startswith("/unbind_product"):
+        if len(parts) != 2:
+            await answer_message(bot, message, "Формат: /unbind_product PRODUCT_ID", business_connection_id)
+            return True
+        try:
+            product_id = int(parts[1])
+        except ValueError:
+            await answer_message(bot, message, "PRODUCT_ID должен быть числом.", business_connection_id)
+            return True
+        async with SessionLocal() as session:
+            ok = await unbind_product_provider(session, product_id)
+        await answer_message(bot, message, "✅ Привязка отключена." if ok else "Привязка не найдена.", business_connection_id)
+        return True
+
     if text == "/services":
         async with SessionLocal() as session:
             result = await services_text(session)
@@ -1712,7 +1783,18 @@ async def process_admaker_message(bot: Bot, message: Message) -> None:
             await session.commit()
             await session.refresh(order)
 
-    if PROXYLINE_ENABLED and is_proxyline_product(order.product_name):
+    async with SessionLocal() as session:
+        explicit_provider = await get_product_provider(session, order.product_id)
+        settings = await get_proxy_shop_settings(session)
+
+    # Основной маршрут — только явная привязка по Admaker product_id.
+    # Legacy-проверка по названию оставлена временно для обратной совместимости.
+    route_to_proxyline = bool(
+        explicit_provider and explicit_provider.enabled and explicit_provider.provider_type == "proxyline"
+    )
+    legacy_proxyline = explicit_provider is None and is_proxyline_product(order.product_name)
+
+    if PROXYLINE_ENABLED and (route_to_proxyline or legacy_proxyline):
         async with SessionLocal() as session:
             db_order = await get_order_by_id(session, order.id)
             settings = await get_proxy_shop_settings(session)
@@ -2281,6 +2363,32 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         async with SessionLocal() as session:
             text, settings = await proxy_settings_text(session)
         await update_or_send(callback, text, reply_markup=admin_proxy_settings_keyboard(settings))
+        await callback.answer()
+        return True
+
+    if data == "admin:proxy:products":
+        async with SessionLocal() as session:
+            rows = await list_product_providers(session)
+        if rows:
+            text = "🔗 › Привязки товаров\n\n" + "\n".join(
+                f"{'✅' if row.enabled else '⛔'} {row.admaker_product_id} — {row.product_name or 'Товар'} — {row.provider_type}" for row in rows
+            )
+        else:
+            text = "🔗 › Привязки товаров\n\nПривязок пока нет. Сначала откройте список товаров Admaker."
+        await update_or_send(callback, text, reply_markup=admin_proxy_products_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "admin:proxy:products_help":
+        text = (
+            "🔗 › Привязка товара\n\n"
+            "1. Выполните /admaker_products\n"
+            "2. Скопируйте Product ID\n"
+            "3. Для Proxyline: /bind_proxyline PRODUCT_ID\n"
+            "4. Для поставщика: /bind_product_supplier PRODUCT_ID TELEGRAM_ID\n"
+            "5. Отвязать: /unbind_product PRODUCT_ID"
+        )
+        await update_or_send(callback, text, reply_markup=admin_proxy_products_keyboard())
         await callback.answer()
         return True
 
@@ -3089,8 +3197,10 @@ async def handle_proxy_callback(bot: Bot, callback: CallbackQuery) -> bool:
         if not allowed:
             await callback.answer("Это не ваш заказ", show_alert=True)
             return True
-        if not is_proxyline_product(order.product_name):
-            await callback.answer("Это не Proxyline-заказ", show_alert=True)
+        provider = await get_product_provider(session, order.product_id)
+        is_explicit_proxy = bool(provider and provider.enabled and provider.provider_type == "proxyline")
+        if not is_explicit_proxy and not is_proxyline_product(order.product_name):
+            await callback.answer("Этот товар не привязан к Proxyline", show_alert=True)
             return True
         if not settings.enabled:
             await callback.answer("Автовыдача прокси временно отключена", show_alert=True)

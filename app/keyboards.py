@@ -1162,3 +1162,28 @@ def buyer_order_card_keyboard(order_id: int, status: str | None = None) -> Inlin
     kb.button(text="🏠 › Главное меню", callback_data="buyer:panel")
     kb.adjust(1)
     return kb.as_markup()
+
+
+def admin_proxy_products_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📦 › Товары Admaker / инструкция", callback_data="admin:proxy:products_help")
+    kb.button(text="🔄 › Обновить список", callback_data="admin:proxy:products")
+    kb.button(text="⬅️ › К настройкам прокси", callback_data="admin:proxy")
+    kb.adjust(1)
+    return kb.as_markup()
+
+# Финальное переопределение с явной привязкой товаров.
+def admin_proxy_settings_keyboard(settings) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text=("🟢 › Автовыдача включена" if settings.enabled else "🔴 › Автовыдача выключена"), callback_data="admin:proxy:toggle")
+    kb.button(text="🔗 › Привязки товаров", callback_data="admin:proxy:products")
+    kb.button(text="🌍 › Страны", callback_data="admin:proxy:countries")
+    kb.button(text="📅 › Сроки", callback_data="admin:proxy:periods")
+    type_label = "Выделенные" if settings.proxy_type == "dedicated" else "Общие"
+    kb.button(text=f"🔐 › Тип: {type_label}", callback_data="admin:proxy:type")
+    kb.button(text=f"📦 › Количество: {settings.count}", callback_data="admin:proxy:count")
+    kb.button(text=f"🌐 › IPv{settings.ip_version}", callback_data="admin:proxy:ip_version")
+    kb.button(text="🔄 › Обновить", callback_data="admin:proxy")
+    kb.button(text="⬅️ › Назад", callback_data="admin:panel")
+    kb.adjust(1)
+    return kb.as_markup()

@@ -44,9 +44,8 @@ async def create_or_update_order_from_purchase(session: AsyncSession, data: dict
         existing.raw_message = data.get("raw_message")
         existing.updated_at = datetime.utcnow()
 
-        if existing.status in {"problem", "confirmed"}:
-            existing.status = "waiting_service"
-
+        # Идемпотентность: повторное уведомление Admaker обновляет данные,
+        # но никогда не возвращает уже обработанный заказ в начало сценария.
         await session.commit()
         await session.refresh(existing)
         return existing
