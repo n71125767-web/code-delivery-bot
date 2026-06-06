@@ -271,6 +271,9 @@ class DigitalPurchase(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    delivery_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    delivery_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    delivery_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

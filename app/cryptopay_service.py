@@ -6,18 +6,19 @@ import hmac
 import json
 import logging
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 from aiocryptopay import AioCryptoPay, Networks
 from aiogram import Bot
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.config import (
     CRYPTO_PAY_ACCEPTED_ASSETS,
     CRYPTO_PAY_ENABLED,
+    CRYPTO_PAY_DELIVERY_STALE_SECONDS,
     CRYPTO_PAY_INVOICE_EXPIRES_SECONDS,
     CRYPTO_PAY_NETWORK,
     CRYPTO_PAY_PENDING_LIMIT,
@@ -132,6 +133,11 @@ def _payload_for(purchase_id: int, nonce: str) -> str:
         ensure_ascii=False,
         separators=(",", ":"),
     )
+
+
+def _safe_error(exc: Exception, limit: int = 500) -> str:
+    text = f"{type(exc).__name__}: {exc}".replace(CRYPTO_PAY_TOKEN, "***")
+    return text[:limit]
 
 
 async def create_purchase_invoice(
@@ -252,7 +258,7 @@ async def create_purchase_invoice(
             db_purchase = await session.get(DigitalPurchase, purchase.id)
             if db_purchase:
                 db_purchase.status = "invoice_failed"
-                db_purchase.delivery_error = str(exc)[:1000]
+                db_purchase.delivery_error = _safe_error(exc)
                 db_purchase.updated_at = datetime.utcnow()
                 await session.commit()
         raise
@@ -311,7 +317,7 @@ async def _send_product_content(
     product: ShopProduct,
     stock: ProductStockItem | None,
     snapshot: ProductSnapshot | None = None,
-) -> bool:
+) -> Any:
     if stock is not None:
         content_type = stock.content_type
         text = stock.content_text
@@ -326,104 +332,141 @@ async def _send_product_content(
         file_id = product.content_file_id
 
     if content_type == "photo" and file_id:
-        await bot.send_photo(chat_id, file_id, caption=text)
+        message = await bot.send_photo(chat_id, file_id, caption=text)
     elif content_type == "video" and file_id:
-        await bot.send_video(chat_id, file_id, caption=text)
+        message = await bot.send_video(chat_id, file_id, caption=text)
     elif content_type == "document" and file_id:
-        await bot.send_document(chat_id, file_id, caption=text)
+        message = await bot.send_document(chat_id, file_id, caption=text)
     else:
-        await bot.send_message(chat_id, text or "Ваш товар готов.")
-    return True
-
+        message = await bot.send_message(chat_id, text or "Ваш товар готов.")
+    return message
 
 
 async def deliver_purchase(bot: Bot, purchase_id: int) -> bool:
+    """Deliver one paid purchase exactly once as far as the external API allows.
+
+    A Telegram send and a database commit cannot be one atomic transaction. If a
+    send has started and the process dies, the purchase is moved to
+    ``delivery_review_required`` instead of being sent again blindly.
+    """
     lock = _delivery_locks.setdefault(purchase_id, asyncio.Lock())
-    async with lock:
-        async with SessionLocal() as session:
-            claim = await session.execute(
-                update(DigitalPurchase)
-                .where(
-                    DigitalPurchase.id == purchase_id,
-                    DigitalPurchase.status.in_(("paid", "delivery_failed")),
-                )
-                .values(status="delivering", updated_at=datetime.utcnow())
-            )
-            if claim.rowcount != 1:
-                await session.rollback()
-                purchase = await session.get(DigitalPurchase, purchase_id)
-                return bool(purchase and purchase.status == "delivered")
-            await session.commit()
-
-            purchase = await session.get(DigitalPurchase, purchase_id)
-            product = await session.get(ShopProduct, purchase.product_id)
-            snapshot = await session.scalar(
-                select(ProductSnapshot).where(
-                    ProductSnapshot.purchase_id == purchase_id
-                )
-            )
-            if product is None:
-                purchase.status = "delivery_failed"
-                purchase.delivery_error = "Product not found"
-                await session.commit()
-                return False
-
-        stock = None
-        if product.product_type == "quantity":
+    try:
+        async with lock:
+            now = datetime.utcnow()
             async with SessionLocal() as session:
-                stock = await _reserve_stock(session, product.id)
-                if stock is None:
+                claim = await session.execute(
+                    update(DigitalPurchase)
+                    .where(
+                        DigitalPurchase.id == purchase_id,
+                        DigitalPurchase.status.in_(("paid", "delivery_failed")),
+                    )
+                    .values(
+                        status="delivering",
+                        delivery_started_at=now,
+                        delivery_attempts=DigitalPurchase.delivery_attempts + 1,
+                        delivery_error=None,
+                        updated_at=now,
+                    )
+                )
+                if claim.rowcount != 1:
+                    await session.rollback()
                     purchase = await session.get(DigitalPurchase, purchase_id)
-                    product = await session.get(ShopProduct, product.id)
+                    return bool(purchase and purchase.status == "delivered")
+                await session.commit()
+
+                purchase = await session.get(DigitalPurchase, purchase_id)
+                if purchase is None:
+                    return False
+                product = await session.get(ShopProduct, purchase.product_id)
+                snapshot = await session.scalar(
+                    select(ProductSnapshot).where(ProductSnapshot.purchase_id == purchase_id)
+                )
+                if product is None:
                     purchase.status = "delivery_failed"
-                    purchase.delivery_error = "No stock available"
-                    product.payment_enabled = False
-                    product.is_active = False
+                    purchase.delivery_error = "Product not found"
+                    purchase.updated_at = datetime.utcnow()
                     await session.commit()
                     return False
 
-        try:
-            await _send_product_content(bot, purchase.buyer_id, product, stock, snapshot)
-        except Exception as exc:
+            stock = None
+            if product.product_type == "quantity":
+                async with SessionLocal() as session:
+                    db_purchase = await session.get(DigitalPurchase, purchase_id)
+                    if db_purchase.stock_item_id is not None:
+                        stock = await session.get(ProductStockItem, db_purchase.stock_item_id)
+                    else:
+                        stock = await _reserve_stock(session, product.id)
+                        if stock is not None:
+                            db_purchase = await session.get(DigitalPurchase, purchase_id)
+                            db_purchase.stock_item_id = stock.id
+                            db_purchase.updated_at = datetime.utcnow()
+                            await session.commit()
+                    if stock is None:
+                        db_product = await session.get(ShopProduct, product.id)
+                        db_purchase.status = "delivery_failed"
+                        db_purchase.delivery_error = "No stock available"
+                        db_purchase.updated_at = datetime.utcnow()
+                        db_product.payment_enabled = False
+                        db_product.is_active = False
+                        await session.commit()
+                        return False
+
+            try:
+                message = await _send_product_content(
+                    bot, purchase.buyer_id, product, stock, snapshot
+                )
+            except Exception as exc:
+                async with SessionLocal() as session:
+                    db_purchase = await session.get(DigitalPurchase, purchase_id)
+                    if db_purchase:
+                        # The Telegram API may have accepted the message even when the
+                        # client observed a transport error. Do not release or resend
+                        # one-time stock automatically.
+                        db_purchase.status = "delivery_review_required"
+                        db_purchase.delivery_error = _safe_error(exc)
+                        db_purchase.updated_at = datetime.utcnow()
+                        await session.commit()
+                logger.exception("DIGITAL_DELIVERY_REVIEW_REQUIRED purchase_id=%s", purchase_id)
+                return False
+
             async with SessionLocal() as session:
                 db_purchase = await session.get(DigitalPurchase, purchase_id)
-                db_purchase.status = "delivery_failed"
-                db_purchase.delivery_error = str(exc)[:1000]
+                db_product = await session.get(ShopProduct, product.id)
+                if db_purchase is None or db_product is None:
+                    raise RuntimeError("Purchase or product disappeared during delivery")
+                if db_purchase.status == "delivered":
+                    return True
+                db_purchase.status = "delivered"
+                db_purchase.delivered_at = datetime.utcnow()
                 db_purchase.updated_at = datetime.utcnow()
+                db_purchase.delivery_error = None
+                db_purchase.delivery_message_id = getattr(message, "message_id", None)
+                db_product.sales_count = int(db_product.sales_count or 0) + 1
+                db_product.revenue_total = (
+                    _decimal(db_product.revenue_total or 0)
+                    + _decimal(db_purchase.amount)
+                )
                 if stock:
                     db_stock = await session.get(ProductStockItem, stock.id)
-                    if db_stock and db_stock.status == "reserved":
-                        db_stock.status = "available"
+                    if db_stock is None:
+                        raise RuntimeError("Reserved stock item disappeared")
+                    db_stock.status = "delivered"
+                    db_stock.delivered_to = db_purchase.buyer_id
+                    db_stock.delivered_at = datetime.utcnow()
+                    remaining = await session.scalar(
+                        select(ProductStockItem.id).where(
+                            ProductStockItem.product_id == db_product.id,
+                            ProductStockItem.status == "available",
+                        ).limit(1)
+                    )
+                    if remaining is None:
+                        db_product.payment_enabled = False
+                        db_product.is_active = False
                 await session.commit()
-            logger.exception("DIGITAL_DELIVERY_FAILED purchase_id=%s", purchase_id)
-            return False
-
-        async with SessionLocal() as session:
-            db_purchase = await session.get(DigitalPurchase, purchase_id)
-            db_product = await session.get(ShopProduct, product.id)
-            db_purchase.status = "delivered"
-            db_purchase.delivered_at = datetime.utcnow()
-            db_purchase.updated_at = datetime.utcnow()
-            db_purchase.delivery_error = None
-            db_product.sales_count = int(db_product.sales_count or 0) + 1
-            db_product.revenue_total = _decimal(db_product.revenue_total or 0) + _decimal(db_purchase.amount)
-            if stock:
-                db_stock = await session.get(ProductStockItem, stock.id)
-                db_stock.status = "delivered"
-                db_stock.delivered_to = db_purchase.buyer_id
-                db_stock.delivered_at = datetime.utcnow()
-                db_purchase.stock_item_id = db_stock.id
-                remaining = await session.scalar(
-                    select(ProductStockItem.id).where(
-                        ProductStockItem.product_id == db_product.id,
-                        ProductStockItem.status == "available",
-                    ).limit(1)
-                )
-                if remaining is None:
-                    db_product.payment_enabled = False
-                    db_product.is_active = False
-            await session.commit()
-        return True
+            return True
+    finally:
+        if not lock.locked():
+            _delivery_locks.pop(purchase_id, None)
 
 
 async def _validate_paid_invoice(payment: CryptoPayment, invoice_data: dict[str, Any]) -> None:
@@ -460,7 +503,7 @@ async def process_paid_invoice(bot: Bot, invoice_data: dict[str, Any]) -> bool:
         purchase = await session.get(DigitalPurchase, payment.purchase_id)
         if purchase.status == "delivered":
             return True
-        if payment.status == "paid" and purchase.status in {"paid", "delivering"}:
+        if purchase.status in {"delivering", "delivery_review_required"}:
             return False
 
         payment.status = "paid"
@@ -593,10 +636,31 @@ async def check_purchase_payment(
 
 
 async def recover_pending_payments(bot: Bot) -> int:
+    """Recover invoices and safe-to-retry deliveries after a restart."""
+    stale_before = datetime.utcnow() - timedelta(
+        seconds=CRYPTO_PAY_DELIVERY_STALE_SECONDS
+    )
     async with SessionLocal() as session:
+        # A process may die after claiming delivery. Retrying that send can expose a
+        # one-time item twice, so stale ambiguous sends go to manual review.
+        await session.execute(
+            update(DigitalPurchase)
+            .where(
+                DigitalPurchase.status == "delivering",
+                DigitalPurchase.delivery_started_at.is_not(None),
+                DigitalPurchase.delivery_started_at < stale_before,
+            )
+            .values(
+                status="delivery_review_required",
+                delivery_error="Delivery interrupted; verify Telegram history before retry",
+                updated_at=datetime.utcnow(),
+            )
+        )
+        await session.commit()
+
         payments = list((await session.scalars(
             select(CryptoPayment)
-            .where(CryptoPayment.status == "active")
+            .where(CryptoPayment.status.in_(("active", "paid")))
             .order_by(CryptoPayment.id)
             .limit(CRYPTO_PAY_PENDING_LIMIT)
         )).all())
@@ -604,6 +668,16 @@ async def recover_pending_payments(bot: Bot) -> int:
     recovered = 0
     for payment in payments:
         try:
+            if payment.status == "paid":
+                async with SessionLocal() as session:
+                    purchase = await session.get(DigitalPurchase, payment.purchase_id)
+                    retryable = bool(
+                        purchase and purchase.status in {"paid", "delivery_failed"}
+                    )
+                if retryable and await deliver_purchase(bot, payment.purchase_id):
+                    recovered += 1
+                continue
+
             result = await crypto_client().get_invoices(invoice_ids=payment.invoice_id)
             invoice = _extract_invoice(result)
             data = _invoice_to_dict(invoice)
@@ -618,10 +692,14 @@ async def recover_pending_payments(bot: Bot) -> int:
                     if db_payment and db_payment.status != "paid":
                         db_payment.status = status
                         db_payment.updated_at = datetime.utcnow()
-                    if purchase and purchase.status not in {"delivered", "paid", "delivering"}:
+                    if purchase and purchase.status not in {
+                        "delivered", "paid", "delivering",
+                        "delivery_review_required",
+                    }:
                         purchase.status = status
                         purchase.updated_at = datetime.utcnow()
                     await session.commit()
         except Exception:
             logger.exception("PAYMENT_RECOVERY_FAILED invoice_id=%s", payment.invoice_id)
     return recovered
+

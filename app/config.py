@@ -96,14 +96,15 @@ PROXYLINE_PRODUCTS_JSON = os.getenv("PROXYLINE_PRODUCTS_JSON", "").strip()
 # Example: {"mt_1m":123,"premium_3m":456}
 try:
     PROXY_PACKAGE_PRODUCT_IDS = json.loads(os.getenv("PROXY_PACKAGE_PRODUCT_IDS_JSON", "{}") or "{}")
-except Exception:
-    PROXY_PACKAGE_PRODUCT_IDS = {}
+except json.JSONDecodeError as exc:
+    raise RuntimeError("PROXY_PACKAGE_PRODUCT_IDS_JSON contains invalid JSON") from exc
+if not isinstance(PROXY_PACKAGE_PRODUCT_IDS, dict):
+    raise RuntimeError("PROXY_PACKAGE_PRODUCT_IDS_JSON must contain a JSON object")
 
 
 # Crypto Pay / @CryptoBot
 CRYPTO_PAY_TOKEN = os.getenv("CRYPTO_PAY_TOKEN", "").strip()
 CRYPTO_PAY_NETWORK = os.getenv("CRYPTO_PAY_NETWORK", "testnet").strip().lower()
-CRYPTO_PAY_WEBHOOK_SECRET = os.getenv("CRYPTO_PAY_WEBHOOK_SECRET", "").strip()
 CRYPTO_PAY_ACCEPTED_ASSETS = os.getenv(
     "CRYPTO_PAY_ACCEPTED_ASSETS",
     "USDT,TON,BTC,ETH,LTC,BNB,TRX,USDC",
@@ -115,4 +116,16 @@ CRYPTO_PAY_RECOVERY_INTERVAL_SECONDS = int(
     os.getenv("CRYPTO_PAY_RECOVERY_INTERVAL_SECONDS", "300")
 )
 CRYPTO_PAY_PENDING_LIMIT = int(os.getenv("CRYPTO_PAY_PENDING_LIMIT", "50"))
+CRYPTO_PAY_DELIVERY_STALE_SECONDS = int(
+    os.getenv("CRYPTO_PAY_DELIVERY_STALE_SECONDS", "600")
+)
 CRYPTO_PAY_ENABLED = bool(CRYPTO_PAY_TOKEN)
+
+if CRYPTO_PAY_NETWORK not in {"mainnet", "testnet"}:
+    raise RuntimeError("CRYPTO_PAY_NETWORK must be mainnet or testnet")
+if CRYPTO_PAY_INVOICE_EXPIRES_SECONDS < 60:
+    raise RuntimeError("CRYPTO_PAY_INVOICE_EXPIRES_SECONDS must be at least 60")
+if CRYPTO_PAY_PENDING_LIMIT < 1:
+    raise RuntimeError("CRYPTO_PAY_PENDING_LIMIT must be at least 1")
+if CRYPTO_PAY_DELIVERY_STALE_SECONDS < 60:
+    raise RuntimeError("CRYPTO_PAY_DELIVERY_STALE_SECONDS must be at least 60")

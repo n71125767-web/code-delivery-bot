@@ -8,7 +8,6 @@ from app.config import (
     CRYPTO_PAY_ACCEPTED_ASSETS,
     CRYPTO_PAY_ENABLED,
     CRYPTO_PAY_NETWORK,
-    CRYPTO_PAY_WEBHOOK_SECRET,
 )
 from app.models import CryptoPayment, DigitalPurchase
 
@@ -20,7 +19,7 @@ def payment_methods_text() -> str:
         f"Статус: {'🟢 настроена' if CRYPTO_PAY_ENABLED else '🔴 токен не задан'}\n"
         f"Сеть: {CRYPTO_PAY_NETWORK}\n"
         f"Активы: {CRYPTO_PAY_ACCEPTED_ASSETS}\n"
-        f"Webhook secret: {'задан' if CRYPTO_PAY_WEBHOOK_SECRET else 'не задан'}"
+        "Webhook: защищён официальной HMAC-подписью"
     )
 
 
@@ -51,7 +50,7 @@ async def payments_text(session) -> str:
     ) or 0)
     errors = int(await session.scalar(
         select(func.count(DigitalPurchase.id)).where(
-            DigitalPurchase.status.in_(("delivery_failed", "invoice_failed"))
+            DigitalPurchase.status.in_(("delivery_failed", "delivery_review_required", "invoice_failed"))
         )
     ) or 0)
     invoices = int(await session.scalar(select(func.count(CryptoPayment.id))) or 0)

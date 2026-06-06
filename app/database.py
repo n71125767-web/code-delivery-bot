@@ -1,5 +1,5 @@
 import logging
-from sqlalchemy import text, select
+from sqlalchemy import text, select, inspect
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 from app.config import DATABASE_URL, SUPPLIER_IDS, SERVICE_OPTIONS, ADMIN_IDS
@@ -22,12 +22,51 @@ async def init_db() -> None:
 
         if DATABASE_URL.startswith("sqlite"):
             await _sqlite_migrations(conn)
+        await _critical_schema_migrations(conn)
 
     await seed_env_suppliers()
     await seed_env_admins()
     await seed_services()
     await seed_text_templates()
     await seed_catalog_display_settings()
+
+
+async def _critical_schema_migrations(conn) -> None:
+    """Apply small, idempotent compatibility migrations for critical payment fields.
+
+    This is intentionally limited to additive columns so existing installations can
+    start safely on both SQLite and PostgreSQL. Destructive changes still require
+    a dedicated migration tool and a database backup.
+    """
+    def current_columns(sync_conn, table_name: str) -> set[str]:
+        inspector = inspect(sync_conn)
+        if table_name not in inspector.get_table_names():
+            return set()
+        return {column["name"] for column in inspector.get_columns(table_name)}
+
+    columns = await conn.run_sync(current_columns, "digital_purchases")
+    if not columns:
+        return
+
+    dialect = conn.dialect.name
+    bigint = "BIGINT"
+    integer = "INTEGER"
+    timestamp = "TIMESTAMP" if dialect == "postgresql" else "DATETIME"
+    additions = {
+        "delivery_started_at": f"ALTER TABLE digital_purchases ADD COLUMN delivery_started_at {timestamp}",
+        "delivery_attempts": f"ALTER TABLE digital_purchases ADD COLUMN delivery_attempts {integer} DEFAULT 0 NOT NULL",
+        "delivery_message_id": f"ALTER TABLE digital_purchases ADD COLUMN delivery_message_id {bigint}",
+    }
+    for column, sql in additions.items():
+        if column in columns:
+            continue
+        try:
+            await conn.execute(text(sql))
+            logger.info("Critical migration applied: %s", sql)
+        except Exception:
+            logger.exception("Critical migration failed: %s", sql)
+            raise
+
 
 
 async def _sqlite_migrations(conn) -> None:

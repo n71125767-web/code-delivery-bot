@@ -10,7 +10,6 @@ from app.config import (
     BOT_TOKEN,
     CRYPTO_PAY_ENABLED,
     CRYPTO_PAY_RECOVERY_INTERVAL_SECONDS,
-    CRYPTO_PAY_WEBHOOK_SECRET,
 )
 from app.cryptopay_service import (
     close_crypto_client,
@@ -47,10 +46,6 @@ async def health(_request):
 async def crypto_webhook(request: web.Request):
     if not CRYPTO_PAY_ENABLED:
         return web.Response(status=503, text="cryptopay disabled")
-    if not CRYPTO_PAY_WEBHOOK_SECRET:
-        return web.Response(status=503, text="webhook secret missing")
-    if request.match_info.get("secret") != CRYPTO_PAY_WEBHOOK_SECRET:
-        return web.Response(status=404, text="not found")
     if _web_bot is None:
         return web.Response(status=503, text="bot unavailable")
 
@@ -72,7 +67,7 @@ async def start_health_server(bot: Bot):
         app = web.Application(client_max_size=1024 * 1024)
         app.router.add_get("/", health)
         app.router.add_get("/health", health)
-        app.router.add_post("/crypto/webhook/{secret}", crypto_webhook)
+        app.router.add_post("/crypto/webhook", crypto_webhook)
 
         runner = web.AppRunner(app)
         await runner.setup()
@@ -83,7 +78,7 @@ async def start_health_server(bot: Bot):
         logger.info("HTTP server started on port %s", port)
         if CRYPTO_PAY_ENABLED:
             logger.info(
-                "Crypto Pay webhook path configured: /crypto/webhook/<secret>"
+                "Crypto Pay webhook path configured: /crypto/webhook"
             )
         return runner
 
