@@ -8,6 +8,7 @@ import aiohttp
 from sqlalchemy import select, func
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
 
 from app.config import (
@@ -166,6 +167,10 @@ from app.admin_reference_v28 import (
     store_settings_keyboard,
 )
 
+from app.catalog_runtime_v29 import (
+    search_visible_products,
+    sort_products,
+)
 from app.services import (
     create_or_update_order_from_purchase,
     find_active_order_for_customer,
@@ -258,6 +263,7 @@ logger.info("FIX_MARKER_ADMIN_PRODUCT_SYSTEM=v25 loaded")
 logger.info("FIX_MARKER_CRYPTOPAY_STABLE=v26 loaded")
 logger.info("FIX_MARKER_STANDALONE_STORE=v27 loaded")
 logger.info("FIX_MARKER_MCS_REFERENCE=v28 loaded")
+logger.info("FIX_MARKER_MCS_STABLE=v29 loaded")
 
 def validate_runtime_ui() -> None:
     """
@@ -398,6 +404,7 @@ validate_runtime_ui()
 SHOP_ADMIN_WAIT: dict[int, dict] = {}
 CATALOG_V25_STATE: dict[int, dict] = {}
 ADMIN_BROADCAST_V28: dict[int, dict] = {}
+BUYER_CATALOG_SEARCH_WAIT: set[int] = set()
 BUYER_FEEDBACK_WAIT: set[int] = set()
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
@@ -1185,6 +1192,93 @@ def normalize_admin_state(storage: dict, user_id: int, state) -> dict | None:
     storage.pop(user_id, None)
     return None
 
+
+
+
+async def run_broadcast_v29(
+    bot: Bot,
+    admin_id: int,
+    recipients: list[int],
+    text: str,
+) -> None:
+    sent = 0
+    failed = 0
+
+    for recipient_id in recipients:
+        try:
+            await bot.send_message(recipient_id, text)
+            sent += 1
+        except TelegramRetryAfter as exc:
+            await asyncio.sleep(float(exc.retry_after) + 0.5)
+            try:
+                await bot.send_message(recipient_id, text)
+                sent += 1
+            except Exception:
+                failed += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.05)
+
+    try:
+        await bot.send_message(
+            admin_id,
+            "📢 Рассылка завершена\\n\\n"
+            f"Получателей: {len(recipients)}\\n"
+            f"Отправлено: {sent}\\n"
+            f"Ошибок: {failed}",
+        )
+    except Exception:
+        logger.exception("BROADCAST_RESULT_SEND_FAILED admin_id=%s", admin_id)
+
+
+async def process_buyer_catalog_search(
+    bot: Bot,
+    message: Message,
+    business_connection_id: str | None,
+) -> bool:
+    if not message.from_user:
+        return False
+
+    user_id = message.from_user.id
+    if user_id not in BUYER_CATALOG_SEARCH_WAIT:
+        return False
+
+    BUYER_CATALOG_SEARCH_WAIT.discard(user_id)
+    query = (message.text or "").strip()
+    if not query:
+        await answer_message(
+            bot,
+            message,
+            "Поисковый запрос пуст.",
+            business_connection_id,
+        )
+        return True
+
+    async with SessionLocal() as session:
+        settings = await get_display_settings(session)
+        products = await search_visible_products(session, query)
+        products = sort_products(products, settings.sort_mode)
+
+    kb = InlineKeyboardBuilder()
+    for product in products:
+        kb.button(
+            text=f"📦 {product.name} — {product.price} {product.currency}",
+            callback_data=f"buyer:shopproduct:{product.id}",
+        )
+    kb.button(text="⬅️ К магазину", callback_data="buyer:shop", style="danger")
+    kb.adjust(max(1, min(int(settings.columns_count or 1), 3)))
+
+    await answer_message(
+        bot,
+        message,
+        (
+            f"🔍 Результаты поиска: {query}\\n\\n"
+            + (f"Найдено товаров: {len(products)}" if products else "Ничего не найдено.")
+        ),
+        business_connection_id,
+        reply_markup=kb.as_markup(),
+    )
+    return True
 
 async def process_broadcast_v28_input(
     bot: Bot,
@@ -2094,6 +2188,8 @@ async def process_main_reply_button(
             reply_markup=customer_home_keyboard(
                 categories,
                 is_admin=admin_access,
+                columns_count=display_settings.columns_count,
+                search_enabled=display_settings.search_enabled,
             ),
         )
         return True
@@ -2263,6 +2359,7 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
     if text == "/shop":
         async with SessionLocal() as session:
             categories = await list_categories(session)
+            display_settings = await get_display_settings(session)
         admin_access = await is_admin_user(user_id)
         await answer_message(
             bot,
@@ -2283,6 +2380,39 @@ async def process_command_message(bot: Bot, message: Message, business_connectio
         async with SessionLocal() as session:
             result = await process_admin_shop_command(session, text)
         await answer_message(bot, message, result or "Неизвестная команда магазина.", business_connection_id)
+        return
+
+    if text.startswith("/start product_"):
+        try:
+            product_id = int(text.split("product_", 1)[1].split()[0])
+        except (ValueError, IndexError):
+            await answer_message(
+                bot,
+                message,
+                "Некорректная ссылка на товар.",
+                business_connection_id,
+            )
+            return
+
+        async with SessionLocal() as session:
+            product = await get_shop_product(session, product_id)
+
+        if not product or not product.is_active:
+            await answer_message(
+                bot,
+                message,
+                "Товар не найден или скрыт.",
+                business_connection_id,
+            )
+            return
+
+        await answer_message(
+            bot,
+            message,
+            product_text(product, None),
+            business_connection_id,
+            reply_markup=product_keyboard(product, ""),
+        )
         return
 
     if text == "/start":
@@ -3259,6 +3389,10 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         logger.info("IGNORED: own bot message")
         return
 
+    if user_id in BUYER_CATALOG_SEARCH_WAIT and not text.startswith("/"):
+        if await process_buyer_catalog_search(bot, message, business_connection_id):
+            return
+
     if user_id in BUYER_FEEDBACK_WAIT and not text.startswith("/"):
         BUYER_FEEDBACK_WAIT.discard(user_id)
         async with SessionLocal() as session:
@@ -3307,7 +3441,7 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         logger.info("IGNORED: admin non-command message to avoid self-cycle")
         return
 
-    if IGNORE_OTHER_BOTS and sender.is_bot and username != SHOP_BOT_USERNAME:
+    if IGNORE_OTHER_BOTS and sender.is_bot:
         logger.info("IGNORED: other bot username=%s", username)
         return
 
@@ -4581,40 +4715,32 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
         broadcast_text = state["text"]
         async with SessionLocal() as session:
-            from app.models import DigitalPurchase, Order
-            digital_ids = set((await session.scalars(
-                select(DigitalPurchase.buyer_id).distinct()
-            )).all())
-            old_ids = set((await session.scalars(
-                select(Order.customer_telegram_id)
-                .where(Order.customer_telegram_id.is_not(None))
-                .distinct()
-            )).all())
-            recipients = {
+            from app.models import DigitalPurchase
+            recipients = sorted({
                 int(user_id)
-                for user_id in digital_ids | old_ids
+                for user_id in (await session.scalars(
+                    select(DigitalPurchase.buyer_id).distinct()
+                )).all()
                 if user_id
-            }
-
-        sent = 0
-        failed = 0
-        for recipient_id in recipients:
-            try:
-                await bot.send_message(recipient_id, broadcast_text)
-                sent += 1
-            except Exception:
-                failed += 1
+            })
 
         ADMIN_BROADCAST_V28.pop(callback.from_user.id, None)
+        asyncio.create_task(
+            run_broadcast_v29(
+                bot,
+                callback.from_user.id,
+                recipients,
+                broadcast_text,
+            )
+        )
         await update_or_send(
             callback,
-            "📢 Рассылка завершена\n\n"
+            "📢 Рассылка запущена в фоне.\n\n"
             f"Получателей: {len(recipients)}\n"
-            f"Отправлено: {sent}\n"
-            f"Ошибок: {failed}",
+            "После завершения бот отправит итог отдельным сообщением.",
             reply_markup=admin_panel_keyboard(),
         )
-        await callback.answer("Рассылка завершена")
+        await callback.answer("Рассылка запущена")
         return True
 
     if data == "v28:uncategorized":
@@ -5351,29 +5477,67 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
     if data == "buyer:shop":
         async with SessionLocal() as session:
             categories = await list_categories(session)
-        admin_access = bool(callback.from_user and await is_admin_user(callback.from_user.id))
+            display_settings = await get_display_settings(session)
+        admin_access = bool(
+            callback.from_user
+            and await is_admin_user(callback.from_user.id)
+        )
         await update_or_send(
             callback,
             customer_home_text(),
-            reply_markup=customer_home_keyboard(categories, is_admin=admin_access),
+            reply_markup=customer_home_keyboard(
+                categories,
+                is_admin=admin_access,
+                columns_count=display_settings.columns_count,
+                search_enabled=display_settings.search_enabled,
+            ),
+        )
+        await callback.answer()
+        return
+
+    if data == "buyer:search":
+        BUYER_CATALOG_SEARCH_WAIT.add(callback.from_user.id)
+        await update_or_send(
+            callback,
+            "🔍 Поиск товара\n\nНапишите название или часть описания товара.",
+            reply_markup=buyer_back_to_panel_keyboard(),
         )
         await callback.answer()
         return
 
     if data.startswith("buyer:shopcat:"):
+        parts = data.split(":")
         try:
-            category_id = int(data.split(":")[2])
+            category_id = int(parts[2])
+            page = int(parts[3]) if len(parts) > 3 else 0
         except (ValueError, IndexError):
             await callback.answer("Некорректная категория", show_alert=True)
             return
+
         async with SessionLocal() as session:
             categories = await list_categories(session)
-            category = next((x for x in categories if x.id == category_id), None)
+            category = next(
+                (row for row in categories if row.id == category_id),
+                None,
+            )
             products = await list_general_products(session, category_id)
+            display_settings = await get_display_settings(session)
+
         if not category:
             await callback.answer("Категория не найдена", show_alert=True)
             return
-        await update_or_send(callback, category_text(category, len(products)), reply_markup=products_keyboard(products, category_id, display_settings.columns_count))
+
+        products = sort_products(products, display_settings.sort_mode)
+        await update_or_send(
+            callback,
+            category_text(category, len(products)),
+            reply_markup=products_keyboard(
+                products,
+                category_id,
+                display_settings.columns_count,
+                page=page,
+            ),
+        )
         await callback.answer()
         return
 
@@ -5408,7 +5572,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
     if data.startswith("payment:check:"):
         purchase_id = int(data.rsplit(":", 1)[1])
         try:
-            result_text = await check_purchase_payment(bot, purchase_id)
+            result_text = await check_purchase_payment(bot, purchase_id, callback.from_user.id)
         except Exception as exc:
             logger.exception("PAYMENT_MANUAL_CHECK_FAILED purchase_id=%s", purchase_id)
             await callback.answer(f"Проверка не выполнена: {exc}", show_alert=True)
@@ -5426,6 +5590,9 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         async with SessionLocal() as session:
             from app.models import DigitalPurchase
             purchase = await session.get(DigitalPurchase, purchase_id)
+            if purchase and purchase.buyer_id != callback.from_user.id:
+                await callback.answer("Это не ваша покупка.", show_alert=True)
+                return True
             product = await session.get(ShopProduct, purchase.product_id) if purchase else None
             provider = await get_product_provider(session, product.internal_key) if product else None
         if not product:
@@ -5434,7 +5601,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         await update_or_send(
             callback,
             product_text(product, provider.provider_type if provider else None),
-            reply_markup=product_keyboard(product, SHOP_BOT_USERNAME),
+            reply_markup=product_keyboard(product, ""),
         )
         await callback.answer()
         return True
@@ -5454,7 +5621,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         await update_or_send(
             callback,
             product_text(product, provider.provider_type if provider else None),
-            reply_markup=product_keyboard(product, SHOP_BOT_USERNAME),
+            reply_markup=product_keyboard(product, ""),
         )
         await callback.answer()
         return
@@ -5465,7 +5632,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         return
 
     if data == "buyer:feedback":
-        await update_or_send(callback, "✉️ Обратная связь\n\nОпишите вопрос в чате поддержки или используйте /bug для сообщения об ошибке.", reply_markup=buyer_back_to_panel_keyboard())
+        await update_or_send(callback, "✉️ Обратная связь\n\nНажмите «Обратная связь» на панели и отправьте вопрос следующим сообщением.", reply_markup=buyer_back_to_panel_keyboard())
         await callback.answer()
         return
 

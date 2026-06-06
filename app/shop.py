@@ -429,18 +429,44 @@ def products_keyboard(
     products,
     category_id: int,
     columns_count: int = 1,
+    page: int = 0,
+    page_size: int = 12,
 ) -> InlineKeyboardMarkup:
+    from app.catalog_runtime_v29 import paginate
+
+    page_rows, page, pages = paginate(products, page, page_size)
     kb = InlineKeyboardBuilder()
-    for row in products:
+
+    for row in page_rows:
         kb.button(
             text=f"📦 {row.name} — {money(row.price, row.currency)}",
             callback_data=f"buyer:shopproduct:{row.id}",
         )
-    if not products:
+
+    if not page_rows:
         kb.button(text="Товаров пока нет", callback_data="buyer:noop")
-    kb.button(text="⬅️ Назад", callback_data="buyer:shop", style="danger")
-    kb.adjust(max(1, min(int(columns_count or 1), 3)))
+
+    columns = max(1, min(int(columns_count or 1), 3))
+    kb.adjust(columns)
+
+    if pages > 1:
+        if page > 0:
+            kb.button(
+                text="⬅️ Назад",
+                callback_data=f"buyer:shopcat:{category_id}:{page - 1}",
+                style="danger",
+            )
+        kb.button(text=f"{page + 1}/{pages}", callback_data="buyer:noop")
+        if page + 1 < pages:
+            kb.button(
+                text="Вперёд ➡️",
+                callback_data=f"buyer:shopcat:{category_id}:{page + 1}",
+                style="success",
+            )
+
+    kb.button(text="⬅️ К категориям", callback_data="buyer:shop", style="danger")
     return kb.as_markup()
+
 
 
 

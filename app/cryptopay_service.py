@@ -30,6 +30,7 @@ from app.models import (
     DigitalPurchase,
     PaymentEvent,
     ProductStockItem,
+    ProductSnapshot,
     ShopProduct,
 )
 
@@ -139,6 +140,26 @@ async def create_purchase_invoice(
     product_id: int,
 ) -> tuple[DigitalPurchase, CryptoPayment]:
     async with SessionLocal() as session:
+        existing_purchase = await session.scalar(
+            select(DigitalPurchase)
+            .where(
+                DigitalPurchase.buyer_id == buyer_id,
+                DigitalPurchase.product_id == product_id,
+                DigitalPurchase.status.in_(("creating_invoice", "pending_payment")),
+            )
+            .order_by(DigitalPurchase.id.desc())
+            .limit(1)
+        )
+        if existing_purchase is not None:
+            existing_payment = await session.scalar(
+                select(CryptoPayment).where(
+                    CryptoPayment.purchase_id == existing_purchase.id,
+                    CryptoPayment.status == "active",
+                )
+            )
+            if existing_payment is not None:
+                return existing_purchase, existing_payment
+
         product = await session.get(ShopProduct, product_id)
         if product is None or not product.is_active:
             raise PaymentValidationError("Товар не найден или скрыт.")
@@ -181,6 +202,20 @@ async def create_purchase_invoice(
         session.add(purchase)
         await session.commit()
         await session.refresh(purchase)
+
+        snapshot = ProductSnapshot(
+            purchase_id=purchase.id,
+            product_name=product.name,
+            product_type=product.product_type,
+            description=product.description,
+            content_type=product.content_type,
+            content_text=product.content_text,
+            content_file_id=product.content_file_id,
+            amount=product.price,
+            currency=currency,
+        )
+        session.add(snapshot)
+        await session.commit()
 
     payload = _payload_for(purchase.id, nonce)
     client = crypto_client()
@@ -270,10 +305,25 @@ async def _reserve_stock(session, product_id: int) -> ProductStockItem | None:
     return None
 
 
-async def _send_product_content(bot: Bot, chat_id: int, product: ShopProduct, stock: ProductStockItem | None) -> bool:
-    content_type = stock.content_type if stock else product.content_type
-    text = stock.content_text if stock else product.content_text
-    file_id = stock.content_file_id if stock else product.content_file_id
+async def _send_product_content(
+    bot: Bot,
+    chat_id: int,
+    product: ShopProduct,
+    stock: ProductStockItem | None,
+    snapshot: ProductSnapshot | None = None,
+) -> bool:
+    if stock is not None:
+        content_type = stock.content_type
+        text = stock.content_text
+        file_id = stock.content_file_id
+    elif snapshot is not None:
+        content_type = snapshot.content_type
+        text = snapshot.content_text
+        file_id = snapshot.content_file_id
+    else:
+        content_type = product.content_type
+        text = product.content_text
+        file_id = product.content_file_id
 
     if content_type == "photo" and file_id:
         await bot.send_photo(chat_id, file_id, caption=text)
@@ -284,6 +334,7 @@ async def _send_product_content(bot: Bot, chat_id: int, product: ShopProduct, st
     else:
         await bot.send_message(chat_id, text or "Ваш товар готов.")
     return True
+
 
 
 async def deliver_purchase(bot: Bot, purchase_id: int) -> bool:
@@ -306,6 +357,11 @@ async def deliver_purchase(bot: Bot, purchase_id: int) -> bool:
 
             purchase = await session.get(DigitalPurchase, purchase_id)
             product = await session.get(ShopProduct, purchase.product_id)
+            snapshot = await session.scalar(
+                select(ProductSnapshot).where(
+                    ProductSnapshot.purchase_id == purchase_id
+                )
+            )
             if product is None:
                 purchase.status = "delivery_failed"
                 purchase.delivery_error = "Product not found"
@@ -327,7 +383,7 @@ async def deliver_purchase(bot: Bot, purchase_id: int) -> bool:
                     return False
 
         try:
-            await _send_product_content(bot, purchase.buyer_id, product, stock)
+            await _send_product_content(bot, purchase.buyer_id, product, stock, snapshot)
         except Exception as exc:
             async with SessionLocal() as session:
                 db_purchase = await session.get(DigitalPurchase, purchase_id)
@@ -479,15 +535,24 @@ async def process_webhook(bot: Bot, raw_body: bytes, signature: str | None) -> t
         return 500, "processing failed"
 
 
-async def check_purchase_payment(bot: Bot, purchase_id: int) -> str:
+async def check_purchase_payment(
+    bot: Bot,
+    purchase_id: int,
+    buyer_id: int | None = None,
+) -> str:
     async with SessionLocal() as session:
         purchase = await session.get(DigitalPurchase, purchase_id)
         if purchase is None:
             raise PaymentValidationError("Покупка не найдена.")
+        if buyer_id is not None and purchase.buyer_id != buyer_id:
+            raise PaymentValidationError("Это не ваша покупка.")
         if purchase.status == "delivered":
             return "Товар уже выдан."
+
         payment = await session.scalar(
-            select(CryptoPayment).where(CryptoPayment.purchase_id == purchase_id)
+            select(CryptoPayment).where(
+                CryptoPayment.purchase_id == purchase_id
+            )
         )
         if payment is None:
             raise PaymentValidationError("Счёт не найден.")
@@ -496,10 +561,35 @@ async def check_purchase_payment(bot: Bot, purchase_id: int) -> str:
     result = await crypto_client().get_invoices(invoice_ids=invoice_id)
     invoice = _extract_invoice(result)
     data = _invoice_to_dict(invoice)
-    if str(data.get("status", "")).lower() == "paid":
+    status = str(data.get("status", "")).lower()
+
+    if status == "paid":
         delivered = await process_paid_invoice(bot, data)
-        return "Оплата подтверждена, товар выдан." if delivered else "Оплата подтверждена, выдача обрабатывается."
+        return (
+            "Оплата подтверждена, товар выдан."
+            if delivered
+            else "Оплата подтверждена, выдача обрабатывается."
+        )
+
+    if status in {"expired", "cancelled"}:
+        async with SessionLocal() as session:
+            purchase = await session.get(DigitalPurchase, purchase_id)
+            payment = await session.scalar(
+                select(CryptoPayment).where(
+                    CryptoPayment.purchase_id == purchase_id
+                )
+            )
+            if purchase and purchase.status != "delivered":
+                purchase.status = status
+                purchase.updated_at = datetime.utcnow()
+            if payment and payment.status != "paid":
+                payment.status = status
+                payment.updated_at = datetime.utcnow()
+            await session.commit()
+        return "Счёт истёк. Создайте новый счёт из карточки товара."
+
     return "Оплата пока не найдена."
+
 
 
 async def recover_pending_payments(bot: Bot) -> int:
@@ -517,9 +607,21 @@ async def recover_pending_payments(bot: Bot) -> int:
             result = await crypto_client().get_invoices(invoice_ids=payment.invoice_id)
             invoice = _extract_invoice(result)
             data = _invoice_to_dict(invoice)
-            if str(data.get("status", "")).lower() == "paid":
+            status = str(data.get("status", "")).lower()
+            if status == "paid":
                 if await process_paid_invoice(bot, data):
                     recovered += 1
+            elif status in {"expired", "cancelled"}:
+                async with SessionLocal() as session:
+                    db_payment = await session.get(CryptoPayment, payment.id)
+                    purchase = await session.get(DigitalPurchase, payment.purchase_id)
+                    if db_payment and db_payment.status != "paid":
+                        db_payment.status = status
+                        db_payment.updated_at = datetime.utcnow()
+                    if purchase and purchase.status not in {"delivered", "paid", "delivering"}:
+                        purchase.status = status
+                        purchase.updated_at = datetime.utcnow()
+                    await session.commit()
         except Exception:
             logger.exception("PAYMENT_RECOVERY_FAILED invoice_id=%s", payment.invoice_id)
     return recovered

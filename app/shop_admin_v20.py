@@ -48,9 +48,11 @@ def customer_home_keyboard(
     categories,
     is_admin: bool = False,
     columns_count: int = 1,
+    search_enabled: bool = True,
 ) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     visible = []
+
     for row in categories:
         if row.name.strip().lower() in {"все товары", "товары"}:
             continue
@@ -59,14 +61,20 @@ def customer_home_keyboard(
         visible.append(row)
         kb.button(
             text=f"{row.emoji} {row.name}",
-            callback_data=f"buyer:shopcat:{row.id}",
+            callback_data=f"buyer:shopcat:{row.id}:0",
         )
 
     if not visible:
         kb.button(text="Товары временно отсутствуют", callback_data="buyer:noop")
 
-    kb.adjust(max(1, min(int(columns_count or 1), 3)))
+    columns = max(1, min(int(columns_count or 1), 3))
+    kb.adjust(columns)
+
+    if search_enabled:
+        kb.button(text="🔍 Поиск товара", callback_data="buyer:search")
+
     return kb.as_markup()
+
 
 
 

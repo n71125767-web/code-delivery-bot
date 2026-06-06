@@ -323,3 +323,23 @@ class AdminAuditLog(Base):
     resource_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ProductSnapshot(Base):
+    __tablename__ = "product_snapshots"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    purchase_id: Mapped[int] = mapped_column(
+        ForeignKey("digital_purchases.id"),
+        unique=True,
+        index=True,
+    )
+    product_name: Mapped[str] = mapped_column(String(255))
+    product_type: Mapped[str] = mapped_column(String(20))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    content_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_file_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    amount: Mapped[float] = mapped_column(Numeric(24, 8))
+    currency: Mapped[str] = mapped_column(String(10))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
