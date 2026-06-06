@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: code-delivery-bot
+    runtime: python
+    buildCommand: python -m pip install --no-cache-dir -r requirements.txt
+    startCommand: python -m app.bot
+    healthCheckPath: /health

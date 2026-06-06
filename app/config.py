@@ -1,5 +1,4 @@
 import os
-import json
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -35,10 +34,11 @@ ADMIN_ALERT_CHAT_ID = int(ADMIN_ALERT_CHAT_ID) if ADMIN_ALERT_CHAT_ID else None
 # Новых поставщиков можно добавлять через /add_supplier.
 SUPPLIER_IDS = parse_ids(os.getenv("SUPPLIER_IDS", ""))
 
-SHOP_BOT_USERNAME = os.getenv("SHOP_BOT_USERNAME", "MrvlShopXBot").replace("@", "").strip().lower()
 
 # Можно оставить пустым. Обычно business_connection_id берётся из входящего business_message.
-ADMIN_BUSINESS_CONNECTION_ID = os.getenv("ADMIN_BUSINESS_CONNECTION_ID", "").strip() or None
+ADMIN_BUSINESS_CONNECTION_ID = (
+    os.getenv("ADMIN_BUSINESS_CONNECTION_ID", "").strip() or None
+)
 
 IGNORE_OTHER_BOTS = os.getenv("IGNORE_OTHER_BOTS", "1").strip() == "1"
 
@@ -75,7 +75,9 @@ BUYER_ORDERS_LIMIT = int(os.getenv("BUYER_ORDERS_LIMIT", "10"))
 
 # Release patch v13
 BUG_REPORT_CHAT_IDS = parse_ids(os.getenv("BUG_REPORT_CHAT_IDS", ""))
-SUPPLIER_IMMUNITY_SKIP_AUTODELETE = os.getenv("SUPPLIER_IMMUNITY_SKIP_AUTODELETE", "1").strip() == "1"
+SUPPLIER_IMMUNITY_SKIP_AUTODELETE = (
+    os.getenv("SUPPLIER_IMMUNITY_SKIP_AUTODELETE", "1").strip() == "1"
+)
 
 
 # Proxyline API integration.
@@ -86,20 +88,13 @@ PROXYLINE_DEFAULT_COUNTRY = os.getenv("PROXYLINE_DEFAULT_COUNTRY", "ru").strip()
 PROXYLINE_DEFAULT_PERIOD = int(os.getenv("PROXYLINE_DEFAULT_PERIOD", "30"))
 PROXYLINE_DEFAULT_COUNT = int(os.getenv("PROXYLINE_DEFAULT_COUNT", "1"))
 PROXYLINE_DEFAULT_IP_VERSION = int(os.getenv("PROXYLINE_DEFAULT_IP_VERSION", "4"))
-PROXYLINE_DEFAULT_TYPE = os.getenv("PROXYLINE_DEFAULT_TYPE", "dedicated").strip().lower()
+PROXYLINE_DEFAULT_TYPE = (
+    os.getenv("PROXYLINE_DEFAULT_TYPE", "dedicated").strip().lower()
+)
 PROXYLINE_COUPON = os.getenv("PROXYLINE_COUPON", "").strip()
-# Через JSON можно точно сопоставить названия товаров Admaker с параметрами Proxyline.
+# JSON maps own product names to Proxyline parameters.
 # Пример: {"Прокси RU 30 дней":{"country":"ru","period":30,"count":1,"ip_version":4,"type":"dedicated"}}
 PROXYLINE_PRODUCTS_JSON = os.getenv("PROXYLINE_PRODUCTS_JSON", "").strip()
-
-# JSON mapping UI proxy package key -> Admaker Product ID.
-# Example: {"mt_1m":123,"premium_3m":456}
-try:
-    PROXY_PACKAGE_PRODUCT_IDS = json.loads(os.getenv("PROXY_PACKAGE_PRODUCT_IDS_JSON", "{}") or "{}")
-except json.JSONDecodeError as exc:
-    raise RuntimeError("PROXY_PACKAGE_PRODUCT_IDS_JSON contains invalid JSON") from exc
-if not isinstance(PROXY_PACKAGE_PRODUCT_IDS, dict):
-    raise RuntimeError("PROXY_PACKAGE_PRODUCT_IDS_JSON must contain a JSON object")
 
 
 # Crypto Pay / @CryptoBot
@@ -109,6 +104,11 @@ CRYPTO_PAY_ACCEPTED_ASSETS = os.getenv(
     "CRYPTO_PAY_ACCEPTED_ASSETS",
     "USDT,TON,BTC,ETH,LTC,BNB,TRX,USDC",
 ).strip()
+CRYPTO_PAY_ACCEPTED_ASSET_LIST = [
+    item.strip().upper()
+    for item in CRYPTO_PAY_ACCEPTED_ASSETS.split(",")
+    if item.strip()
+]
 CRYPTO_PAY_INVOICE_EXPIRES_SECONDS = int(
     os.getenv("CRYPTO_PAY_INVOICE_EXPIRES_SECONDS", "3600")
 )
@@ -129,3 +129,14 @@ if CRYPTO_PAY_PENDING_LIMIT < 1:
     raise RuntimeError("CRYPTO_PAY_PENDING_LIMIT must be at least 1")
 if CRYPTO_PAY_DELIVERY_STALE_SECONDS < 60:
     raise RuntimeError("CRYPTO_PAY_DELIVERY_STALE_SECONDS must be at least 60")
+
+# Production safety. Render should use PostgreSQL unless explicitly overridden.
+ALLOW_SQLITE_ON_RENDER = os.getenv("ALLOW_SQLITE_ON_RENDER", "0").strip() == "1"
+if (
+    os.getenv("RENDER")
+    and DATABASE_URL.startswith("sqlite")
+    and not ALLOW_SQLITE_ON_RENDER
+):
+    raise RuntimeError(
+        "Render production requires DATABASE_URL for PostgreSQL; SQLite is ephemeral"
+    )
