@@ -50,6 +50,14 @@ async def _critical_schema_migrations(conn) -> None:
     dialect = conn.dialect.name
     timestamp = "TIMESTAMP" if dialect == "postgresql" else "DATETIME"
     additions = {
+        "broadcast_jobs": {
+            "cursor": "INTEGER DEFAULT 0 NOT NULL",
+            "recipients_json": "TEXT DEFAULT '[]' NOT NULL",
+            "last_error": "TEXT",
+        },
+        "runtime_states": {
+            "updated_at": f"{timestamp}",
+        },
         "digital_purchases": {
             "delivery_started_at": f"{timestamp}",
             "delivery_attempts": "INTEGER DEFAULT 0 NOT NULL",

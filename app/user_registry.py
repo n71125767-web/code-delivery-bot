@@ -1,4 +1,5 @@
 from datetime import datetime
+from app.time_utils import utcnow
 from app.database import SessionLocal
 from app.models import BotUser
 
@@ -12,5 +13,5 @@ async def touch_user(user_id: int, username: str | None) -> None:
         else:
             row.username = username
             row.is_active = True
-            row.last_seen_at = datetime.utcnow()
+            row.last_seen_at = utcnow()
         await session.commit()

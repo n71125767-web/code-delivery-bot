@@ -15,6 +15,7 @@ from aiogram import Bot
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
+from app.time_utils import utcnow
 from app.config import (
     CRYPTO_PAY_ACCEPTED_ASSET_LIST,
     CRYPTO_PAY_ENABLED,
@@ -359,7 +360,7 @@ async def create_purchase_invoice(
                         db_purchase.status = "invoice_failed"
                         db_purchase.active_key = None
                         db_purchase.delivery_error = _safe_error(exc)
-                        db_purchase.updated_at = datetime.utcnow()
+                        db_purchase.updated_at = utcnow()
                         if db_purchase.stock_item_id:
                             stock = await session.get(
                                 ProductStockItem, db_purchase.stock_item_id
@@ -387,7 +388,7 @@ async def create_purchase_invoice(
                 )
                 session.add(payment)
                 db_purchase.status = "pending_payment"
-                db_purchase.updated_at = datetime.utcnow()
+                db_purchase.updated_at = utcnow()
                 await session.commit()
                 await session.refresh(payment)
                 await session.refresh(db_purchase)
@@ -466,7 +467,7 @@ async def deliver_purchase(bot: Bot, purchase_id: int) -> bool:
     lock = _delivery_locks.setdefault(purchase_id, asyncio.Lock())
     try:
         async with lock:
-            now = datetime.utcnow()
+            now = utcnow()
             async with SessionLocal() as session:
                 claim = await session.execute(
                     update(DigitalPurchase)
@@ -500,7 +501,7 @@ async def deliver_purchase(bot: Bot, purchase_id: int) -> bool:
                 if product is None:
                     purchase.status = "delivery_failed"
                     purchase.delivery_error = "Product not found"
-                    purchase.updated_at = datetime.utcnow()
+                    purchase.updated_at = utcnow()
                     await session.commit()
                     return False
 
@@ -515,7 +516,7 @@ async def deliver_purchase(bot: Bot, purchase_id: int) -> bool:
                         row.status = "delivery_failed"
                         row.delivery_error = _safe_error(exc)
                         row.active_key = None
-                        row.updated_at = datetime.utcnow()
+                        row.updated_at = utcnow()
                         await session.commit()
                     logger.exception(
                         "PROXYLINE_FULFILLMENT_FAILED purchase_id=%s", purchase_id
@@ -532,7 +533,7 @@ async def deliver_purchase(bot: Bot, purchase_id: int) -> bool:
                         row.status = "delivery_failed"
                         row.delivery_error = _safe_error(exc)
                         row.active_key = None
-                        row.updated_at = datetime.utcnow()
+                        row.updated_at = utcnow()
                         await session.commit()
                     logger.exception(
                         "SUPPLIER_FULFILLMENT_FAILED purchase_id=%s", purchase_id
@@ -557,13 +558,13 @@ async def deliver_purchase(bot: Bot, purchase_id: int) -> bool:
                                 DigitalPurchase, purchase_id
                             )
                             db_purchase.stock_item_id = stock.id
-                            db_purchase.updated_at = datetime.utcnow()
+                            db_purchase.updated_at = utcnow()
                             await session.commit()
                     if stock is None:
                         db_product = await session.get(ShopProduct, product.id)
                         db_purchase.status = "delivery_failed"
                         db_purchase.delivery_error = "No stock available"
-                        db_purchase.updated_at = datetime.utcnow()
+                        db_purchase.updated_at = utcnow()
                         db_product.payment_enabled = False
                         db_product.is_active = False
                         await session.commit()
@@ -582,7 +583,7 @@ async def deliver_purchase(bot: Bot, purchase_id: int) -> bool:
                         # one-time stock automatically.
                         db_purchase.status = "delivery_review_required"
                         db_purchase.delivery_error = _safe_error(exc)
-                        db_purchase.updated_at = datetime.utcnow()
+                        db_purchase.updated_at = utcnow()
                         await session.commit()
                 logger.exception(
                     "DIGITAL_DELIVERY_REVIEW_REQUIRED purchase_id=%s", purchase_id
@@ -599,8 +600,8 @@ async def deliver_purchase(bot: Bot, purchase_id: int) -> bool:
                 if db_purchase.status == "delivered":
                     return True
                 db_purchase.status = "delivered"
-                db_purchase.delivered_at = datetime.utcnow()
-                db_purchase.updated_at = datetime.utcnow()
+                db_purchase.delivered_at = utcnow()
+                db_purchase.updated_at = utcnow()
                 db_purchase.delivery_error = None
                 db_purchase.active_key = None
                 db_purchase.delivery_message_id = getattr(message, "message_id", None)
@@ -614,7 +615,7 @@ async def deliver_purchase(bot: Bot, purchase_id: int) -> bool:
                         raise RuntimeError("Reserved stock item disappeared")
                     db_stock.status = "delivered"
                     db_stock.delivered_to = db_purchase.buyer_id
-                    db_stock.delivered_at = datetime.utcnow()
+                    db_stock.delivered_at = utcnow()
                     remaining = await session.scalar(
                         select(ProductStockItem.id)
                         .where(
@@ -673,13 +674,13 @@ async def process_paid_invoice(bot: Bot, invoice_data: dict[str, Any]) -> bool:
             return False
 
         payment.status = "paid"
-        payment.paid_at = datetime.utcnow()
-        payment.updated_at = datetime.utcnow()
+        payment.paid_at = utcnow()
+        payment.updated_at = utcnow()
         payment.raw_response = json.dumps(invoice_data, ensure_ascii=False, default=str)
         if purchase.status not in {"delivered", "delivering"}:
             purchase.status = "paid"
-            purchase.paid_at = datetime.utcnow()
-            purchase.updated_at = datetime.utcnow()
+            purchase.paid_at = utcnow()
+            purchase.updated_at = utcnow()
         await session.commit()
 
     return await deliver_purchase(bot, payment.purchase_id)
@@ -731,7 +732,7 @@ async def process_webhook(
                 select(PaymentEvent).where(PaymentEvent.request_hash == request_hash)
             )
             event.processed = True
-            event.processed_at = datetime.utcnow()
+            event.processed_at = utcnow()
             await session.commit()
         return 200, "ok"
     except Exception as exc:
@@ -791,14 +792,14 @@ async def check_purchase_payment(
             if purchase and purchase.status != "delivered":
                 purchase.status = status
                 purchase.active_key = None
-                purchase.updated_at = datetime.utcnow()
+                purchase.updated_at = utcnow()
                 if purchase.stock_item_id:
                     stock = await session.get(ProductStockItem, purchase.stock_item_id)
                     if stock and stock.status == "reserved":
                         stock.status = "available"
             if payment and payment.status != "paid":
                 payment.status = status
-                payment.updated_at = datetime.utcnow()
+                payment.updated_at = utcnow()
             await session.commit()
         return "Счёт истёк. Создайте новый счёт из карточки товара."
 
@@ -807,7 +808,7 @@ async def check_purchase_payment(
 
 async def recover_pending_payments(bot: Bot) -> int:
     """Recover invoices and safe-to-retry deliveries after a restart."""
-    stale_before = datetime.utcnow() - timedelta(
+    stale_before = utcnow() - timedelta(
         seconds=CRYPTO_PAY_DELIVERY_STALE_SECONDS
     )
     async with SessionLocal() as session:
@@ -823,7 +824,7 @@ async def recover_pending_payments(bot: Bot) -> int:
             .values(
                 status="delivery_review_required",
                 delivery_error="Delivery interrupted; verify Telegram history before retry",
-                updated_at=datetime.utcnow(),
+                updated_at=utcnow(),
             )
         )
         await session.commit()
@@ -865,7 +866,7 @@ async def recover_pending_payments(bot: Bot) -> int:
                     purchase = await session.get(DigitalPurchase, payment.purchase_id)
                     if db_payment and db_payment.status != "paid":
                         db_payment.status = status
-                        db_payment.updated_at = datetime.utcnow()
+                        db_payment.updated_at = utcnow()
                     if purchase and purchase.status not in {
                         "delivered",
                         "paid",
@@ -874,7 +875,7 @@ async def recover_pending_payments(bot: Bot) -> int:
                     }:
                         purchase.status = status
                         purchase.active_key = None
-                        purchase.updated_at = datetime.utcnow()
+                        purchase.updated_at = utcnow()
                         if purchase.stock_item_id:
                             stock = await session.get(
                                 ProductStockItem, purchase.stock_item_id

@@ -42,7 +42,9 @@ async def category_counts(session, category_id: int) -> tuple[int, int]:
 
 def customer_home_text() -> str:
     return (
-        "Выберите товар:"
+        "🛍 КАТАЛОГ ТОВАРОВ\n\n"
+        "Выберите подходящую категорию. После выбора откроются товары, описание, цена и кнопка оплаты.\n\n"
+        "Не нашли нужное — воспользуйтесь поиском или напишите в поддержку 👇"
     )
 
 
@@ -73,7 +75,10 @@ def customer_home_keyboard(
     kb.adjust(columns)
 
     if search_enabled:
-        kb.button(text="🔍 Поиск товара", callback_data="buyer:search")
+        kb.button(text="🔍 Найти товар", callback_data="buyer:search")
+    kb.button(text="🧾 Мои заказы", callback_data="buyer:orders")
+    kb.button(text="🏠 Главное меню", callback_data="buyer:panel")
+    kb.adjust(columns, 1, 2)
 
     return kb.as_markup()
 

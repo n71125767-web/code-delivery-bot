@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from app.time_utils import utcnow
 
 
 class Base(DeclarativeBase):
@@ -53,9 +54,9 @@ class Order(Base):
 
     raw_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class SupplierRequest(Base):
@@ -70,7 +71,7 @@ class SupplierRequest(Base):
     status: Mapped[str] = mapped_column(String, default="sent", index=True)
     supplier_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     answered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
@@ -81,7 +82,7 @@ class Supplier(Base):
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     name: Mapped[str] = mapped_column(String, default="supplier")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class SupplierProduct(Base):
@@ -95,7 +96,7 @@ class SupplierProduct(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     supplier_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
     product_key: Mapped[str] = mapped_column(String, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class ServiceOption(Base):
@@ -106,7 +107,7 @@ class ServiceOption(Base):
     emoji: Mapped[str | None] = mapped_column(String, nullable=True)
     usage_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class ServiceList(Base):
@@ -115,7 +116,7 @@ class ServiceList(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String, unique=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class ServiceListItem(Base):
@@ -127,7 +128,7 @@ class ServiceListItem(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     list_name: Mapped[str] = mapped_column(String, index=True)
     service_name: Mapped[str] = mapped_column(String, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class TextTemplate(Base):
@@ -136,7 +137,7 @@ class TextTemplate(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     key: Mapped[str] = mapped_column(String, unique=True, index=True)
     value: Mapped[str] = mapped_column(Text)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Cooldown(Base):
@@ -148,7 +149,7 @@ class Cooldown(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(BigInteger, index=True)
     action: Mapped[str] = mapped_column(String, index=True)
-    last_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class ActionEvent(Base):
@@ -159,7 +160,7 @@ class ActionEvent(Base):
     order_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
     event_type: Mapped[str] = mapped_column(String, index=True)
     text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class AdminUser(Base):
@@ -170,7 +171,7 @@ class AdminUser(Base):
     name: Mapped[str | None] = mapped_column(String, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     added_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class BugReport(Base):
@@ -184,7 +185,7 @@ class BugReport(Base):
     role: Mapped[str | None] = mapped_column(String, nullable=True)
     text: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String, default="new", index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class ProductProvider(Base):
@@ -200,8 +201,8 @@ class ProductProvider(Base):
     )
     provider_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class ShopCategory(Base):
@@ -217,7 +218,7 @@ class ShopCategory(Base):
     )
     sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class ShopProduct(Base):
@@ -251,8 +252,8 @@ class ShopProduct(Base):
     views_count: Mapped[int] = mapped_column(Integer, default=0)
     sales_count: Mapped[int] = mapped_column(Integer, default=0)
     revenue_total: Mapped[float] = mapped_column(Numeric(24, 8), default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class ProductStockItem(Base):
@@ -268,7 +269,7 @@ class ProductStockItem(Base):
         BigInteger, nullable=True, index=True
     )
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class CatalogDisplaySettings(Base):
@@ -278,7 +279,7 @@ class CatalogDisplaySettings(Base):
     columns_count: Mapped[int] = mapped_column(Integer, default=1)
     sort_mode: Mapped[str] = mapped_column(String(30), default="position")
     search_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class DigitalPurchase(Base):
@@ -298,7 +299,7 @@ class DigitalPurchase(Base):
     status: Mapped[str] = mapped_column(String(30), default="new", index=True)
     delivery_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     idempotency_key: Mapped[str] = mapped_column(String(80), unique=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     delivery_started_at: Mapped[datetime | None] = mapped_column(
@@ -316,7 +317,7 @@ class DigitalPurchase(Base):
     legacy_order_id: Mapped[int | None] = mapped_column(
         ForeignKey("orders.id"), nullable=True, index=True
     )
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class CryptoPayment(Base):
@@ -342,8 +343,8 @@ class CryptoPayment(Base):
         DateTime, nullable=True
     )
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class PaymentEvent(Base):
@@ -358,7 +359,7 @@ class PaymentEvent(Base):
     processed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     error_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_body: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
@@ -373,7 +374,7 @@ class AdminAuditLog(Base):
         BigInteger, nullable=True, index=True
     )
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class ProductSnapshot(Base):
@@ -395,7 +396,7 @@ class ProductSnapshot(Base):
     currency: Mapped[str] = mapped_column(String(10))
     fulfillment_type: Mapped[str] = mapped_column(String(30), default="digital")
     provider_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class BotUser(Base):
@@ -404,9 +405,9 @@ class BotUser(Base):
     telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     username: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, index=True
+        DateTime, default=utcnow, index=True
     )
 
 
@@ -420,5 +421,16 @@ class BroadcastJob(Base):
     total_count: Mapped[int] = mapped_column(Integer, default=0)
     sent_count: Mapped[int] = mapped_column(Integer, default=0)
     failed_count: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    cursor: Mapped[int] = mapped_column(Integer, default=0)
+    recipients_json: Mapped[str] = mapped_column(Text, default="[]")
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class RuntimeState(Base):
+    __tablename__ = "runtime_states"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value_json: Mapped[str] = mapped_column(Text, default="{}")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

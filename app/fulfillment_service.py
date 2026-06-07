@@ -6,6 +6,7 @@ from decimal import Decimal
 from aiogram import Bot
 from sqlalchemy import select
 
+from app.time_utils import utcnow
 from app.config import ADMIN_IDS, PROXYLINE_API_KEY, PROXYLINE_COUPON, PROXYLINE_ENABLED
 from app.database import SessionLocal
 from app.models import (
@@ -114,11 +115,11 @@ async def fulfill_proxyline(
         row = await session.get(DigitalPurchase, purchase.id)
         db_product = await session.get(ShopProduct, product.id)
         row.status = "delivered"
-        row.delivered_at = datetime.utcnow()
+        row.delivered_at = utcnow()
         row.delivery_message_id = message.message_id
         row.delivery_error = None
         row.active_key = None
-        row.updated_at = datetime.utcnow()
+        row.updated_at = utcnow()
         db_product.sales_count = int(db_product.sales_count or 0) + 1
         db_product.revenue_total = Decimal(
             str(db_product.revenue_total or 0)
@@ -147,7 +148,7 @@ async def fulfill_supplier(
             amount=purchase.amount,
             currency=purchase.currency,
             status="waiting_service",
-            paid_at=purchase.paid_at or datetime.utcnow(),
+            paid_at=purchase.paid_at or utcnow(),
             raw_message=f"Crypto Pay purchase #{purchase.id}",
         )
         session.add(order)
@@ -176,7 +177,7 @@ async def fulfill_supplier(
         current.legacy_order_id = order.id
         current.status = "awaiting_supplier"
         current.active_key = None
-        current.updated_at = datetime.utcnow()
+        current.updated_at = utcnow()
         await session.commit()
         await session.refresh(order)
     try:
@@ -206,10 +207,10 @@ async def sync_purchase_from_order(
         if purchase is None:
             return
         purchase.status = "delivered" if success else "fulfillment_problem"
-        purchase.delivered_at = datetime.utcnow() if success else purchase.delivered_at
+        purchase.delivered_at = utcnow() if success else purchase.delivered_at
         purchase.delivery_error = (
             None if success else (error or "Supplier fulfillment problem")
         )
         purchase.active_key = None
-        purchase.updated_at = datetime.utcnow()
+        purchase.updated_at = utcnow()
         await session.commit()

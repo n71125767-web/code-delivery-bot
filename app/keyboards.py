@@ -736,65 +736,63 @@ def admin_proxy_settings_keyboard(settings) -> InlineKeyboardMarkup:
 
 # Shop UI/admin v20 overrides
 def admin_panel_keyboard() -> InlineKeyboardMarkup:
+    """Главная панель администратора: разделы сгруппированы по смыслу."""
     kb = InlineKeyboardBuilder()
-    kb.button(text="💰 Управление товарами", callback_data="v25:catalog")
+    kb.button(text="📦 Каталог и товары", callback_data="v25:catalog")
+    kb.button(text="🧾 Заказы и проблемы", callback_data="admin:problems")
+    kb.button(text="💳 Платежи", callback_data="admin:payments")
     kb.button(text="🪙 Способы оплаты", callback_data="admin:payment_methods")
-    kb.button(text="📊 Оплата", callback_data="admin:payments")
+    kb.button(text="🚚 Поставщики", callback_data="admin:suppliers")
+    kb.button(text="🧩 Сервисы и листы", callback_data="admin:services")
     kb.button(text="📢 Рассылка", callback_data="admin:broadcast")
-    kb.button(text="⚙️ Настройки", callback_data="admin:store_settings")
     kb.button(text="👮 Администраторы", callback_data="admin:admins")
-    kb.button(text="⚠️ Проблемы", callback_data="admin:problems")
-    kb.button(text="🏠 Главное меню", callback_data="buyer:panel")
-    kb.adjust(2)
+    kb.button(text="⚙️ Настройки магазина", callback_data="admin:store_settings")
+    kb.button(text="👤 Мой профиль", callback_data="admin:profile")
+    kb.button(text="🏠 В магазин", callback_data="buyer:panel")
+    kb.adjust(2, 2, 2, 2, 2, 1)
     return kb.as_markup()
 
 
 def buyer_inline_menu_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
+    """Единое понятное меню покупателя для обычного и Business-чата."""
     kb = InlineKeyboardBuilder()
-    kb.button(text="🛒 Товары", callback_data="buyer:shop")
-    kb.button(text="🌐 Прокси", callback_data="buyer:proxy_catalog")
-    kb.button(text="📱 Номера", callback_data="buyer:number_catalog")
-    kb.button(text="🧾 Мои заказы", callback_data="buyer:orders")
-    kb.button(text="✉️ Обратная связь", callback_data="buyer:feedback")
-    kb.button(text="📕 FAQ", callback_data="buyer:faq")
+    kb.button(text="🛍 Открыть каталог", callback_data="buyer:shop")
+    kb.button(text="📱 Купить номер", callback_data="buyer:number_catalog")
+    kb.button(text="🌐 Купить прокси", callback_data="buyer:proxy_catalog")
+    kb.button(text="📦 Активный заказ", callback_data="buyer:active")
+    kb.button(text="🧾 История заказов", callback_data="buyer:orders")
+    kb.button(text="👤 Мой профиль", callback_data="buyer:profile")
+    kb.button(text="🆘 Поддержка", callback_data="buyer:feedback")
+    kb.button(text="❓ Как это работает", callback_data="buyer:faq")
     if is_admin:
-        kb.button(text="⚙️ Админ меню", callback_data="admin:panel")
-    kb.adjust(1, 2, 1, 2, 1)
+        kb.button(text="⚙️ Панель администратора", callback_data="admin:panel")
+    kb.adjust(1, 2, 2, 1, 2, 1)
     return kb.as_markup()
 
 
-# Shop UI navigation fix v20.1
 def buyer_back_to_panel_keyboard() -> InlineKeyboardMarkup:
-    """Навигация из информационных разделов покупателя."""
     kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ Назад к магазину", callback_data="buyer:shop")
+    kb.button(text="⬅️ Назад в каталог", callback_data="buyer:shop")
     kb.button(text="🏠 Главное меню", callback_data="buyer:panel")
     kb.adjust(1)
     return kb.as_markup()
 
 
-# Main sections reply keyboard v20.4
 def buyer_main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text="🛒 Товары")],
-        [KeyboardButton(text="🌐 Прокси"), KeyboardButton(text="📱 Номера")],
-        [KeyboardButton(text="🧾 Мои заказы")],
-        [KeyboardButton(text="✉️ Обратная связь"), KeyboardButton(text="📕 FAQ")],
+        [KeyboardButton(text="🛍 Каталог товаров")],
+        [KeyboardButton(text="📱 Купить номер"), KeyboardButton(text="🌐 Купить прокси")],
+        [KeyboardButton(text="📦 Активный заказ"), KeyboardButton(text="🧾 История заказов")],
+        [KeyboardButton(text="👤 Мой профиль"), KeyboardButton(text="🆘 Поддержка")],
+        [KeyboardButton(text="❓ Как это работает")],
     ]
     if is_admin:
-        rows.append([KeyboardButton(text="💰 Управление товарами")])
-        rows.append(
-            [
-                KeyboardButton(text="💳 Оплата"),
-                KeyboardButton(text="📢 Рассылка"),
-            ]
-        )
-        rows.append([KeyboardButton(text="⚙️ Админ меню")])
+        rows.append([KeyboardButton(text="⚙️ Панель администратора")])
     return ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,
         one_time_keyboard=False,
-        input_field_placeholder="Выберите раздел",
+        input_field_placeholder="Выберите нужный раздел",
         selective=True,
     )
 

@@ -40,3 +40,9 @@ DATABASE_URL
 ```text
 FIX_MARKER_MCS_CLEAN=v33 loaded
 ```
+
+## V34 reliability patch
+
+The current build persists admin/runtime states in the database, resumes interrupted broadcasts, uses random internal product IDs, uses timezone-based UTC timestamps, and redirects obsolete callback buttons to the current menu.
+
+Log marker: `FIX_MARKER_MCS_HARDENED=v34 loaded`
