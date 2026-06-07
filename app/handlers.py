@@ -238,6 +238,7 @@ from app.services import (
 
 logger = logging.getLogger(__name__)
 logger.info("FIX_MARKER_MCS_PANEL=v32.1 loaded")
+logger.info("FIX_MARKER_ADMIN_BUTTONS=v32.2 loaded")
 logger.info("FIX_MARKER_FULL_VISUAL_SHOP_STYLE=v15 loaded")
 logger.info("FIX_MARKER_PROXYLINE_ADMIN_BUYER_SELECT=v17 loaded")
 logger.info("FIX_MARKER_RELEASE_REBUILD=v18 loaded")
@@ -409,6 +410,7 @@ BUYER_CATALOG_SEARCH_WAIT: set[int] = set()
 BUYER_FEEDBACK_WAIT: set[int] = set()
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
+ADMIN_ACTION_WAIT: dict[int, str] = {}
 
 # Динамические панели ролей: храним последнее inline-сообщение панели,
 # чтобы команды и callback-кнопки редактировали его, а не спамили новым сообщением.
@@ -1129,6 +1131,95 @@ async def process_admin_pending_input(bot: Bot, message: Message, business_conne
             reply_markup=admin_admins_keyboard(),
         )
         await safe_send_message(bot, new_admin_id, "Вы назначены дополнительным админом. Откройте /admin")
+        return True
+
+    action = ADMIN_ACTION_WAIT.get(admin_id)
+    if action:
+        if text.lower() in {"отмена", "cancel", "/cancel"}:
+            ADMIN_ACTION_WAIT.pop(admin_id, None)
+            await temp_answer(
+                bot,
+                message,
+                "Действие отменено.",
+                business_connection_id,
+                reply_markup=admin_panel_keyboard(),
+            )
+            return True
+
+        try:
+            async with SessionLocal() as session:
+                if action == "add_supplier":
+                    parts = text.split(maxsplit=1)
+                    if len(parts) < 1:
+                        raise ValueError("Пришлите: TELEGRAM_ID Имя")
+                    supplier_id = int(parts[0])
+                    name = parts[1].strip() if len(parts) > 1 else f"supplier_{supplier_id}"
+                    supplier = await add_supplier(session, supplier_id, name)
+                    result = f"✅ Поставщик добавлен: {supplier.telegram_id} — {supplier.name}"
+
+                elif action == "remove_supplier":
+                    supplier_id = int(text.split()[0])
+                    ok = await remove_supplier(session, supplier_id)
+                    result = "✅ Поставщик удалён." if ok else "⚠️ Поставщик не найден."
+
+                elif action == "bind_supplier":
+                    if "|" in text:
+                        left, product_key = [part.strip() for part in text.split("|", 1)]
+                    else:
+                        parts = text.split(maxsplit=1)
+                        if len(parts) < 2:
+                            raise ValueError("Пришлите: TELEGRAM_ID | товар_или_ID")
+                        left, product_key = parts
+                    supplier_id = int(left)
+                    result = await bind_supplier_to_product(session, supplier_id, product_key)
+
+                elif action == "add_service":
+                    if not text:
+                        raise ValueError("Пришлите название сервиса")
+                    result = await add_service(session, text)
+
+                elif action == "remove_service":
+                    if not text:
+                        raise ValueError("Пришлите название сервиса")
+                    result = await remove_service(session, text)
+
+                elif action == "service_emoji":
+                    if "|" not in text:
+                        raise ValueError("Пришлите: Название сервиса | эмодзи")
+                    name, emoji = [part.strip() for part in text.split("|", 1)]
+                    result = await set_service_emoji(session, name, emoji)
+
+                elif action == "add_list":
+                    if not text:
+                        raise ValueError("Пришлите название списка")
+                    result = await add_service_list(session, text)
+
+                elif action == "list_add_service":
+                    if "|" not in text:
+                        raise ValueError("Пришлите: Название списка | Название сервиса")
+                    list_name, service_name = [part.strip() for part in text.split("|", 1)]
+                    result = await add_service_to_list(session, list_name, service_name)
+
+                else:
+                    ADMIN_ACTION_WAIT.pop(admin_id, None)
+                    return False
+        except Exception as exc:
+            await temp_answer(
+                bot,
+                message,
+                f"❌ Не удалось выполнить действие: {exc}\n\nПовторите ввод или напишите «Отмена».",
+                business_connection_id,
+            )
+            return True
+
+        ADMIN_ACTION_WAIT.pop(admin_id, None)
+        await temp_answer(
+            bot,
+            message,
+            str(result),
+            business_connection_id,
+            reply_markup=admin_panel_keyboard(),
+        )
         return True
 
     key = ADMIN_TEXT_EDIT_WAIT.get(admin_id)
@@ -3450,6 +3541,7 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         SHOP_ADMIN_WAIT.pop(user_id, None)
         ADMIN_TEXT_EDIT_WAIT.pop(user_id, None)
         ADMIN_ADD_ADMIN_WAIT.discard(user_id)
+        ADMIN_ACTION_WAIT.pop(user_id, None)
         BUYER_CATALOG_SEARCH_WAIT.discard(user_id)
         if await process_main_reply_button(bot, message, business_connection_id):
             return
@@ -3559,6 +3651,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return False
 
     data = callback.data or ""
+    ADMIN_ACTION_WAIT.pop(callback.from_user.id, None)
 
     if data == "admin:noop":
         await callback.answer()
@@ -4924,6 +5017,66 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         await callback.answer()
         return True
 
+    if data == "admin:commands":
+        await update_or_send(
+            callback,
+            "⚙️ Админ-панель\n\n"
+            "Все действия выполняются кнопками. Команды со слешем не требуются.\n\n"
+            "Основные разделы:\n"
+            "• Управление товарами\n"
+            "• Способы оплаты\n"
+            "• Статистика оплат\n"
+            "• Рассылка\n"
+            "• Настройки\n"
+            "• Администраторы\n"
+            "• Проблемные заказы",
+            reply_markup=admin_panel_keyboard(),
+        )
+        await callback.answer()
+        return True
+
+    prompt_actions = {
+        "admin:add_supplier_help": (
+            "add_supplier",
+            "➕ Добавление поставщика\n\nОтправьте Telegram ID и имя одним сообщением.\n\nПример:\n123456789 Proxy Supplier",
+        ),
+        "admin:remove_supplier_help": (
+            "remove_supplier",
+            "🗑 Удаление поставщика\n\nОтправьте Telegram ID поставщика.",
+        ),
+        "admin:bind_supplier_help": (
+            "bind_supplier",
+            "🔗 Привязка поставщика\n\nОтправьте:\nTELEGRAM_ID | товар_или_ID\n\nПример:\n123456789 | MTProxy 1 месяц",
+        ),
+        "admin:add_service_help": (
+            "add_service",
+            "➕ Добавление сервиса\n\nОтправьте название сервиса.\n\nПример:\nTelegram",
+        ),
+        "admin:remove_service_help": (
+            "remove_service",
+            "🗑 Удаление сервиса\n\nОтправьте точное название сервиса.",
+        ),
+        "admin:service_emoji_help": (
+            "service_emoji",
+            "🔥 Эмодзи сервиса\n\nОтправьте:\nНазвание сервиса | эмодзи\n\nПример:\nTelegram | 🔥",
+        ),
+        "admin:list_help": (
+            "add_list",
+            "➕ Создание списка сервисов\n\nОтправьте название нового списка.",
+        ),
+        "admin:list_add_service_help": (
+            "list_add_service",
+            "➕ Добавление сервиса в список\n\nОтправьте:\nНазвание списка | Название сервиса",
+        ),
+    }
+
+    if data in prompt_actions:
+        action, prompt = prompt_actions[data]
+        ADMIN_ACTION_WAIT[callback.from_user.id] = action
+        await update_or_send(callback, prompt, reply_markup=admin_back_keyboard())
+        await callback.answer("Жду данные")
+        return True
+
     help_texts = {
         "admin:add_supplier_help": "Добавить поставщика:\n/add_supplier TELEGRAM_ID Имя\n\nПример:\n/add_supplier 123456789 proxy_supplier",
         "admin:bind_supplier_help": "Привязать товар:\n/bind_supplier TELEGRAM_ID товар_или_ID\n\nПример:\n/bind_supplier 123456789 proxy",
@@ -5432,7 +5585,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
 
     # Админы и поставщики работают без cooldown на inline-кнопках.
     # Для покупателя защита от случайного многократного нажатия сохраняется.
-    if data and not data.startswith(("admin:", "supplier:")):
+    if data and not data.startswith(("admin:", "v25:", "v28:", "supplier:")):
         if not await check_button_cooldown(callback, data.split(":")[0]):
             return
 
@@ -5443,11 +5596,22 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         if handled:
             return
 
-    if data.startswith("admin:"):
+    if data.startswith(("admin:", "v25:", "v28:")):
         handled = await handle_admin_callback(bot, callback)
         if handled:
             return
-        await callback.answer("Команда только для админа", show_alert=True)
+        if not callback.from_user or not await is_admin_user(callback.from_user.id):
+            await callback.answer("Команда только для администратора", show_alert=True)
+        else:
+            logger.error(
+                "UNHANDLED_ADMIN_BUTTON user_id=%s callback=%s",
+                callback.from_user.id,
+                data,
+            )
+            await callback.answer(
+                "Кнопка устарела. Откройте админ-панель заново.",
+                show_alert=True,
+            )
         return
 
     if data.startswith("supplier:"):

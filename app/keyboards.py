@@ -638,7 +638,7 @@ def buyer_order_card_keyboard(order_id: int, status: str | None = None) -> Inlin
 
 def admin_proxy_products_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="📦 › Товары Admaker / инструкция", callback_data="admin:proxy:products_help")
+    kb.button(text="📦 › Товары магазина / инструкция", callback_data="admin:proxy:products_help")
     kb.button(text="🔄 › Обновить список", callback_data="admin:proxy:products")
     kb.button(text="⬅️ › К настройкам прокси", callback_data="admin:proxy")
     kb.adjust(1)
