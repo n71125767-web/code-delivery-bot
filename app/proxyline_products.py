@@ -74,11 +74,7 @@ def _load_exact_products() -> dict[str, dict[str, Any]]:
     try:
         data = json.loads(PROXYLINE_PRODUCTS_JSON)
         if isinstance(data, dict):
-            return {
-                str(k).strip().lower(): v
-                for k, v in data.items()
-                if isinstance(v, dict)
-            }
+            return {str(k).strip().lower(): v for k, v in data.items() if isinstance(v, dict)}
     except Exception:
         return {}
     return {}
@@ -106,29 +102,20 @@ def resolve_proxyline_product(product_name: str | None) -> ProxylineProduct | No
         return ProxylineProduct(
             country=str(exact.get("country", PROXYLINE_DEFAULT_COUNTRY)).lower(),
             period=int(exact.get("period", PROXYLINE_DEFAULT_PERIOD)),
-            count=int(
-                exact.get("count", exact.get("quantity", PROXYLINE_DEFAULT_COUNT))
-            ),
+            count=int(exact.get("count", exact.get("quantity", PROXYLINE_DEFAULT_COUNT))),
             ip_version=int(exact.get("ip_version", PROXYLINE_DEFAULT_IP_VERSION)),
-            proxy_type=str(
-                exact.get("type", exact.get("proxy_type", PROXYLINE_DEFAULT_TYPE))
-            ).lower(),
+            proxy_type=str(exact.get("type", exact.get("proxy_type", PROXYLINE_DEFAULT_TYPE))).lower(),
             coupon=exact.get("coupon"),
         )
 
     country = PROXYLINE_DEFAULT_COUNTRY
     for alias, code in COUNTRY_ALIASES.items():
-        if re.search(
-            rf"(^|[^a-zа-я0-9]){re.escape(alias)}([^a-zа-я0-9]|$)", name, flags=re.I
-        ):
+        if re.search(rf"(^|[^a-zа-я0-9]){re.escape(alias)}([^a-zа-я0-9]|$)", name, flags=re.I):
             country = code
             break
 
     period = PROXYLINE_DEFAULT_PERIOD
-    m = re.search(
-        r"(5|10|20|30|60|90|120|150|180|210|240|270|300|330|360)\s*(дн|day|days|дней|сут|месяц)?",
-        name,
-    )
+    m = re.search(r"(5|10|20|30|60|90|120|150|180|210|240|270|300|330|360)\s*(дн|day|days|дней|сут|месяц)?", name)
     if m:
         period = int(m.group(1))
 
@@ -138,9 +125,7 @@ def resolve_proxyline_product(product_name: str | None) -> ProxylineProduct | No
         count = max(1, int(m.group(1)))
 
     ip_version = 6 if "ipv6" in name or "ip6" in name else PROXYLINE_DEFAULT_IP_VERSION
-    proxy_type = (
-        "shared" if "shared" in name or "общ" in name else PROXYLINE_DEFAULT_TYPE
-    )
+    proxy_type = "shared" if "shared" in name or "общ" in name else PROXYLINE_DEFAULT_TYPE
 
     return ProxylineProduct(
         country=country,

@@ -5,6 +5,7 @@ os.environ.setdefault("ADMIN_IDS", "1")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test-smoke.db")
 
 from app.keyboards import buyer_inline_menu_keyboard, buyer_main_reply_keyboard
+from app.shop import proxy_main_keyboard
 
 
 def callback_set(markup):
@@ -17,7 +18,11 @@ def callback_set(markup):
 
 
 def reply_text_set(markup):
-    return {button.text for row in markup.keyboard for button in row}
+    return {
+        button.text
+        for row in markup.keyboard
+        for button in row
+    }
 
 
 def test_buyer_inline_menu():
@@ -38,6 +43,12 @@ def test_main_reply_keyboard():
     assert "⚙️ Админ меню" in admin
 
 
-def test_proxy_entry_is_local_catalog():
-    buyer = callback_set(buyer_inline_menu_keyboard(is_admin=False))
-    assert "buyer:proxy_catalog" in buyer
+def test_proxy_groups():
+    callbacks = callback_set(proxy_main_keyboard())
+
+    assert {
+        "buyer:proxygroup:mtproxy",
+        "buyer:proxygroup:premium",
+        "buyer:proxygroup:standard",
+        "buyer:proxygroup:rotation",
+    } <= callbacks

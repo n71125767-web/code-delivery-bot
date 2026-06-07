@@ -22,7 +22,7 @@ def paginate(items, page: int, page_size: int = 12):
     pages = max(1, (len(rows) + page_size - 1) // page_size)
     page = max(0, min(int(page), pages - 1))
     start = page * page_size
-    return rows[start : start + page_size], page, pages
+    return rows[start:start + page_size], page, pages
 
 
 async def search_visible_products(session, query: str, limit: int = 30):
@@ -30,21 +30,17 @@ async def search_visible_products(session, query: str, limit: int = 30):
     if not clean:
         return []
     pattern = f"%{clean}%"
-    rows = list(
-        (
-            await session.scalars(
-                select(ShopProduct)
-                .where(
-                    ShopProduct.is_active.is_(True),
-                    ShopProduct.payment_enabled.is_(True),
-                    or_(
-                        ShopProduct.name.ilike(pattern),
-                        ShopProduct.description.ilike(pattern),
-                    ),
-                )
-                .order_by(ShopProduct.sort_order, ShopProduct.id)
-                .limit(limit)
-            )
-        ).all()
-    )
+    rows = list((await session.scalars(
+        select(ShopProduct)
+        .where(
+            ShopProduct.is_active.is_(True),
+            ShopProduct.payment_enabled.is_(True),
+            or_(
+                ShopProduct.name.ilike(pattern),
+                ShopProduct.description.ilike(pattern),
+            ),
+        )
+        .order_by(ShopProduct.sort_order, ShopProduct.id)
+        .limit(limit)
+    )).all())
     return rows

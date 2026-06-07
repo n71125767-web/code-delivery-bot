@@ -27,9 +27,7 @@ async def safe_send_message(
     has_keyboard = reply_markup is not None
 
     if chat_id == me.id:
-        logger.info(
-            "SKIP_SEND_TO_SELF chat_id=%s has_keyboard=%s", chat_id, has_keyboard
-        )
+        logger.info("SKIP_SEND_TO_SELF chat_id=%s has_keyboard=%s", chat_id, has_keyboard)
         return False
 
     if business_connection_id:
