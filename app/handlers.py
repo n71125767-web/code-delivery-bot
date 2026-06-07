@@ -10,6 +10,7 @@ from sqlalchemy import select, func
 from aiogram import Bot
 from aiogram.exceptions import TelegramRetryAfter
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.config import (
     ADMIN_IDS,
@@ -239,6 +240,7 @@ from app.services import (
 logger = logging.getLogger(__name__)
 logger.info("FIX_MARKER_MCS_PANEL=v32.1 loaded")
 logger.info("FIX_MARKER_ADMIN_BUTTONS=v32.2 loaded")
+logger.info("FIX_MARKER_INLINE_KEYBOARD=v32.3 loaded")
 logger.info("FIX_MARKER_FULL_VISUAL_SHOP_STYLE=v15 loaded")
 logger.info("FIX_MARKER_PROXYLINE_ADMIN_BUYER_SELECT=v17 loaded")
 logger.info("FIX_MARKER_RELEASE_REBUILD=v18 loaded")
@@ -3498,6 +3500,21 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         logger.info("IGNORED: own bot message")
         return
 
+    # Telegram Business can duplicate an administrator message: one normal update
+    # and one business_message whose chat_id equals the bot's own ID.
+    # Process the normal update and ignore the duplicate business copy.
+    if (
+        is_business
+        and message.chat.id == me.id
+        and await is_admin_user(user_id)
+    ):
+        logger.info(
+            "IGNORED: duplicate admin business copy user_id=%s chat_id=%s",
+            user_id,
+            message.chat.id,
+        )
+        return
+
     if user_id in BUYER_CATALOG_SEARCH_WAIT and not text.startswith("/"):
         if await process_buyer_catalog_search(bot, message, business_connection_id):
             return
@@ -3562,7 +3579,14 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         if await process_main_reply_button(bot, message, business_connection_id):
             return
 
-        logger.info("IGNORED: admin non-command message to avoid self-cycle")
+        logger.info(
+            "IGNORED: admin non-command without active state user_id=%s "
+            "catalog_state=%s shop_state=%s admin_state=%s",
+            user_id,
+            user_id in CATALOG_V25_STATE,
+            user_id in SHOP_ADMIN_WAIT,
+            user_id in ADMIN_ACTION_WAIT,
+        )
         return
 
     if IGNORE_OTHER_BOTS and sender.is_bot:
