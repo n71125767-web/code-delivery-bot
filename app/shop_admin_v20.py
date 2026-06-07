@@ -42,8 +42,7 @@ async def category_counts(session, category_id: int) -> tuple[int, int]:
 
 def customer_home_text() -> str:
     return (
-        "🛍 Добро пожаловать в MCS Shop\n\n"
-        "Выберите нужный раздел или категорию из списка ниже 👇"
+        "Выберите товар:"
     )
 
 

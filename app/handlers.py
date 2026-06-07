@@ -147,6 +147,10 @@ from app.shop import (
     list_general_products,
     proxy_main_text,
     proxy_main_keyboard,
+    proxy_categories_text,
+    proxy_categories_keyboard,
+    proxy_category_title,
+    list_proxy_products_by_category,
 )
 
 from app.catalog_v25 import (
@@ -189,6 +193,7 @@ from app.admin_reference_v28 import (
     store_settings_keyboard,
 )
 
+from app.visual_ui_v32 import category_asset, category_caption, product_caption
 from app.catalog_runtime_v29 import (
     search_visible_products,
     sort_products,
@@ -285,6 +290,8 @@ logger.info("FIX_MARKER_STANDALONE_STORE=v27 loaded")
 logger.info("FIX_MARKER_MCS_REFERENCE=v28 loaded")
 logger.info("FIX_MARKER_MCS_STABLE=v29 loaded")
 logger.info("FIX_MARKER_MCS_HARDENED=v31 loaded")
+logger.info("FIX_MARKER_MCS_UI_ROUTING=v31.1 loaded")
+logger.info("FIX_MARKER_MCS_VISUAL=v32 loaded")
 
 
 def validate_runtime_ui() -> None:
@@ -375,7 +382,7 @@ def validate_runtime_ui() -> None:
     if "⚙️ Админ меню" not in admin_reply_texts:
         raise RuntimeError("UI self-check failed: admin reply button missing for admin")
 
-    proxy_markup = proxy_main_keyboard()
+    proxy_markup = proxy_categories_keyboard()
     proxy_callbacks = {
         button.callback_data
         for row in proxy_markup.inline_keyboard
@@ -384,10 +391,10 @@ def validate_runtime_ui() -> None:
     }
 
     required_proxy_callbacks = {
-        "buyer:proxygroup:mtproxy",
-        "buyer:proxygroup:premium",
-        "buyer:proxygroup:standard",
-        "buyer:proxygroup:rotation",
+        "buyer:proxycat:mtproxy",
+        "buyer:proxycat:premium",
+        "buyer:proxycat:standard",
+        "buyer:proxycat:residential",
     }
 
     missing_proxy = required_proxy_callbacks - proxy_callbacks
@@ -877,6 +884,54 @@ async def update_or_send(callback: CallbackQuery, text: str, reply_markup=None) 
                 data,
                 send_exc,
             )
+
+
+
+
+async def show_visual_card(
+    callback: CallbackQuery,
+    caption: str,
+    reply_markup=None,
+    photo=None,
+    video_file_id: str | None = None,
+) -> None:
+    """Показывает экран как в референсе: медиа-карточка + inline-кнопки."""
+    if not callback.message:
+        return
+    chat_id = callback.message.chat.id
+    business_id = get_callback_business_id(callback)
+    try:
+        if video_file_id:
+            sent = await callback.bot.send_video(
+                chat_id=chat_id,
+                video=video_file_id,
+                caption=caption,
+                reply_markup=reply_markup,
+                business_connection_id=business_id,
+            )
+        elif photo:
+            sent = await callback.bot.send_photo(
+                chat_id=chat_id,
+                photo=photo,
+                caption=caption,
+                reply_markup=reply_markup,
+                business_connection_id=business_id,
+            )
+        else:
+            await update_or_send(callback, caption, reply_markup=reply_markup)
+            return
+        try:
+            if sent.message_id != callback.message.message_id:
+                await callback.message.delete()
+        except Exception:
+            pass
+    except Exception:
+        logger.exception(
+            "VISUAL_CARD_SEND_FAILED chat_id=%s data=%s",
+            chat_id,
+            callback.data,
+        )
+        await update_or_send(callback, caption, reply_markup=reply_markup)
 
 
 async def delete_later(
@@ -2684,9 +2739,9 @@ async def process_main_reply_button(
         await answer_message(
             bot,
             message,
-            proxy_main_text(),
+            proxy_categories_text(),
             business_connection_id,
-            reply_markup=proxy_main_keyboard(),
+            reply_markup=proxy_categories_keyboard(),
         )
         return True
 
@@ -4166,6 +4221,29 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
             ),
         )
         return
+
+    main_reply_buttons = {
+        "🛒 Товар",
+        "🛒 Товары",
+        "🌐 Прокси",
+        "📱 Номера",
+        "🧾 Мои заказы",
+        "✉️ Обратная связь",
+        "📕 FAQ",
+        "💰 Управление товарами",
+        "💳 Оплата",
+        "📢 Рассылка",
+        "⚙️ Админ меню",
+    }
+    if text in main_reply_buttons:
+        # Нажатие главной кнопки отменяет незавершённый ввод старого мастера.
+        CATALOG_V25_STATE.pop(user_id, None)
+        SHOP_ADMIN_WAIT.pop(user_id, None)
+        ADMIN_TEXT_EDIT_WAIT.pop(user_id, None)
+        ADMIN_ADD_ADMIN_WAIT.discard(user_id)
+        BUYER_CATALOG_SEARCH_WAIT.discard(user_id)
+        if await process_main_reply_button(bot, message, business_connection_id):
+            return
 
     if await is_admin_user(user_id) and not text.startswith("/"):
         # Сначала обрабатываем ввод, который ожидает админка:
@@ -6793,11 +6871,22 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         if handled:
             return
 
-    if data.startswith("admin:"):
+    if data.startswith(("admin:", "v25:", "v28:")):
         handled = await handle_admin_callback(bot, callback)
         if handled:
             return
-        await callback.answer("Команда только для админа", show_alert=True)
+        if not callback.from_user or not await is_admin_user(callback.from_user.id):
+            await callback.answer("Команда только для админа", show_alert=True)
+        else:
+            logger.warning(
+                "UNHANDLED_ADMIN_CALLBACK user_id=%s data=%s",
+                callback.from_user.id,
+                data,
+            )
+            await callback.answer(
+                "Эта кнопка устарела. Откройте админ-меню заново.",
+                show_alert=True,
+            )
         return
 
     if data.startswith("supplier:"):
@@ -6817,12 +6906,25 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         return
 
     if data == "buyer:proxy_catalog":
-        async with SessionLocal() as session:
-            products = await list_proxy_products(session)
         await update_or_send(
             callback,
-            special_catalog_text("🌐 Прокси", len(products)),
-            reply_markup=special_products_keyboard(products, "buyer:panel"),
+            proxy_categories_text(),
+            reply_markup=proxy_categories_keyboard(),
+        )
+        await callback.answer()
+        return
+
+    if data.startswith("buyer:proxycat:"):
+        category_key = data.rsplit(":", 1)[1]
+        async with SessionLocal() as session:
+            products = await list_proxy_products_by_category(session, category_key)
+        await update_or_send(
+            callback,
+            proxy_category_title(category_key),
+            reply_markup=special_products_keyboard(
+                products,
+                back_callback="buyer:proxy_catalog",
+            ),
         )
         await callback.answer()
         return
@@ -6833,9 +6935,33 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         )
         return
 
-    if data.startswith("buyer:proxygroup:") or data.startswith("buyer:proxypackage:"):
+    if data.startswith("buyer:proxygroup:"):
+        legacy_key = data.rsplit(":", 1)[1]
+        key_map = {
+            "mtproxy": "mtproxy",
+            "premium": "premium",
+            "standard": "standard",
+            "rotation": "residential",
+            "residential": "residential",
+        }
+        category_key = key_map.get(legacy_key, legacy_key)
+        async with SessionLocal() as session:
+            products = await list_proxy_products_by_category(session, category_key)
+        await update_or_send(
+            callback,
+            proxy_category_title(category_key),
+            reply_markup=special_products_keyboard(
+                products,
+                back_callback="buyer:proxy_catalog",
+            ),
+        )
+        await callback.answer()
+        return
+
+    if data.startswith("buyer:proxypackage:"):
         await callback.answer(
-            "Этот экран устарел. Откройте раздел «Прокси» заново.", show_alert=True
+            "Выберите актуальный тариф из раздела «Прокси».",
+            show_alert=True,
         )
         return
 
@@ -6904,15 +7030,17 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             return
 
         products = sort_products(products, display_settings.sort_mode)
-        await update_or_send(
+        category_photo = category.photo_file_id or category_asset(category.name)
+        await show_visual_card(
             callback,
-            category_text(category, len(products)),
+            category_caption(category),
             reply_markup=products_keyboard(
                 products,
                 category_id,
                 display_settings.columns_count,
                 page=page,
             ),
+            photo=category_photo,
         )
         await callback.answer()
         return
@@ -6992,10 +7120,26 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         if not product:
             await callback.answer("Товар не найден", show_alert=True)
             return True
-        await update_or_send(
+        provider_type = provider.provider_type if provider else None
+        fallback_photo = None
+        if not product.photo_file_id and not product.video_file_id:
+            async with SessionLocal() as session:
+                category = (
+                    await session.get(ShopCategory, product.category_id)
+                    if product.category_id
+                    else None
+                )
+            fallback_photo = (
+                category.photo_file_id or category_asset(category.name)
+                if category
+                else None
+            )
+        await show_visual_card(
             callback,
-            product_text(product, provider.provider_type if provider else None),
+            product_caption(product, provider_type),
             reply_markup=product_keyboard(product, ""),
+            photo=product.photo_file_id or fallback_photo,
+            video_file_id=product.video_file_id,
         )
         await callback.answer()
         return True
@@ -7020,10 +7164,26 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         if not product or not product.is_active:
             await callback.answer("Товар недоступен", show_alert=True)
             return
-        await update_or_send(
+        provider_type = provider.provider_type if provider else None
+        fallback_photo = None
+        if not product.photo_file_id and not product.video_file_id:
+            async with SessionLocal() as session:
+                category = (
+                    await session.get(ShopCategory, product.category_id)
+                    if product.category_id
+                    else None
+                )
+            fallback_photo = (
+                category.photo_file_id or category_asset(category.name)
+                if category
+                else None
+            )
+        await show_visual_card(
             callback,
-            product_text(product, provider.provider_type if provider else None),
+            product_caption(product, provider_type),
             reply_markup=product_keyboard(product, ""),
+            photo=product.photo_file_id or fallback_photo,
+            video_file_id=product.video_file_id,
         )
         await callback.answer()
         return

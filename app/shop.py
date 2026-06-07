@@ -95,21 +95,49 @@ async def get_product(session, product_id: int):
 
 
 async def list_proxy_products(session):
-    """Активные товары, явно назначенные на Proxyline."""
-    stmt = (
+    """
+    Активные прокси-товары собственного магазина.
+
+    Явная привязка ProductProvider(provider_type="proxyline") поддерживается,
+    но больше не обязательна: товары с прокси-названием определяются автоматически.
+    """
+    products = list((await session.scalars(
         select(ShopProduct)
-        .join(
-            ProductProvider,
-            ProductProvider.internal_key == ShopProduct.internal_key,
-        )
-        .where(
-            ShopProduct.is_active.is_(True),
-            ProductProvider.enabled.is_(True),
-            ProductProvider.provider_type == "proxyline",
-        )
+        .where(ShopProduct.is_active.is_(True))
         .order_by(ShopProduct.sort_order, ShopProduct.id)
+    )).all())
+
+    providers = list((await session.scalars(
+        select(ProductProvider).where(
+            ProductProvider.enabled.is_(True),
+            ProductProvider.provider_type.in_(("proxyline", "proxys")),
+        )
+    )).all())
+    explicit_keys = {row.internal_key for row in providers}
+
+    proxy_words = (
+        "proxy",
+        "прокси",
+        "mtproxy",
+        "mt proxy",
+        "premium",
+        "премиум",
+        "standard",
+        "стандарт",
+        "residential",
+        "резидент",
+        "rotation",
+        "ротац",
     )
-    return list((await session.scalars(stmt)).all())
+
+    result = []
+    for product in products:
+        name = (product.name or "").lower()
+        if product.internal_key in explicit_keys or any(
+            word in name for word in proxy_words
+        ):
+            result.append(product)
+    return result
 
 
 async def list_number_products(session):
@@ -414,7 +442,7 @@ def products_keyboard(
 
     for row in page_rows:
         kb.button(
-            text=f"📦 {row.name} — {money(row.price, row.currency)}",
+            text=f"{row.name}",
             callback_data=f"buyer:shopproduct:{row.id}",
         )
 
@@ -447,7 +475,7 @@ def product_keyboard(product: ShopProduct, shop_username: str) -> InlineKeyboard
     kb = InlineKeyboardBuilder()
     if product.is_active and product.payment_enabled:
         kb.button(
-            text="✅ Купить",
+            text="🤖 Оплатить • CryptoBot",
             callback_data=f"buyer:buy:{product.id}",
             style="success",
         )

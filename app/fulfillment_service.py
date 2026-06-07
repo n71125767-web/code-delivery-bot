@@ -39,6 +39,23 @@ async def resolve_fulfillment(product: ShopProduct) -> tuple[str, str | None]:
             )
         )
     if provider is None:
+        name = (product.name or "").lower()
+        proxy_words = (
+            "proxy",
+            "прокси",
+            "mtproxy",
+            "mt proxy",
+            "premium",
+            "премиум",
+            "standard",
+            "стандарт",
+            "residential",
+            "резидент",
+            "rotation",
+            "ротац",
+        )
+        if any(word in name for word in proxy_words):
+            return "proxyline", None
         return ("stock" if product.product_type == "quantity" else "digital", None)
     if provider.provider_type == "proxyline":
         return "proxyline", provider.provider_key
