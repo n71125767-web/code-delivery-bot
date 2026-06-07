@@ -16,7 +16,8 @@ from app.cryptopay_service import (
     process_webhook,
     recover_pending_payments,
 )
-from app.database import init_db
+from sqlalchemy import text
+from app.database import SessionLocal, init_db
 from app.handlers import (
     on_message,
     on_business_message,
@@ -35,11 +36,22 @@ _web_bot: Bot | None = None
 
 
 async def health(_request):
+    db_ok = False
+    try:
+        async with SessionLocal() as session:
+            await session.execute(text("SELECT 1"))
+        db_ok = True
+    except Exception:
+        logger.exception("HEALTH_DB_FAILED")
+    status = 200 if db_ok else 503
     return web.json_response(
         {
-            "status": "ok",
+            "status": "ok" if db_ok else "degraded",
+            "database": "ok" if db_ok else "error",
             "cryptopay_enabled": CRYPTO_PAY_ENABLED,
-        }
+            "bot_ready": _web_bot is not None,
+        },
+        status=status,
     )
 
 
@@ -77,9 +89,7 @@ async def start_health_server(bot: Bot):
         _health_runner = runner
         logger.info("HTTP server started on port %s", port)
         if CRYPTO_PAY_ENABLED:
-            logger.info(
-                "Crypto Pay webhook path configured: /crypto/webhook"
-            )
+            logger.info("Crypto Pay webhook path configured: /crypto/webhook")
         return runner
 
 
@@ -109,7 +119,9 @@ async def payment_recovery_loop(bot: Bot) -> None:
 
 
 async def main():
+    logger.info("Starting MCS Clean V33")
     await init_db()
+    logger.info("Database initialization completed")
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=None))
     await start_health_server(bot)
     recovery_task = asyncio.create_task(payment_recovery_loop(bot))
@@ -118,6 +130,8 @@ async def main():
         me = await bot.me()
         logger.info("Bot started: @%s id=%s", me.username, me.id)
         logger.info("FIX_MARKER_CRYPTOPAY_STABLE=v26 loaded")
+        logger.info("FIX_MARKER_MCS_HARDENED=v31 loaded")
+        logger.info("FIX_MARKER_MCS_CLEAN=v33 loaded")
         dp = build_dispatcher()
         await dp.start_polling(
             bot,

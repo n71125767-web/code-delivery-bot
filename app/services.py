@@ -3,8 +3,20 @@ from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import POPULAR_SERVICE_THRESHOLD, PROBLEM_COOLDOWN_SECONDS
-from app.models import Order, SupplierRequest, Supplier, SupplierProduct, ServiceOption, ServiceList, ServiceListItem, TextTemplate, Cooldown, AdminUser, BugReport
-
+from app.models import (
+    Order,
+    SupplierRequest,
+    Supplier,
+    SupplierProduct,
+    ServiceOption,
+    ServiceList,
+    ServiceListItem,
+    TextTemplate,
+    Cooldown,
+    AdminUser,
+    BugReport,
+    ActionEvent,
+)
 
 ACTIVE_CUSTOMER_STATUSES = [
     "waiting_service",
@@ -25,12 +37,18 @@ def normalize_key(value: str | int | None) -> str:
     return str(value).strip().lower()
 
 
-async def get_order_by_operation_id(session: AsyncSession, operation_id: int) -> Order | None:
-    result = await session.execute(select(Order).where(Order.operation_id == operation_id))
+async def get_order_by_operation_id(
+    session: AsyncSession, operation_id: int
+) -> Order | None:
+    result = await session.execute(
+        select(Order).where(Order.operation_id == operation_id)
+    )
     return result.scalars().first()
 
 
-async def create_or_update_order_from_purchase(session: AsyncSession, data: dict) -> Order:
+async def create_or_update_order_from_purchase(
+    session: AsyncSession, data: dict
+) -> Order:
     existing = await get_order_by_operation_id(session, data["operation_id"])
 
     if existing:
@@ -44,7 +62,7 @@ async def create_or_update_order_from_purchase(session: AsyncSession, data: dict
         existing.raw_message = data.get("raw_message")
         existing.updated_at = datetime.utcnow()
 
-        # Идемпотентность: повторное уведомление Admaker обновляет данные,
+        # Legacy idempotency: repeated purchase notification updates data,
         # но никогда не возвращает уже обработанный заказ в начало сценария.
         await session.commit()
         await session.refresh(existing)
@@ -108,7 +126,10 @@ async def find_order_for_customer(
         )
         orders = result.scalars().all()
         for item in orders:
-            if item.customer_username and item.customer_username.replace("@", "").lower() == clean_username:
+            if (
+                item.customer_username
+                and item.customer_username.replace("@", "").lower() == clean_username
+            ):
                 return item
 
     return None
@@ -119,7 +140,9 @@ async def find_waiting_service_order_for_customer(
     telegram_id: int,
     username: str | None,
 ) -> Order | None:
-    return await find_order_for_customer(session, telegram_id, username, ["waiting_service"])
+    return await find_order_for_customer(
+        session, telegram_id, username, ["waiting_service"]
+    )
 
 
 async def find_active_order_for_customer(
@@ -127,7 +150,9 @@ async def find_active_order_for_customer(
     telegram_id: int,
     username: str | None,
 ) -> Order | None:
-    return await find_order_for_customer(session, telegram_id, username, ACTIVE_CUSTOMER_STATUSES)
+    return await find_order_for_customer(
+        session, telegram_id, username, ACTIVE_CUSTOMER_STATUSES
+    )
 
 
 async def create_supplier_request(
@@ -172,13 +197,27 @@ async def get_order_by_id(session: AsyncSession, order_id: int) -> Order | None:
 
 async def get_status_text(session: AsyncSession) -> str:
     total_orders = await session.scalar(select(func.count(Order.id)))
-    waiting_service = await session.scalar(select(func.count(Order.id)).where(Order.status == "waiting_service"))
-    waiting_number = await session.scalar(select(func.count(Order.id)).where(Order.status == "waiting_supplier_number"))
-    waiting_code = await session.scalar(select(func.count(Order.id)).where(Order.status == "waiting_supplier_code"))
-    confirmed = await session.scalar(select(func.count(Order.id)).where(Order.status == "confirmed"))
-    problem = await session.scalar(select(func.count(Order.id)).where(Order.status == "problem"))
-    suppliers = await session.scalar(select(func.count(Supplier.id)).where(Supplier.is_active == True))
-    services = await session.scalar(select(func.count(ServiceOption.id)).where(ServiceOption.is_active == True))
+    waiting_service = await session.scalar(
+        select(func.count(Order.id)).where(Order.status == "waiting_service")
+    )
+    waiting_number = await session.scalar(
+        select(func.count(Order.id)).where(Order.status == "waiting_supplier_number")
+    )
+    waiting_code = await session.scalar(
+        select(func.count(Order.id)).where(Order.status == "waiting_supplier_code")
+    )
+    confirmed = await session.scalar(
+        select(func.count(Order.id)).where(Order.status == "confirmed")
+    )
+    problem = await session.scalar(
+        select(func.count(Order.id)).where(Order.status == "problem")
+    )
+    suppliers = await session.scalar(
+        select(func.count(Supplier.id)).where(Supplier.is_active.is_(True))
+    )
+    services = await session.scalar(
+        select(func.count(ServiceOption.id)).where(ServiceOption.is_active.is_(True))
+    )
 
     return (
         "Статус бота\n\n"
@@ -194,7 +233,9 @@ async def get_status_text(session: AsyncSession) -> str:
 
 
 async def get_last_orders_text(session: AsyncSession) -> str:
-    result = await session.execute(select(Order).order_by(Order.created_at.desc()).limit(10))
+    result = await session.execute(
+        select(Order).order_by(Order.created_at.desc()).limit(10)
+    )
     orders = result.scalars().all()
 
     if not orders:
@@ -216,7 +257,9 @@ async def get_last_orders_text(session: AsyncSession) -> str:
     return "\n".join(lines)
 
 
-async def set_customer_by_order_id(session: AsyncSession, order_id: int, telegram_id: int) -> str:
+async def set_customer_by_order_id(
+    session: AsyncSession, order_id: int, telegram_id: int
+) -> str:
     order = await get_order_by_id(session, order_id)
     if not order:
         return "Заказ не найден."
@@ -231,8 +274,11 @@ async def set_customer_by_order_id(session: AsyncSession, order_id: int, telegra
 
 # ---------- Suppliers ----------
 
+
 async def add_supplier(session: AsyncSession, telegram_id: int, name: str) -> Supplier:
-    result = await session.execute(select(Supplier).where(Supplier.telegram_id == telegram_id))
+    result = await session.execute(
+        select(Supplier).where(Supplier.telegram_id == telegram_id)
+    )
     supplier = result.scalars().first()
 
     if supplier:
@@ -248,7 +294,9 @@ async def add_supplier(session: AsyncSession, telegram_id: int, name: str) -> Su
 
 
 async def remove_supplier(session: AsyncSession, telegram_id: int) -> bool:
-    result = await session.execute(select(Supplier).where(Supplier.telegram_id == telegram_id))
+    result = await session.execute(
+        select(Supplier).where(Supplier.telegram_id == telegram_id)
+    )
     supplier = result.scalars().first()
 
     if not supplier:
@@ -260,7 +308,9 @@ async def remove_supplier(session: AsyncSession, telegram_id: int) -> bool:
 
 
 async def list_suppliers_text(session: AsyncSession) -> str:
-    result = await session.execute(select(Supplier).order_by(Supplier.created_at.desc()))
+    result = await session.execute(
+        select(Supplier).order_by(Supplier.created_at.desc())
+    )
     suppliers = result.scalars().all()
 
     if not suppliers:
@@ -285,17 +335,23 @@ async def list_suppliers_text(session: AsyncSession) -> str:
     return "\n".join(lines)
 
 
-async def bind_supplier_to_product(session: AsyncSession, telegram_id: int, product_key: str) -> str:
+async def bind_supplier_to_product(
+    session: AsyncSession, telegram_id: int, product_key: str
+) -> str:
     product_key = normalize_key(product_key)
 
     if not product_key:
         return "Не указан товар/ключ."
 
-    result = await session.execute(select(Supplier).where(Supplier.telegram_id == telegram_id))
+    result = await session.execute(
+        select(Supplier).where(Supplier.telegram_id == telegram_id)
+    )
     supplier = result.scalars().first()
 
     if not supplier or not supplier.is_active:
-        return "Поставщик не найден или выключен. Сначала: /add_supplier TELEGRAM_ID Имя"
+        return (
+            "Поставщик не найден или выключен. Сначала: /add_supplier TELEGRAM_ID Имя"
+        )
 
     result = await session.execute(
         select(SupplierProduct).where(
@@ -306,13 +362,17 @@ async def bind_supplier_to_product(session: AsyncSession, telegram_id: int, prod
     exists = result.scalars().first()
 
     if not exists:
-        session.add(SupplierProduct(supplier_telegram_id=telegram_id, product_key=product_key))
+        session.add(
+            SupplierProduct(supplier_telegram_id=telegram_id, product_key=product_key)
+        )
         await session.commit()
 
     return f"OK. Поставщик {telegram_id} привязан к товару/ключу: {product_key}"
 
 
-async def unbind_supplier_from_product(session: AsyncSession, telegram_id: int, product_key: str) -> str:
+async def unbind_supplier_from_product(
+    session: AsyncSession, telegram_id: int, product_key: str
+) -> str:
     product_key = normalize_key(product_key)
 
     await session.execute(
@@ -326,7 +386,9 @@ async def unbind_supplier_from_product(session: AsyncSession, telegram_id: int, 
     return f"OK. Привязка удалена: {telegram_id} -> {product_key}"
 
 
-async def find_supplier_for_order(session: AsyncSession, order: Order) -> Supplier | None:
+async def find_supplier_for_order(
+    session: AsyncSession, order: Order
+) -> Supplier | None:
     keys: list[str] = []
 
     if order.product_id is not None:
@@ -339,8 +401,11 @@ async def find_supplier_for_order(session: AsyncSession, order: Order) -> Suppli
     if keys:
         result = await session.execute(
             select(Supplier)
-            .join(SupplierProduct, Supplier.telegram_id == SupplierProduct.supplier_telegram_id)
-            .where(Supplier.is_active == True)
+            .join(
+                SupplierProduct,
+                Supplier.telegram_id == SupplierProduct.supplier_telegram_id,
+            )
+            .where(Supplier.is_active.is_(True))
             .where(SupplierProduct.product_key.in_(keys))
             .limit(1)
         )
@@ -352,8 +417,11 @@ async def find_supplier_for_order(session: AsyncSession, order: Order) -> Suppli
         product_name = normalize_key(order.product_name)
         result = await session.execute(
             select(Supplier, SupplierProduct)
-            .join(SupplierProduct, Supplier.telegram_id == SupplierProduct.supplier_telegram_id)
-            .where(Supplier.is_active == True)
+            .join(
+                SupplierProduct,
+                Supplier.telegram_id == SupplierProduct.supplier_telegram_id,
+            )
+            .where(Supplier.is_active.is_(True))
         )
         rows = result.fetchall()
 
@@ -363,19 +431,27 @@ async def find_supplier_for_order(session: AsyncSession, order: Order) -> Suppli
                 return supplier
 
     result = await session.execute(
-        select(Supplier).where(Supplier.is_active == True).order_by(Supplier.created_at.asc()).limit(1)
+        select(Supplier)
+        .where(Supplier.is_active.is_(True))
+        .order_by(Supplier.created_at.asc())
+        .limit(1)
     )
     return result.scalars().first()
 
 
 # ---------- Services ----------
 
-async def add_service(session: AsyncSession, name: str, emoji: str | None = None) -> str:
+
+async def add_service(
+    session: AsyncSession, name: str, emoji: str | None = None
+) -> str:
     name = name.strip()
     if not name:
         return "Название сервиса пустое."
 
-    result = await session.execute(select(ServiceOption).where(ServiceOption.name == name))
+    result = await session.execute(
+        select(ServiceOption).where(ServiceOption.name == name)
+    )
     service = result.scalars().first()
 
     if service:
@@ -391,7 +467,11 @@ async def add_service(session: AsyncSession, name: str, emoji: str | None = None
 
 
 async def remove_service(session: AsyncSession, name: str) -> str:
-    result = await session.execute(select(ServiceOption).where(func.lower(ServiceOption.name) == name.strip().lower()))
+    result = await session.execute(
+        select(ServiceOption).where(
+            func.lower(ServiceOption.name) == name.strip().lower()
+        )
+    )
     service = result.scalars().first()
 
     if not service:
@@ -403,7 +483,11 @@ async def remove_service(session: AsyncSession, name: str) -> str:
 
 
 async def set_service_emoji(session: AsyncSession, name: str, emoji: str) -> str:
-    result = await session.execute(select(ServiceOption).where(func.lower(ServiceOption.name) == name.strip().lower()))
+    result = await session.execute(
+        select(ServiceOption).where(
+            func.lower(ServiceOption.name) == name.strip().lower()
+        )
+    )
     service = result.scalars().first()
 
     if not service:
@@ -425,8 +509,12 @@ def format_service_label(service: ServiceOption) -> str:
     return service.name
 
 
-async def get_services_page(session: AsyncSession, page: int, page_size: int) -> tuple[list[ServiceOption], int]:
-    total = await session.scalar(select(func.count(ServiceOption.id)).where(ServiceOption.is_active == True))
+async def get_services_page(
+    session: AsyncSession, page: int, page_size: int
+) -> tuple[list[ServiceOption], int]:
+    total = await session.scalar(
+        select(func.count(ServiceOption.id)).where(ServiceOption.is_active.is_(True))
+    )
     total = total or 0
     max_page = max((total - 1) // page_size, 0)
 
@@ -434,7 +522,7 @@ async def get_services_page(session: AsyncSession, page: int, page_size: int) ->
 
     result = await session.execute(
         select(ServiceOption)
-        .where(ServiceOption.is_active == True)
+        .where(ServiceOption.is_active.is_(True))
         .order_by(ServiceOption.usage_count.desc(), ServiceOption.name.asc())
         .offset(page * page_size)
         .limit(page_size)
@@ -442,9 +530,13 @@ async def get_services_page(session: AsyncSession, page: int, page_size: int) ->
     return result.scalars().all(), max_page
 
 
-async def find_service_by_slug(session: AsyncSession, slug: str) -> ServiceOption | None:
+async def find_service_by_slug(
+    session: AsyncSession, slug: str
+) -> ServiceOption | None:
     slug = slug.strip().lower()
-    result = await session.execute(select(ServiceOption).where(ServiceOption.is_active == True))
+    result = await session.execute(
+        select(ServiceOption).where(ServiceOption.is_active.is_(True))
+    )
     services = result.scalars().all()
 
     for service in services:
@@ -454,9 +546,13 @@ async def find_service_by_slug(session: AsyncSession, slug: str) -> ServiceOptio
     return None
 
 
-async def find_service_by_text(session: AsyncSession, text: str) -> ServiceOption | None:
+async def find_service_by_text(
+    session: AsyncSession, text: str
+) -> ServiceOption | None:
     clean = text.strip().lower()
-    result = await session.execute(select(ServiceOption).where(ServiceOption.is_active == True))
+    result = await session.execute(
+        select(ServiceOption).where(ServiceOption.is_active.is_(True))
+    )
     services = result.scalars().all()
 
     for service in services:
@@ -468,7 +564,11 @@ async def find_service_by_text(session: AsyncSession, text: str) -> ServiceOptio
 
 
 async def increment_service_usage(session: AsyncSession, service_name: str) -> None:
-    result = await session.execute(select(ServiceOption).where(func.lower(ServiceOption.name) == service_name.strip().lower()))
+    result = await session.execute(
+        select(ServiceOption).where(
+            func.lower(ServiceOption.name) == service_name.strip().lower()
+        )
+    )
     service = result.scalars().first()
     if service:
         service.usage_count += 1
@@ -477,7 +577,11 @@ async def increment_service_usage(session: AsyncSession, service_name: str) -> N
 
 async def services_text(session: AsyncSession) -> str:
     result = await session.execute(
-        select(ServiceOption).order_by(ServiceOption.is_active.desc(), ServiceOption.usage_count.desc(), ServiceOption.name.asc())
+        select(ServiceOption).order_by(
+            ServiceOption.is_active.desc(),
+            ServiceOption.usage_count.desc(),
+            ServiceOption.name.asc(),
+        )
     )
     services = result.scalars().all()
 
@@ -487,12 +591,15 @@ async def services_text(session: AsyncSession) -> str:
     lines = ["Сервисы:\n"]
     for service in services:
         status = "active" if service.is_active else "disabled"
-        lines.append(f"{format_service_label(service)} | использований: {service.usage_count} | {status}")
+        lines.append(
+            f"{format_service_label(service)} | использований: {service.usage_count} | {status}"
+        )
 
     return "\n".join(lines)
 
 
 # ---------- Text templates ----------
+
 
 async def get_text(session: AsyncSession, key: str, default: str = "") -> str:
     result = await session.execute(select(TextTemplate).where(TextTemplate.key == key))
@@ -515,7 +622,9 @@ async def set_text(session: AsyncSession, key: str, value: str) -> str:
 
 
 async def texts_text(session: AsyncSession) -> str:
-    result = await session.execute(select(TextTemplate).order_by(TextTemplate.key.asc()))
+    result = await session.execute(
+        select(TextTemplate).order_by(TextTemplate.key.asc())
+    )
     templates = result.scalars().all()
 
     if not templates:
@@ -533,7 +642,13 @@ async def texts_text(session: AsyncSession) -> str:
 
 # ---------- Cooldowns ----------
 
-async def check_cooldown(session: AsyncSession, user_id: int, action: str, seconds: int = PROBLEM_COOLDOWN_SECONDS) -> tuple[bool, int]:
+
+async def check_cooldown(
+    session: AsyncSession,
+    user_id: int,
+    action: str,
+    seconds: int = PROBLEM_COOLDOWN_SECONDS,
+) -> tuple[bool, int]:
     now = datetime.utcnow()
 
     result = await session.execute(
@@ -561,7 +676,10 @@ async def check_cooldown(session: AsyncSession, user_id: int, action: str, secon
 
 # ---------- Supplier panel and service lists ----------
 
-async def supplier_pending_text(session: AsyncSession, supplier_id: int, page: int, page_size: int) -> tuple[str, int]:
+
+async def supplier_pending_text(
+    session: AsyncSession, supplier_id: int, page: int, page_size: int
+) -> tuple[str, int]:
     total = await session.scalar(
         select(func.count(SupplierRequest.id)).where(
             SupplierRequest.supplier_telegram_id == supplier_id,
@@ -575,7 +693,10 @@ async def supplier_pending_text(session: AsyncSession, supplier_id: int, page: i
     result = await session.execute(
         select(SupplierRequest, Order)
         .join(Order, SupplierRequest.order_id == Order.id)
-        .where(SupplierRequest.supplier_telegram_id == supplier_id, SupplierRequest.status == "sent")
+        .where(
+            SupplierRequest.supplier_telegram_id == supplier_id,
+            SupplierRequest.status == "sent",
+        )
         .order_by(SupplierRequest.created_at.asc())
         .offset(page * page_size)
         .limit(page_size)
@@ -603,7 +724,9 @@ async def supplier_pending_text(session: AsyncSession, supplier_id: int, page: i
     return "\n".join(lines), max_page
 
 
-async def get_supplier_pending_rows(session: AsyncSession, supplier_id: int, page: int, page_size: int):
+async def get_supplier_pending_rows(
+    session: AsyncSession, supplier_id: int, page: int, page_size: int
+):
     total = await session.scalar(
         select(func.count(SupplierRequest.id)).where(
             SupplierRequest.supplier_telegram_id == supplier_id,
@@ -628,7 +751,9 @@ async def get_supplier_pending_rows(session: AsyncSession, supplier_id: int, pag
     return result.fetchall(), max_page
 
 
-async def find_selected_supplier_request(session: AsyncSession, supplier_id: int) -> SupplierRequest | None:
+async def find_selected_supplier_request(
+    session: AsyncSession, supplier_id: int
+) -> SupplierRequest | None:
     result = await session.execute(
         select(SupplierRequest)
         .where(
@@ -640,7 +765,9 @@ async def find_selected_supplier_request(session: AsyncSession, supplier_id: int
     return result.scalars().first()
 
 
-async def select_supplier_request(session: AsyncSession, supplier_id: int, request_id: int) -> tuple[bool, str, SupplierRequest | None, Order | None]:
+async def select_supplier_request(
+    session: AsyncSession, supplier_id: int, request_id: int
+) -> tuple[bool, str, SupplierRequest | None, Order | None]:
     result = await session.execute(
         select(SupplierRequest, Order)
         .join(Order, SupplierRequest.order_id == Order.id)
@@ -673,7 +800,9 @@ async def select_supplier_request(session: AsyncSession, supplier_id: int, reque
     return True, "OK. Заявка выбрана.", request, order
 
 
-async def mark_code_waiting_buyer_confirm(session: AsyncSession, request_id: int) -> None:
+async def mark_code_waiting_buyer_confirm(
+    session: AsyncSession, request_id: int
+) -> None:
     """
     После отправки кода поставщиком заявка НЕ закрывается окончательно.
     Она остаётся видимой поставщику как "ждём подтверждение покупателя".
@@ -685,7 +814,9 @@ async def mark_code_waiting_buyer_confirm(session: AsyncSession, request_id: int
         request.answered_at = datetime.utcnow()
 
 
-async def close_waiting_supplier_requests_for_order(session: AsyncSession, order_id: int) -> int:
+async def close_waiting_supplier_requests_for_order(
+    session: AsyncSession, order_id: int
+) -> int:
     """
     Закрывает supplier_requests по заказу только после подтверждения покупателем.
     Возвращает количество обновлённых заявок.
@@ -693,7 +824,9 @@ async def close_waiting_supplier_requests_for_order(session: AsyncSession, order
     result = await session.execute(
         select(SupplierRequest).where(
             SupplierRequest.order_id == order_id,
-            SupplierRequest.status.in_(["waiting_buyer_confirm", "sent", "selected", "in_progress"]),
+            SupplierRequest.status.in_(
+                ["waiting_buyer_confirm", "sent", "selected", "in_progress"]
+            ),
         )
     )
     requests = result.scalars().all()
@@ -720,7 +853,9 @@ async def add_service_list(session: AsyncSession, name: str) -> str:
     return f"OK. Лист создан/включён: {name}"
 
 
-async def add_service_to_list(session: AsyncSession, list_name: str, service_name: str) -> str:
+async def add_service_to_list(
+    session: AsyncSession, list_name: str, service_name: str
+) -> str:
     list_name = list_name.strip()
     service_name = service_name.strip()
 
@@ -731,7 +866,10 @@ async def add_service_to_list(session: AsyncSession, list_name: str, service_nam
     await add_service(session, service_name)
 
     result = await session.execute(
-        select(ServiceListItem).where(ServiceListItem.list_name == list_name, ServiceListItem.service_name == service_name)
+        select(ServiceListItem).where(
+            ServiceListItem.list_name == list_name,
+            ServiceListItem.service_name == service_name,
+        )
     )
     exists = result.scalars().first()
     if not exists:
@@ -742,14 +880,22 @@ async def add_service_to_list(session: AsyncSession, list_name: str, service_nam
 
 
 async def lists_text(session: AsyncSession) -> str:
-    result = await session.execute(select(ServiceList).where(ServiceList.is_active == True).order_by(ServiceList.name.asc()))
+    result = await session.execute(
+        select(ServiceList)
+        .where(ServiceList.is_active.is_(True))
+        .order_by(ServiceList.name.asc())
+    )
     lists = result.scalars().all()
     if not lists:
         return "Листов пока нет."
 
     lines = ["Листы сервисов:\n"]
     for item in lists:
-        result_items = await session.execute(select(ServiceListItem.service_name).where(ServiceListItem.list_name == item.name))
+        result_items = await session.execute(
+            select(ServiceListItem.service_name).where(
+                ServiceListItem.list_name == item.name
+            )
+        )
         services = [row[0] for row in result_items.fetchall()]
         lines.append(f"{item.name}: {', '.join(services) if services else 'пусто'}")
 
@@ -757,6 +903,7 @@ async def lists_text(session: AsyncSession) -> str:
 
 
 # ---------- Admin order control ----------
+
 
 async def get_problem_order_rows(session: AsyncSession, limit: int = 20):
     result = await session.execute(
@@ -770,9 +917,7 @@ async def get_problem_order_rows(session: AsyncSession, limit: int = 20):
 
 async def get_recent_order_rows(session: AsyncSession, limit: int = 20):
     result = await session.execute(
-        select(Order)
-        .order_by(Order.created_at.desc())
-        .limit(limit)
+        select(Order).order_by(Order.created_at.desc()).limit(limit)
     )
     return result.scalars().all()
 
@@ -852,12 +997,18 @@ async def admin_create_supplier_request_for_order(
     return True, "OK. Запрос создан.", order, supplier
 
 
-async def get_supplier_request_by_id(session: AsyncSession, request_id: int) -> SupplierRequest | None:
-    result = await session.execute(select(SupplierRequest).where(SupplierRequest.id == request_id))
+async def get_supplier_request_by_id(
+    session: AsyncSession, request_id: int
+) -> SupplierRequest | None:
+    result = await session.execute(
+        select(SupplierRequest).where(SupplierRequest.id == request_id)
+    )
     return result.scalars().first()
 
 
-async def get_supplier_request_order(session: AsyncSession, request_id: int) -> tuple[SupplierRequest | None, Order | None]:
+async def get_supplier_request_order(
+    session: AsyncSession, request_id: int
+) -> tuple[SupplierRequest | None, Order | None]:
     request = await get_supplier_request_by_id(session, request_id)
     if not request:
         return None, None
@@ -865,7 +1016,9 @@ async def get_supplier_request_order(session: AsyncSession, request_id: int) -> 
     return request, order
 
 
-async def mark_supplier_request_in_progress(session: AsyncSession, request_id: int) -> tuple[bool, str, SupplierRequest | None, Order | None]:
+async def mark_supplier_request_in_progress(
+    session: AsyncSession, request_id: int
+) -> tuple[bool, str, SupplierRequest | None, Order | None]:
     request, order = await get_supplier_request_order(session, request_id)
     if not request or not order:
         return False, "Заявка или заказ не найдены.", request, order
@@ -885,7 +1038,9 @@ async def mark_supplier_request_in_progress(session: AsyncSession, request_id: i
     return True, "OK. Заявка взята в работу.", request, order
 
 
-async def find_active_supplier_request(session: AsyncSession, supplier_telegram_id: int) -> SupplierRequest | None:
+async def find_active_supplier_request(
+    session: AsyncSession, supplier_telegram_id: int
+) -> SupplierRequest | None:
     result = await session.execute(
         select(SupplierRequest)
         .where(SupplierRequest.supplier_telegram_id == supplier_telegram_id)
@@ -895,11 +1050,15 @@ async def find_active_supplier_request(session: AsyncSession, supplier_telegram_
     return result.scalars().first()
 
 
-async def supplier_pending_rows(session: AsyncSession, supplier_id: int, page: int, page_size: int):
+async def supplier_pending_rows(
+    session: AsyncSession, supplier_id: int, page: int, page_size: int
+):
     result_total = await session.scalar(
         select(func.count(SupplierRequest.id)).where(
             SupplierRequest.supplier_telegram_id == supplier_id,
-            SupplierRequest.status.in_(["sent", "in_progress", "waiting_buyer_confirm"]),
+            SupplierRequest.status.in_(
+                ["sent", "in_progress", "waiting_buyer_confirm"]
+            ),
         )
     )
     total = result_total or 0
@@ -911,7 +1070,9 @@ async def supplier_pending_rows(session: AsyncSession, supplier_id: int, page: i
         .join(Order, SupplierRequest.order_id == Order.id)
         .where(
             SupplierRequest.supplier_telegram_id == supplier_id,
-            SupplierRequest.status.in_(["sent", "in_progress", "waiting_buyer_confirm"]),
+            SupplierRequest.status.in_(
+                ["sent", "in_progress", "waiting_buyer_confirm"]
+            ),
         )
         .order_by(SupplierRequest.created_at.asc())
         .offset(page * page_size)
@@ -920,7 +1081,9 @@ async def supplier_pending_rows(session: AsyncSession, supplier_id: int, page: i
     return result.fetchall(), max_page
 
 
-async def set_supplier_request_message_id(session: AsyncSession, request_id: int, message_id: int | None) -> None:
+async def set_supplier_request_message_id(
+    session: AsyncSession, request_id: int, message_id: int | None
+) -> None:
     request = await get_supplier_request_by_id(session, request_id)
     if not request:
         return
@@ -930,6 +1093,7 @@ async def set_supplier_request_message_id(session: AsyncSession, request_id: int
 
 # ---------- Final UX helpers ----------
 
+
 async def create_action_event(
     session: AsyncSession,
     event_type: str,
@@ -938,16 +1102,20 @@ async def create_action_event(
     order_id: int | None = None,
 ) -> None:
     try:
-        session.add(ActionEvent(user_id=user_id, order_id=order_id, event_type=event_type, text=text))
+        session.add(
+            ActionEvent(
+                user_id=user_id, order_id=order_id, event_type=event_type, text=text
+            )
+        )
         await session.commit()
     except Exception:
         # Лог событий не должен ломать основной сценарий.
         await session.rollback()
 
 
-
-
-async def supplier_rows_by_filter(session: AsyncSession, supplier_id: int, mode: str, page: int, page_size: int):
+async def supplier_rows_by_filter(
+    session: AsyncSession, supplier_id: int, mode: str, page: int, page_size: int
+):
     # В панели поставщика показываем не только новые/в работе,
     # но и заявки, где код уже отправлен покупателю и ждём OK.
     visible_statuses = ["sent", "in_progress", "selected", "waiting_buyer_confirm"]
@@ -972,7 +1140,9 @@ async def supplier_rows_by_filter(session: AsyncSession, supplier_id: int, mode:
     if req_type:
         conditions.append(SupplierRequest.request_type == req_type)
 
-    total = await session.scalar(select(func.count(SupplierRequest.id)).where(*conditions))
+    total = await session.scalar(
+        select(func.count(SupplierRequest.id)).where(*conditions)
+    )
     total = total or 0
     max_page = max((total - 1) // page_size, 0)
     page = max(0, min(page, max_page))
@@ -990,7 +1160,9 @@ async def supplier_rows_by_filter(session: AsyncSession, supplier_id: int, mode:
     return rows, max_page
 
 
-async def supplier_filter_text(mode: str, rows_count: int, page: int, max_page: int) -> str:
+async def supplier_filter_text(
+    mode: str, rows_count: int, page: int, max_page: int
+) -> str:
     titles = {
         "active": "⏳ Все активные заявки",
         "number": "📞 Ждут номер",
@@ -1000,24 +1172,22 @@ async def supplier_filter_text(mode: str, rows_count: int, page: int, max_page: 
     title = titles.get(mode, "⏳ Заявки")
     if rows_count == 0:
         return f"{title}\n\nЗаявок нет."
-    return f"{title}\n\nСтраница {page + 1}/{max_page + 1}\nВыберите заявку кнопкой ниже."
-
-
-
-
-
-
-
-
+    return (
+        f"{title}\n\nСтраница {page + 1}/{max_page + 1}\nВыберите заявку кнопкой ниже."
+    )
 
 
 # ---------------- Section lists patch v7 ----------------
-async def get_buyer_order_rows(session: AsyncSession, user_id: int, username: str | None, limit: int = 10):
+async def get_buyer_order_rows(
+    session: AsyncSession, user_id: int, username: str | None, limit: int = 10
+):
     clean_username = (username or "").replace("@", "").lower()
 
     query = (
         select(Order)
-        .where((Order.customer_telegram_id == user_id) | (Order.buyer_chat_id == user_id))
+        .where(
+            (Order.customer_telegram_id == user_id) | (Order.buyer_chat_id == user_id)
+        )
         .order_by(Order.created_at.desc())
         .limit(limit)
     )
@@ -1036,33 +1206,41 @@ async def get_buyer_order_rows(session: AsyncSession, user_id: int, username: st
     return orders
 
 
-
-
-
-
 # -----------------------------------------------------
 
 
 # ---------- Extra admins + bug reports ----------
 
+
 async def is_db_admin(session: AsyncSession, telegram_id: int | None) -> bool:
     if not telegram_id:
         return False
     result = await session.execute(
-        select(AdminUser).where(AdminUser.telegram_id == telegram_id, AdminUser.is_active == True)
+        select(AdminUser).where(
+            AdminUser.telegram_id == telegram_id, AdminUser.is_active.is_(True)
+        )
     )
     return result.scalars().first() is not None
 
 
-async def add_admin_user(session: AsyncSession, telegram_id: int, name: str | None, added_by: int | None = None) -> AdminUser:
-    result = await session.execute(select(AdminUser).where(AdminUser.telegram_id == telegram_id))
+async def add_admin_user(
+    session: AsyncSession,
+    telegram_id: int,
+    name: str | None,
+    added_by: int | None = None,
+) -> AdminUser:
+    result = await session.execute(
+        select(AdminUser).where(AdminUser.telegram_id == telegram_id)
+    )
     admin = result.scalars().first()
     if admin:
         admin.name = name or admin.name
         admin.is_active = True
         admin.added_by = added_by or admin.added_by
     else:
-        admin = AdminUser(telegram_id=telegram_id, name=name, is_active=True, added_by=added_by)
+        admin = AdminUser(
+            telegram_id=telegram_id, name=name, is_active=True, added_by=added_by
+        )
         session.add(admin)
     await session.commit()
     await session.refresh(admin)
@@ -1070,7 +1248,9 @@ async def add_admin_user(session: AsyncSession, telegram_id: int, name: str | No
 
 
 async def remove_admin_user(session: AsyncSession, telegram_id: int) -> bool:
-    result = await session.execute(select(AdminUser).where(AdminUser.telegram_id == telegram_id))
+    result = await session.execute(
+        select(AdminUser).where(AdminUser.telegram_id == telegram_id)
+    )
     admin = result.scalars().first()
     if not admin:
         return False
@@ -1079,12 +1259,12 @@ async def remove_admin_user(session: AsyncSession, telegram_id: int) -> bool:
     return True
 
 
-
-
-async def get_admin_users(session: AsyncSession, include_disabled: bool = False) -> list[AdminUser]:
+async def get_admin_users(
+    session: AsyncSession, include_disabled: bool = False
+) -> list[AdminUser]:
     query = select(AdminUser).order_by(AdminUser.created_at.desc())
     if not include_disabled:
-        query = query.where(AdminUser.is_active == True)
+        query = query.where(AdminUser.is_active.is_(True))
     result = await session.execute(query)
     return list(result.scalars().all())
 
@@ -1133,26 +1313,72 @@ def _fmt_int(value) -> int:
 
 async def _buyer_money_stats(session: AsyncSession, user_id: int, username: str | None):
     clean_username = (username or "").replace("@", "").lower()
-    base_filter = (Order.customer_telegram_id == user_id) | (Order.buyer_chat_id == user_id)
+    base_filter = (Order.customer_telegram_id == user_id) | (
+        Order.buyer_chat_id == user_id
+    )
     if clean_username:
-        base_filter = base_filter | (func.lower(Order.customer_username) == clean_username)
+        base_filter = base_filter | (
+            func.lower(Order.customer_username) == clean_username
+        )
 
-    total_orders = await session.scalar(select(func.count(Order.id)).where(base_filter)) or 0
-    total_sum = await session.scalar(select(func.coalesce(func.sum(Order.amount), 0)).where(base_filter)) or 0
-    avg_sum = await session.scalar(select(func.coalesce(func.avg(Order.amount), 0)).where(base_filter)) or 0
-    max_sum = await session.scalar(select(func.coalesce(func.max(Order.amount), 0)).where(base_filter)) or 0
+    total_orders = (
+        await session.scalar(select(func.count(Order.id)).where(base_filter)) or 0
+    )
+    total_sum = (
+        await session.scalar(
+            select(func.coalesce(func.sum(Order.amount), 0)).where(base_filter)
+        )
+        or 0
+    )
+    avg_sum = (
+        await session.scalar(
+            select(func.coalesce(func.avg(Order.amount), 0)).where(base_filter)
+        )
+        or 0
+    )
+    max_sum = (
+        await session.scalar(
+            select(func.coalesce(func.max(Order.amount), 0)).where(base_filter)
+        )
+        or 0
+    )
 
     now = datetime.utcnow()
-    sum_7 = await session.scalar(select(func.coalesce(func.sum(Order.amount), 0)).where(base_filter, Order.created_at >= now - timedelta(days=7))) or 0
-    sum_30 = await session.scalar(select(func.coalesce(func.sum(Order.amount), 0)).where(base_filter, Order.created_at >= now - timedelta(days=30))) or 0
-    sum_180 = await session.scalar(select(func.coalesce(func.sum(Order.amount), 0)).where(base_filter, Order.created_at >= now - timedelta(days=180))) or 0
+    sum_7 = (
+        await session.scalar(
+            select(func.coalesce(func.sum(Order.amount), 0)).where(
+                base_filter, Order.created_at >= now - timedelta(days=7)
+            )
+        )
+        or 0
+    )
+    sum_30 = (
+        await session.scalar(
+            select(func.coalesce(func.sum(Order.amount), 0)).where(
+                base_filter, Order.created_at >= now - timedelta(days=30)
+            )
+        )
+        or 0
+    )
+    sum_180 = (
+        await session.scalar(
+            select(func.coalesce(func.sum(Order.amount), 0)).where(
+                base_filter, Order.created_at >= now - timedelta(days=180)
+            )
+        )
+        or 0
+    )
 
     return total_orders, total_sum, avg_sum, max_sum, sum_7, sum_30, sum_180
 
 
-async def buyer_profile_text(session: AsyncSession, user_id: int, username: str | None) -> str:
+async def buyer_profile_text(
+    session: AsyncSession, user_id: int, username: str | None
+) -> str:
     active_order = await find_active_order_for_customer(session, user_id, username)
-    total_orders, total_sum, avg_sum, max_sum, sum_7, sum_30, sum_180 = await _buyer_money_stats(session, user_id, username)
+    total_orders, total_sum, avg_sum, max_sum, sum_7, sum_30, sum_180 = (
+        await _buyer_money_stats(session, user_id, username)
+    )
 
     text = (
         "👤 › Профиль покупателя\n\n"
@@ -1181,7 +1407,9 @@ async def buyer_profile_text(session: AsyncSession, user_id: int, username: str 
     return text
 
 
-async def buyer_orders_text(session: AsyncSession, user_id: int, username: str | None, limit: int = 10) -> str:
+async def buyer_orders_text(
+    session: AsyncSession, user_id: int, username: str | None, limit: int = 10
+) -> str:
     orders = await get_buyer_order_rows(session, user_id, username, limit)
     if not orders:
         return (
@@ -1194,7 +1422,9 @@ async def buyer_orders_text(session: AsyncSession, user_id: int, username: str |
     for index, order in enumerate(orders, start=1):
         last = index == len(orders)
         prefix = "└" if last else "├"
-        lines.append(f"{prefix} #{order.operation_id} — {order_status_label(order.status)}")
+        lines.append(
+            f"{prefix} #{order.operation_id} — {order_status_label(order.status)}"
+        )
         lines.append(f"   Товар — {order.product_name or 'нет'}")
         lines.append(f"   Сервис — {order.service_name or 'не выбран'}")
         if order.amount:
@@ -1218,39 +1448,58 @@ def buyer_order_card_text(order: Order | None) -> str:
     )
 
 
-async def supplier_profile_text(session: AsyncSession, supplier_id: int, username: str | None) -> str:
-    active_count = await session.scalar(
-        select(func.count(SupplierRequest.id)).where(
-            SupplierRequest.supplier_telegram_id == supplier_id,
-            SupplierRequest.status.in_(["sent", "selected", "in_progress", "waiting_buyer_confirm"]),
+async def supplier_profile_text(
+    session: AsyncSession, supplier_id: int, username: str | None
+) -> str:
+    active_count = (
+        await session.scalar(
+            select(func.count(SupplierRequest.id)).where(
+                SupplierRequest.supplier_telegram_id == supplier_id,
+                SupplierRequest.status.in_(
+                    ["sent", "selected", "in_progress", "waiting_buyer_confirm"]
+                ),
+            )
         )
-    ) or 0
-    done_count = await session.scalar(
-        select(func.count(SupplierRequest.id)).where(
-            SupplierRequest.supplier_telegram_id == supplier_id,
-            SupplierRequest.status == "answered",
+        or 0
+    )
+    done_count = (
+        await session.scalar(
+            select(func.count(SupplierRequest.id)).where(
+                SupplierRequest.supplier_telegram_id == supplier_id,
+                SupplierRequest.status == "answered",
+            )
         )
-    ) or 0
-    wait_ok = await session.scalar(
-        select(func.count(SupplierRequest.id)).where(
-            SupplierRequest.supplier_telegram_id == supplier_id,
-            SupplierRequest.status == "waiting_buyer_confirm",
+        or 0
+    )
+    wait_ok = (
+        await session.scalar(
+            select(func.count(SupplierRequest.id)).where(
+                SupplierRequest.supplier_telegram_id == supplier_id,
+                SupplierRequest.status == "waiting_buyer_confirm",
+            )
         )
-    ) or 0
-    number_count = await session.scalar(
-        select(func.count(SupplierRequest.id)).where(
-            SupplierRequest.supplier_telegram_id == supplier_id,
-            SupplierRequest.request_type == "number",
-            SupplierRequest.status.in_(["sent", "selected", "in_progress"]),
+        or 0
+    )
+    number_count = (
+        await session.scalar(
+            select(func.count(SupplierRequest.id)).where(
+                SupplierRequest.supplier_telegram_id == supplier_id,
+                SupplierRequest.request_type == "number",
+                SupplierRequest.status.in_(["sent", "selected", "in_progress"]),
+            )
         )
-    ) or 0
-    code_count = await session.scalar(
-        select(func.count(SupplierRequest.id)).where(
-            SupplierRequest.supplier_telegram_id == supplier_id,
-            SupplierRequest.request_type == "code",
-            SupplierRequest.status.in_(["sent", "selected", "in_progress"]),
+        or 0
+    )
+    code_count = (
+        await session.scalar(
+            select(func.count(SupplierRequest.id)).where(
+                SupplierRequest.supplier_telegram_id == supplier_id,
+                SupplierRequest.request_type == "code",
+                SupplierRequest.status.in_(["sent", "selected", "in_progress"]),
+            )
         )
-    ) or 0
+        or 0
+    )
     return (
         "🚚 › Профиль поставщика\n\n"
         "Здесь отображается ваша текущая нагрузка и выполненные заявки.\n\n"
@@ -1264,11 +1513,28 @@ async def supplier_profile_text(session: AsyncSession, supplier_id: int, usernam
     )
 
 
-async def admin_profile_text(session: AsyncSession, admin_id: int, username: str | None) -> str:
+async def admin_profile_text(
+    session: AsyncSession, admin_id: int, username: str | None
+) -> str:
     total_orders = await session.scalar(select(func.count(Order.id))) or 0
-    problem_orders = await session.scalar(select(func.count(Order.id)).where(Order.status == "problem")) or 0
-    active_suppliers = await session.scalar(select(func.count(Supplier.id)).where(Supplier.is_active == True)) or 0
-    active_admins = await session.scalar(select(func.count(AdminUser.id)).where(AdminUser.is_active == True)) or 0
+    problem_orders = (
+        await session.scalar(
+            select(func.count(Order.id)).where(Order.status == "problem")
+        )
+        or 0
+    )
+    active_suppliers = (
+        await session.scalar(
+            select(func.count(Supplier.id)).where(Supplier.is_active.is_(True))
+        )
+        or 0
+    )
+    active_admins = (
+        await session.scalar(
+            select(func.count(AdminUser.id)).where(AdminUser.is_active.is_(True))
+        )
+        or 0
+    )
     return (
         "👮 › Профиль админа\n\n"
         "Служебная информация по управлению магазином.\n\n"
@@ -1284,15 +1550,42 @@ async def admin_profile_text(session: AsyncSession, admin_id: int, username: str
 
 async def admin_stats_text(session: AsyncSession) -> str:
     total = await session.scalar(select(func.count(Order.id))) or 0
-    confirmed = await session.scalar(select(func.count(Order.id)).where(Order.status == "confirmed")) or 0
-    problem = await session.scalar(select(func.count(Order.id)).where(Order.status == "problem")) or 0
-    waiting_number = await session.scalar(select(func.count(Order.id)).where(Order.status == "waiting_supplier_number")) or 0
-    waiting_code = await session.scalar(select(func.count(Order.id)).where(Order.status == "waiting_supplier_code")) or 0
-    code_sent = await session.scalar(select(func.count(Order.id)).where(Order.status == "code_sent_to_customer")) or 0
+    confirmed = (
+        await session.scalar(
+            select(func.count(Order.id)).where(Order.status == "confirmed")
+        )
+        or 0
+    )
+    problem = (
+        await session.scalar(
+            select(func.count(Order.id)).where(Order.status == "problem")
+        )
+        or 0
+    )
+    waiting_number = (
+        await session.scalar(
+            select(func.count(Order.id)).where(
+                Order.status == "waiting_supplier_number"
+            )
+        )
+        or 0
+    )
+    waiting_code = (
+        await session.scalar(
+            select(func.count(Order.id)).where(Order.status == "waiting_supplier_code")
+        )
+        or 0
+    )
+    code_sent = (
+        await session.scalar(
+            select(func.count(Order.id)).where(Order.status == "code_sent_to_customer")
+        )
+        or 0
+    )
 
     result = await session.execute(
         select(ServiceOption.name, ServiceOption.usage_count)
-        .where(ServiceOption.is_active == True)
+        .where(ServiceOption.is_active.is_(True))
         .order_by(ServiceOption.usage_count.desc())
         .limit(5)
     )
@@ -1321,7 +1614,9 @@ async def admin_stats_text(session: AsyncSession) -> str:
 
 
 async def list_admin_users_text(session: AsyncSession, env_admin_ids: list[int]) -> str:
-    result = await session.execute(select(AdminUser).order_by(AdminUser.created_at.desc()))
+    result = await session.execute(
+        select(AdminUser).order_by(AdminUser.created_at.desc())
+    )
     admins = result.scalars().all()
     lines = ["👮 › Админы", "", "Главные админы из Render ADMIN_IDS:"]
     if env_admin_ids:
@@ -1338,7 +1633,9 @@ async def list_admin_users_text(session: AsyncSession, env_admin_ids: list[int])
         for i, admin in enumerate(admins, start=1):
             prefix = "└" if i == len(admins) else "├"
             state = "активен" if admin.is_active else "выключен"
-            lines.append(f"{prefix} {admin.telegram_id} — {admin.name or 'без имени'} — {state}")
+            lines.append(
+                f"{prefix} {admin.telegram_id} — {admin.name or 'без имени'} — {state}"
+            )
     return "\n".join(lines)
 
 
@@ -1365,4 +1662,6 @@ def supplier_section_text(mode: str, rows_count: int, page: int, max_page: int) 
         f"Найдено на странице — {rows_count}\n\n"
         "Выберите конкретную заявку кнопкой ниже."
     )
+
+
 # --------------------------------------------------

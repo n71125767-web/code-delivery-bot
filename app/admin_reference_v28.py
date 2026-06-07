@@ -33,26 +33,42 @@ def payment_methods_keyboard() -> InlineKeyboardMarkup:
 
 async def payments_text(session) -> str:
     total = int(await session.scalar(select(func.count(DigitalPurchase.id))) or 0)
-    pending = int(await session.scalar(
-        select(func.count(DigitalPurchase.id)).where(
-            DigitalPurchase.status.in_(("new", "creating_invoice", "pending_payment"))
+    pending = int(
+        await session.scalar(
+            select(func.count(DigitalPurchase.id)).where(
+                DigitalPurchase.status.in_(
+                    ("new", "creating_invoice", "pending_payment")
+                )
+            )
         )
-    ) or 0)
-    paid = int(await session.scalar(
-        select(func.count(DigitalPurchase.id)).where(
-            DigitalPurchase.status.in_(("paid", "delivering", "delivered"))
+        or 0
+    )
+    paid = int(
+        await session.scalar(
+            select(func.count(DigitalPurchase.id)).where(
+                DigitalPurchase.status.in_(("paid", "delivering", "delivered"))
+            )
         )
-    ) or 0)
-    delivered = int(await session.scalar(
-        select(func.count(DigitalPurchase.id)).where(
-            DigitalPurchase.status == "delivered"
+        or 0
+    )
+    delivered = int(
+        await session.scalar(
+            select(func.count(DigitalPurchase.id)).where(
+                DigitalPurchase.status == "delivered"
+            )
         )
-    ) or 0)
-    errors = int(await session.scalar(
-        select(func.count(DigitalPurchase.id)).where(
-            DigitalPurchase.status.in_(("delivery_failed", "delivery_review_required", "invoice_failed"))
+        or 0
+    )
+    errors = int(
+        await session.scalar(
+            select(func.count(DigitalPurchase.id)).where(
+                DigitalPurchase.status.in_(
+                    ("delivery_failed", "delivery_review_required", "invoice_failed")
+                )
+            )
         )
-    ) or 0)
+        or 0
+    )
     invoices = int(await session.scalar(select(func.count(CryptoPayment.id))) or 0)
 
     return (
@@ -87,7 +103,11 @@ def store_settings_keyboard() -> InlineKeyboardMarkup:
 
 def broadcast_preview_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Запустить рассылку", callback_data="v28:broadcast_confirm", style="success")
+    kb.button(
+        text="✅ Запустить рассылку",
+        callback_data="v28:broadcast_confirm",
+        style="success",
+    )
     kb.button(text="❌ Отмена", callback_data="admin:panel", style="danger")
     kb.adjust(1)
     return kb.as_markup()

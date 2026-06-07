@@ -28,10 +28,22 @@ class ProxylineService:
         # Так ключ не светится в query URL и логах веб-сервера.
         return {"API-KEY": self.api_key}
 
-    async def request(self, method: str, endpoint: str, *, params: dict | None = None, data: Any = None, timeout: int = 60) -> Any:
+    async def request(
+        self,
+        method: str,
+        endpoint: str,
+        *,
+        params: dict | None = None,
+        data: Any = None,
+        timeout: int = 60,
+    ) -> Any:
         timeout_obj = aiohttp.ClientTimeout(total=timeout)
-        async with aiohttp.ClientSession(timeout=timeout_obj, headers=self._headers()) as session:
-            async with session.request(method, self._url(endpoint), params=params, data=data) as response:
+        async with aiohttp.ClientSession(
+            timeout=timeout_obj, headers=self._headers()
+        ) as session:
+            async with session.request(
+                method, self._url(endpoint), params=params, data=data
+            ) as response:
                 raw = await response.text()
                 try:
                     payload = await response.json(content_type=None)
@@ -39,7 +51,9 @@ class ProxylineService:
                     payload = raw
 
                 if response.status >= 400:
-                    raise ProxylineError(f"{endpoint} HTTP {response.status}: {payload}")
+                    raise ProxylineError(
+                        f"{endpoint} HTTP {response.status}: {payload}"
+                    )
                 return payload
 
     async def balance(self) -> Any:
@@ -99,7 +113,12 @@ def format_proxyline_result(payload: Any) -> str:
         return item.strip()
 
     if isinstance(item, dict):
-        host = item.get("host") or item.get("ip") or item.get("server") or item.get("address")
+        host = (
+            item.get("host")
+            or item.get("ip")
+            or item.get("server")
+            or item.get("address")
+        )
         port = item.get("port")
         login = item.get("login") or item.get("username") or item.get("user")
         password = item.get("password") or item.get("pass")

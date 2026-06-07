@@ -48,11 +48,15 @@ def _split_ints(raw: str) -> list[int]:
 
 async def get_proxy_shop_settings(session: AsyncSession) -> ProxyShopSettings:
     enabled = (await get_text(session, "proxy_shop_enabled", "1")).strip() == "1"
-    countries = _split_codes(await get_text(session, "proxy_shop_countries", "ru,us,de"))
+    countries = _split_codes(
+        await get_text(session, "proxy_shop_countries", "ru,us,de")
+    )
     countries = [x for x in countries if x in SUPPORTED_COUNTRIES] or ["ru"]
     periods = _split_ints(await get_text(session, "proxy_shop_periods", "30,90,180"))
     periods = [x for x in periods if x in SUPPORTED_PERIODS] or [30]
-    proxy_type = (await get_text(session, "proxy_shop_type", "dedicated")).strip().lower()
+    proxy_type = (
+        (await get_text(session, "proxy_shop_type", "dedicated")).strip().lower()
+    )
     if proxy_type not in SUPPORTED_TYPES:
         proxy_type = "dedicated"
     try:

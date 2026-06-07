@@ -1,13 +1,42 @@
-# MCS Shop V31 Hardened
+# MCS Shop — Clean V33
 
-Own Telegram shop with Crypto Pay, digital delivery, stock delivery, supplier fulfillment and Proxyline fulfillment.
+Единая production-сборка Telegram-магазина.
 
-## Deploy
+Запуск:
 
-Build: `python -m pip install --no-cache-dir -r requirements.txt`
+```bash
+python -m app.bot
+```
 
-Start: `python -m app.bot`
+Используется один модуль обработчиков:
 
-Use PostgreSQL on Render. Start with Crypto Pay testnet.
+```text
+app/handlers.py
+```
 
-Marker: `FIX_MARKER_MCS_HARDENED=v31 loaded`
+Второго приложения `app.main` и конфликтующей папки `app/handlers/` нет.
+
+Функции:
+- каталог и медиа-карточки V32;
+- админ-панель;
+- статические и количественные товары;
+- Crypto Pay;
+- Proxyline;
+- номера и поставщики;
+- Telegram Business;
+- PostgreSQL;
+- health-check с проверкой БД.
+
+Обязательные переменные Render:
+
+```text
+BOT_TOKEN
+ADMIN_IDS
+DATABASE_URL
+```
+
+Маркер запуска:
+
+```text
+FIX_MARKER_MCS_CLEAN=v33 loaded
+```

@@ -1,8 +1,5 @@
-
 from __future__ import annotations
 
-from decimal import Decimal
-from datetime import datetime
 from sqlalchemy import select, func
 from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -15,11 +12,19 @@ from app.models import (
 )
 
 CURRENCIES = (
-    "BNB", "BTC", "ETH",
-    "EUR", "LZT", "RUB",
-    "TJS", "TON", "TRX",
-    "UAH", "USD", "USDT",
-    "UZS", "XTR",
+    "USDT",
+    "TON",
+    "BTC",
+    "ETH",
+    "LTC",
+    "BNB",
+    "TRX",
+    "USDC",
+    "USD",
+    "EUR",
+    "RUB",
+    "UAH",
+    "UZS",
 )
 
 
@@ -39,7 +44,9 @@ def admin_reply_keyboard_v25() -> ReplyKeyboardMarkup:
 async def get_display_settings(session) -> CatalogDisplaySettings:
     row = await session.scalar(select(CatalogDisplaySettings).limit(1))
     if row is None:
-        row = CatalogDisplaySettings(columns_count=1, sort_mode="position", search_enabled=True)
+        row = CatalogDisplaySettings(
+            columns_count=1, sort_mode="position", search_enabled=True
+        )
         session.add(row)
         await session.commit()
         await session.refresh(row)
@@ -47,12 +54,20 @@ async def get_display_settings(session) -> CatalogDisplaySettings:
 
 
 async def admin_catalog_overview(session):
-    categories = list((await session.scalars(
-        select(ShopCategory).order_by(ShopCategory.sort_order, ShopCategory.id)
-    )).all())
-    products = list((await session.scalars(
-        select(ShopProduct).order_by(ShopProduct.sort_order, ShopProduct.id)
-    )).all())
+    categories = list(
+        (
+            await session.scalars(
+                select(ShopCategory).order_by(ShopCategory.sort_order, ShopCategory.id)
+            )
+        ).all()
+    )
+    products = list(
+        (
+            await session.scalars(
+                select(ShopProduct).order_by(ShopProduct.sort_order, ShopProduct.id)
+            )
+        ).all()
+    )
     return categories, products
 
 
@@ -71,7 +86,6 @@ def admin_catalog_text(categories, products) -> str:
     if uncategorized:
         lines.append(f"\n📁 Без категории ({len(uncategorized)})")
     return "\n".join(lines)
-
 
 
 def admin_catalog_keyboard(categories, products) -> InlineKeyboardMarkup:
@@ -97,7 +111,6 @@ def admin_catalog_keyboard(categories, products) -> InlineKeyboardMarkup:
     kb.button(text="⬅️ Назад", callback_data="admin:panel", style="danger")
     kb.adjust(*([1] * (len(categories) + (1 if uncategorized else 0))), 2, 1, 1)
     return kb.as_markup()
-
 
 
 def product_type_keyboard() -> InlineKeyboardMarkup:
@@ -132,7 +145,11 @@ def content_back_keyboard() -> InlineKeyboardMarkup:
 
 def product_card_text(product: ShopProduct, stock_count: int = 0) -> str:
     type_label = "Статический" if product.product_type == "static" else "Количественный"
-    payment = "🟢 Покупка включена" if product.payment_enabled else "🔴 Покупка приостановлена"
+    payment = (
+        "🟢 Покупка включена"
+        if product.payment_enabled
+        else "🔴 Покупка приостановлена"
+    )
     visibility = "показывается" if product.is_active else "скрыт"
 
     lines = [
@@ -159,21 +176,24 @@ def product_card_text(product: ShopProduct, stock_count: int = 0) -> str:
     if product.product_type == "quantity":
         lines.append(f"📚 Доступно позиций: {stock_count}")
 
-    lines.extend([
-        "",
-        "➖➖➖➖➖➖➖➖➖➖",
-        "",
-        "🔗 Прямая ссылка:",
-        f"/start product_{product.id}",
-    ])
+    lines.extend(
+        [
+            "",
+            "➖➖➖➖➖➖➖➖➖➖",
+            "",
+            "🔗 Прямая ссылка:",
+            f"/start product_{product.id}",
+        ]
+    )
     return "\n".join(lines)
-
 
 
 def product_card_keyboard(product: ShopProduct) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="🎁 Выдать товар", callback_data=f"v25:give:{product.id}")
-    kb.button(text="📦 Изменить контент", callback_data=f"v25:edit_content:{product.id}")
+    kb.button(
+        text="📦 Изменить контент", callback_data=f"v25:edit_content:{product.id}"
+    )
 
     kb.button(text="📝 Название", callback_data=f"v25:edit_name:{product.id}")
     kb.button(text="💰 Цена", callback_data=f"v25:edit_price:{product.id}")
@@ -189,7 +209,11 @@ def product_card_keyboard(product: ShopProduct) -> InlineKeyboardMarkup:
         kb.button(text="📦 Позиции товара", callback_data=f"v25:stock:{product.id}")
 
     kb.button(
-        text="⏸ Приостановить оплату" if product.payment_enabled else "▶️ Включить оплату",
+        text=(
+            "⏸ Приостановить оплату"
+            if product.payment_enabled
+            else "▶️ Включить оплату"
+        ),
         callback_data=f"v25:toggle_payment:{product.id}",
     )
     kb.button(
@@ -197,7 +221,9 @@ def product_card_keyboard(product: ShopProduct) -> InlineKeyboardMarkup:
         callback_data=f"v25:toggle_visible:{product.id}",
     )
 
-    kb.button(text="⚙️ Расширенные настройки", callback_data=f"v25:advanced:{product.id}")
+    kb.button(
+        text="⚙️ Расширенные настройки", callback_data=f"v25:advanced:{product.id}"
+    )
     kb.button(text="📊 Статистика товара", callback_data=f"v25:stats:{product.id}")
     kb.button(text="🗑 Удалить товар", callback_data=f"v25:delete_prompt:{product.id}")
     kb.button(text="⬅️ Назад", callback_data="v25:catalog", style="danger")
@@ -205,22 +231,34 @@ def product_card_keyboard(product: ShopProduct) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-
 def advanced_keyboard(product_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="💳 Платежные системы", callback_data=f"v25:payment_systems:{product_id}")
-    kb.button(text="🧾 Описание платежа", callback_data=f"v25:payment_description:{product_id}")
+    kb.button(
+        text="💳 Платежные системы", callback_data=f"v25:payment_systems:{product_id}"
+    )
+    kb.button(
+        text="🧾 Описание платежа",
+        callback_data=f"v25:payment_description:{product_id}",
+    )
     kb.button(text="🏷 Старая цена", callback_data=f"v25:old_price:{product_id}")
     kb.button(text="↕️ Позиция в списке", callback_data=f"v25:position:{product_id}")
-    kb.button(text="⬅️ Назад", callback_data=f"v25:product:{product_id}", style="danger")
+    kb.button(
+        text="⬅️ Назад", callback_data=f"v25:product:{product_id}", style="danger"
+    )
     kb.adjust(1)
     return kb.as_markup()
 
 
 def delete_confirm_keyboard(product_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Удалить", callback_data=f"v25:delete_confirm:{product_id}", style="danger")
-    kb.button(text="⬅️ Отмена", callback_data=f"v25:product:{product_id}", style="danger")
+    kb.button(
+        text="✅ Удалить",
+        callback_data=f"v25:delete_confirm:{product_id}",
+        style="danger",
+    )
+    kb.button(
+        text="⬅️ Отмена", callback_data=f"v25:product:{product_id}", style="danger"
+    )
     kb.adjust(1)
     return kb.as_markup()
 
@@ -238,14 +276,21 @@ def category_card_text(category: ShopCategory, product_count: int) -> str:
 def category_card_keyboard(category_id: int, active: bool) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="📝 Название", callback_data=f"v25:category_name:{category_id}")
-    kb.button(text="📄 Описание", callback_data=f"v25:category_description:{category_id}")
+    kb.button(
+        text="📄 Описание", callback_data=f"v25:category_description:{category_id}"
+    )
     kb.button(text="🖼 Фото", callback_data=f"v25:category_photo:{category_id}")
     kb.button(
         text="🙈 Скрыть" if active else "👁 Показать",
         callback_data=f"v25:category_toggle:{category_id}",
     )
-    kb.button(text="➕ Добавить товар", callback_data=f"v25:category_add_product:{category_id}")
-    kb.button(text="🗑 Удалить", callback_data=f"v25:category_delete_prompt:{category_id}")
+    kb.button(
+        text="➕ Добавить товар",
+        callback_data=f"v25:category_add_product:{category_id}",
+    )
+    kb.button(
+        text="🗑 Удалить", callback_data=f"v25:category_delete_prompt:{category_id}"
+    )
     kb.button(text="⬅️ Назад", callback_data="v25:catalog", style="danger")
     kb.adjust(2, 2, 1, 1)
     return kb.as_markup()
@@ -292,27 +337,37 @@ def sort_keyboard() -> InlineKeyboardMarkup:
 
 
 async def stock_count(session, product_id: int) -> int:
-    return int(await session.scalar(
-        select(func.count(ProductStockItem.id)).where(
-            ProductStockItem.product_id == product_id,
-            ProductStockItem.status == "available",
+    return int(
+        await session.scalar(
+            select(func.count(ProductStockItem.id)).where(
+                ProductStockItem.product_id == product_id,
+                ProductStockItem.status == "available",
+            )
         )
-    ) or 0)
+        or 0
+    )
 
 
 async def add_text_stock(session, product_id: int, raw: str) -> int:
     rows = [line.strip() for line in raw.splitlines() if line.strip()]
     for row in rows:
-        session.add(ProductStockItem(product_id=product_id, content_type="text", content_text=row))
+        session.add(
+            ProductStockItem(
+                product_id=product_id, content_type="text", content_text=row
+            )
+        )
     await session.commit()
     return len(rows)
 
 
 async def next_stock_item(session, product_id: int):
     row = await session.scalar(
-        select(ProductStockItem).where(
+        select(ProductStockItem)
+        .where(
             ProductStockItem.product_id == product_id,
             ProductStockItem.status == "available",
-        ).order_by(ProductStockItem.id).limit(1)
+        )
+        .order_by(ProductStockItem.id)
+        .limit(1)
     )
     return row

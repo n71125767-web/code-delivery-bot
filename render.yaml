@@ -5,3 +5,18 @@ services:
     buildCommand: python -m pip install --no-cache-dir -r requirements.txt
     startCommand: python -m app.bot
     healthCheckPath: /health
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: CRYPTO_PAY_TOKEN
+        sync: false
+      - key: CRYPTO_PAY_NETWORK
+        value: testnet
+      - key: PROXYLINE_ENABLED
+        value: "0"
+      - key: PROXYLINE_API_KEY
+        sync: false

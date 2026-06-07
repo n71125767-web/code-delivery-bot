@@ -15,4 +15,5 @@ class OrderStatus(StrEnum):
     PROBLEM = "problem"
     CANCELLED = "cancelled"
 
+
 TERMINAL_ORDER_STATUSES = {OrderStatus.CONFIRMED.value, OrderStatus.CANCELLED.value}
