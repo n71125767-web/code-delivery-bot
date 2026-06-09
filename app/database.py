@@ -2,7 +2,7 @@ import logging
 from sqlalchemy import text, select, inspect
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
-from app.config import DATABASE_URL, SUPPLIER_IDS, SERVICE_OPTIONS, ADMIN_IDS
+from app.config import DATABASE_URL, SERVICE_OPTIONS, ADMIN_IDS
 from app.models import (
     Base,
     Supplier,
@@ -31,7 +31,6 @@ async def init_db() -> None:
             await _sqlite_migrations(conn)
         await _critical_schema_migrations(conn)
 
-    await seed_env_suppliers()
     await seed_env_admins()
     await seed_services()
     await seed_text_templates()
@@ -230,27 +229,6 @@ async def _sqlite_migrations(conn) -> None:
     bug_columns_result = await conn.execute(text("PRAGMA table_info(bug_reports)"))
     bug_columns_result.fetchall()
     # Таблица создаётся через Base.metadata.create_all. Этот блок оставлен для будущих SQLite-миграций.
-
-
-async def seed_env_suppliers() -> None:
-    if not SUPPLIER_IDS:
-        return
-
-    async with SessionLocal() as session:
-        for supplier_id in SUPPLIER_IDS:
-            result = await session.execute(
-                select(Supplier).where(Supplier.telegram_id == supplier_id)
-            )
-            exists = result.scalars().first()
-            if not exists:
-                session.add(
-                    Supplier(
-                        telegram_id=supplier_id,
-                        name=f"supplier_{supplier_id}",
-                        is_active=True,
-                    )
-                )
-        await session.commit()
 
 
 async def seed_env_admins() -> None:

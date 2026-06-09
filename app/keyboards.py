@@ -143,12 +143,23 @@ def admin_back_keyboard() -> InlineKeyboardMarkup:
 def admin_suppliers_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="📋 › Список поставщиков", callback_data="admin:suppliers_list")
-    kb.button(text="➕ › Добавить поставщика", callback_data="admin:add_supplier_help")
+    kb.button(text="➕ › Добавить поставщика", callback_data="admin:add_supplier")
     kb.button(
-        text="🔗 › Привязать товар/лист", callback_data="admin:bind_supplier_help"
+        text="🔗 › Привязать товар/лист", callback_data="admin:bind_supplier"
     )
-    kb.button(text="🗑 › Удалить поставщика", callback_data="admin:remove_supplier_help")
+    kb.button(text="🗑 › Удалить поставщика", callback_data="admin:remove_supplier")
     kb.button(text="🏠 › Главное меню", callback_data="admin:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_suppliers_cancel_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(
+        text="❌ › Отмена",
+        callback_data="admin:supplier_action_cancel",
+        style="danger",
+    )
     kb.adjust(1)
     return kb.as_markup()
 

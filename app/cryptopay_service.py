@@ -172,8 +172,18 @@ async def create_purchase_invoice(
     buyer_id: int,
     buyer_username: str | None,
     product_id: int,
+    *,
+    amount_override: Decimal | None = None,
+    provider_key_override: str | None = None,
+    active_suffix: str | None = None,
+    description_override: str | None = None,
 ) -> tuple[DigitalPurchase, CryptoPayment]:
-    key = (buyer_id, product_id)
+    checkout_identity = (
+        f"{buyer_id}:{product_id}:{active_suffix}"
+        if active_suffix
+        else f"{buyer_id}:{product_id}"
+    )
+    key = (buyer_id, product_id, active_suffix or "")
     lock = _checkout_locks.setdefault(key, asyncio.Lock())
     try:
         async with lock:
@@ -181,7 +191,7 @@ async def create_purchase_invoice(
                 existing_purchase = await session.scalar(
                     select(DigitalPurchase)
                     .where(
-                        DigitalPurchase.active_key == f"{buyer_id}:{product_id}",
+                        DigitalPurchase.active_key == checkout_identity,
                         DigitalPurchase.status.in_(
                             ("creating_invoice", "pending_payment")
                         ),
@@ -222,7 +232,15 @@ async def create_purchase_invoice(
                     if provider
                     else ("stock" if product.product_type == "quantity" else "digital")
                 )
-                provider_key = provider.provider_key if provider else None
+                provider_key = (
+                    provider_key_override
+                    if provider_key_override is not None
+                    else (
+                        product.provider_key
+                        if getattr(product, "provider_key", None) is not None
+                        else (provider.provider_key if provider else None)
+                    )
+                )
 
                 if fulfillment_type == "digital" and not (
                     product.content_text or product.content_file_id
@@ -244,6 +262,14 @@ async def create_purchase_invoice(
                         await session.commit()
                         raise PaymentValidationError("Товар закончился.")
 
+                final_amount = (
+                    _decimal(amount_override)
+                    if amount_override is not None
+                    else _decimal(product.price)
+                )
+                if final_amount <= 0:
+                    raise PaymentValidationError("Некорректная сумма заказа.")
+
                 currency = (product.currency or "").upper()
                 if currency not in CRYPTO_ASSETS and currency not in FIAT_CURRENCIES:
                     raise PaymentValidationError(
@@ -255,11 +281,11 @@ async def create_purchase_invoice(
                     buyer_id=buyer_id,
                     buyer_username=buyer_username,
                     product_id=product.id,
-                    amount=product.price,
+                    amount=final_amount,
                     currency=currency,
                     status="creating_invoice",
                     idempotency_key=f"buy:{buyer_id}:{product.id}:{nonce}",
-                    active_key=f"{buyer_id}:{product.id}",
+                    active_key=checkout_identity,
                     fulfillment_type=fulfillment_type,
                     provider_key=provider_key,
                 )
@@ -270,7 +296,7 @@ async def create_purchase_invoice(
                     await session.rollback()
                     existing = await session.scalar(
                         select(DigitalPurchase).where(
-                            DigitalPurchase.active_key == f"{buyer_id}:{product_id}"
+                            DigitalPurchase.active_key == checkout_identity
                         )
                     )
                     payment = (
@@ -315,7 +341,7 @@ async def create_purchase_invoice(
                     content_type=product.content_type,
                     content_text=product.content_text,
                     content_file_id=product.content_file_id,
-                    amount=product.price,
+                    amount=final_amount,
                     currency=currency,
                     fulfillment_type=fulfillment_type,
                     provider_key=provider_key,
@@ -327,7 +353,9 @@ async def create_purchase_invoice(
             payload = _payload_for(purchase.id, nonce)
             kwargs: dict[str, Any] = {
                 "amount": float(_decimal(purchase.amount)),
-                "description": f"MCS Shop — {product.name}"[:1024],
+                "description": (
+                    description_override or f"MCS Shop — {product.name}"
+                )[:1024],
                 "payload": payload,
                 "expires_in": CRYPTO_PAY_INVOICE_EXPIRES_SECONDS,
                 "allow_anonymous": False,

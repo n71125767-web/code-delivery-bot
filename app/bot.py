@@ -134,6 +134,9 @@ async def main():
         logger.info("FIX_MARKER_CRYPTOPAY_STABLE=v26 loaded")
         logger.info("FIX_MARKER_MCS_HARDENED=v31 loaded")
         logger.info("FIX_MARKER_MCS_CLEAN=v33 loaded")
+        logger.info("FIX_MARKER_MCS_SERVER=v35 loaded")
+        logger.info("FIX_MARKER_MCS_PROXYLINE=v36 loaded")
+        logger.info("FIX_MARKER_MCS_ALERT_IDS=v36.1 loaded")
         dp = build_dispatcher()
         await dp.start_polling(
             bot,

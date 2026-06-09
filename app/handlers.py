@@ -20,6 +20,7 @@ from app.config import (
     IGNORE_NON_BUYERS,
     NOTIFY_UNKNOWN_BUYERS,
     ADMIN_ALERT_CHAT_ID,
+    ADMIN_ALERT_CHAT_IDS,
     IGNORE_OTHER_BOTS,
     ADMIN_BUSINESS_CONNECTION_ID,
     SERVICE_PAGE_SIZE,
@@ -59,6 +60,7 @@ from app.keyboards import (
     admin_text_keys_keyboard,
     admin_back_keyboard,
     admin_suppliers_keyboard,
+    admin_suppliers_cancel_keyboard,
     admin_services_keyboard,
     admin_lists_keyboard,
     admin_texts_menu_keyboard,
@@ -184,6 +186,13 @@ from app.cryptopay_service import (
     create_purchase_invoice,
 )
 from app.payment_keyboards import invoice_keyboard, payment_result_keyboard
+from app.proxy_catalog_v36 import (
+    PROXY_PERIODS,
+    available_proxyline_countries,
+    build_provider_key,
+    countries_keyboard,
+    periods_keyboard,
+)
 
 from app.admin_reference_v28 import (
     broadcast_preview_keyboard,
@@ -425,6 +434,7 @@ BUYER_CATALOG_SEARCH_WAIT: set[int] = set()
 BUYER_FEEDBACK_WAIT: set[int] = set()
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
+ADMIN_SUPPLIER_WAIT: dict[int, dict] = {}
 
 # Динамические панели ролей: храним последнее inline-сообщение панели,
 # чтобы команды и callback-кнопки редактировали его, а не спамили новым сообщением.
@@ -1065,8 +1075,11 @@ async def send_supplier_menu(
 async def notify_admins(bot: Bot, text: str) -> None:
     for admin_id in ADMIN_IDS:
         await safe_send_message(bot, admin_id, text)
-    if ADMIN_ALERT_CHAT_ID:
-        await safe_send_message(bot, ADMIN_ALERT_CHAT_ID, text)
+    recipients = ADMIN_ALERT_CHAT_IDS or (
+        [ADMIN_ALERT_CHAT_ID] if ADMIN_ALERT_CHAT_ID else []
+    )
+    for recipient_id in recipients:
+        await safe_send_message(bot, recipient_id, text)
 
 
 async def send_service_keyboard(
@@ -1284,6 +1297,162 @@ async def process_admin_pending_input(
             bot, new_admin_id, "Вы назначены дополнительным админом. Откройте /admin"
         )
         return True
+
+    supplier_state = ADMIN_SUPPLIER_WAIT.get(admin_id)
+    if supplier_state:
+        if text.lower() in {"отмена", "cancel", "/cancel"}:
+            ADMIN_SUPPLIER_WAIT.pop(admin_id, None)
+            await temp_answer(
+                bot,
+                message,
+                "Действие с поставщиком отменено.",
+                business_connection_id,
+                reply_markup=admin_suppliers_keyboard(),
+            )
+            return True
+
+        action = supplier_state.get("action")
+
+        if action == "add":
+            parts = text.split(maxsplit=1)
+            if not parts or not parts[0].isdigit():
+                await temp_answer(
+                    bot,
+                    message,
+                    "Пришлите Telegram ID и имя через пробел.\n\n"
+                    "Пример: 123456789 Иван",
+                    business_connection_id,
+                )
+                return True
+
+            supplier_id = int(parts[0])
+            supplier_name = (
+                parts[1].strip()
+                if len(parts) > 1 and parts[1].strip()
+                else f"supplier_{supplier_id}"
+            )
+            async with SessionLocal() as session:
+                supplier = await add_supplier(
+                    session,
+                    supplier_id,
+                    supplier_name,
+                )
+                suppliers_text = await list_suppliers_text(session)
+
+            ADMIN_SUPPLIER_WAIT.pop(admin_id, None)
+            await safe_send_message(
+                bot,
+                supplier_id,
+                "✅ Вы добавлены как поставщик MCS Shop.\n\n"
+                "Нажмите /start, чтобы открыть панель поставщика.",
+                reply_markup=supplier_inline_menu_keyboard(),
+            )
+            await temp_answer(
+                bot,
+                message,
+                "✅ Поставщик добавлен.\n\n"
+                f"Telegram ID: {supplier.telegram_id}\n"
+                f"Имя: {supplier.name}\n\n"
+                f"{suppliers_text}",
+                business_connection_id,
+                reply_markup=admin_suppliers_keyboard(),
+            )
+            return True
+
+        if action == "remove":
+            if not text.isdigit():
+                await temp_answer(
+                    bot,
+                    message,
+                    "Пришлите числовой Telegram ID поставщика.",
+                    business_connection_id,
+                )
+                return True
+
+            supplier_id = int(text)
+            async with SessionLocal() as session:
+                removed = await remove_supplier(session, supplier_id)
+                suppliers_text = await list_suppliers_text(session)
+
+            ADMIN_SUPPLIER_WAIT.pop(admin_id, None)
+            await temp_answer(
+                bot,
+                message,
+                (
+                    "✅ Поставщик отключён."
+                    if removed
+                    else "Поставщик с таким ID не найден."
+                )
+                + "\n\n"
+                + suppliers_text,
+                business_connection_id,
+                reply_markup=admin_suppliers_keyboard(),
+            )
+            return True
+
+        if action == "bind":
+            parts = text.split(maxsplit=1)
+            if len(parts) != 2 or not parts[0].isdigit():
+                await temp_answer(
+                    bot,
+                    message,
+                    "Пришлите Telegram ID поставщика и ID товара.\n\n"
+                    "Пример: 123456789 25",
+                    business_connection_id,
+                )
+                return True
+
+            supplier_id = int(parts[0])
+            product_key = parts[1].strip()
+            async with SessionLocal() as session:
+                result = await bind_supplier_to_product(
+                    session,
+                    supplier_id,
+                    product_key,
+                )
+
+            ADMIN_SUPPLIER_WAIT.pop(admin_id, None)
+            await temp_answer(
+                bot,
+                message,
+                result,
+                business_connection_id,
+                reply_markup=admin_suppliers_keyboard(),
+            )
+            return True
+
+        if action == "unbind":
+            parts = text.split(maxsplit=1)
+            if len(parts) != 2 or not parts[0].isdigit():
+                await temp_answer(
+                    bot,
+                    message,
+                    "Пришлите Telegram ID поставщика и ID товара.\n\n"
+                    "Пример: 123456789 25",
+                    business_connection_id,
+                )
+                return True
+
+            supplier_id = int(parts[0])
+            product_key = parts[1].strip()
+            async with SessionLocal() as session:
+                result = await unbind_supplier_from_product(
+                    session,
+                    supplier_id,
+                    product_key,
+                )
+
+            ADMIN_SUPPLIER_WAIT.pop(admin_id, None)
+            await temp_answer(
+                bot,
+                message,
+                result,
+                business_connection_id,
+                reply_markup=admin_suppliers_keyboard(),
+            )
+            return True
+
+        ADMIN_SUPPLIER_WAIT.pop(admin_id, None)
 
     key = ADMIN_TEXT_EDIT_WAIT.get(admin_id)
     if not key:
@@ -2492,7 +2661,7 @@ async def process_admin_command(
             await answer_message(
                 bot,
                 message,
-                "Формат:\n/add_supplier TELEGRAM_ID Имя",
+                "Добавляйте поставщика через:\nАдмин меню → Поставщики → Добавить поставщика\n\nКомандный формат также поддерживается:\n/add_supplier TELEGRAM_ID Имя",
                 business_connection_id,
             )
             return True
@@ -4355,6 +4524,7 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         SHOP_ADMIN_WAIT.pop(user_id, None)
         ADMIN_TEXT_EDIT_WAIT.pop(user_id, None)
         ADMIN_ADD_ADMIN_WAIT.discard(user_id)
+        ADMIN_SUPPLIER_WAIT.pop(user_id, None)
         BUYER_CATALOG_SEARCH_WAIT.discard(user_id)
         if await process_main_reply_button(bot, message, business_connection_id):
             return
@@ -6294,6 +6464,67 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         await callback.answer()
         return True
 
+    if data == "admin:add_supplier":
+        ADMIN_SUPPLIER_WAIT[callback.from_user.id] = {"action": "add"}
+        await update_or_send(
+            callback,
+            "➕ Добавление поставщика\n\n"
+            "Пришлите одним сообщением Telegram ID и имя.\n\n"
+            "Пример:\n123456789 Иван\n\n"
+            "Для отмены напишите: отмена",
+            reply_markup=admin_suppliers_cancel_keyboard(),
+        )
+        await callback.answer("Жду ID и имя")
+        return True
+
+    if data == "admin:remove_supplier":
+        ADMIN_SUPPLIER_WAIT[callback.from_user.id] = {"action": "remove"}
+        await update_or_send(
+            callback,
+            "🗑 Отключение поставщика\n\n"
+            "Пришлите Telegram ID поставщика.\n\n"
+            "Для отмены напишите: отмена",
+            reply_markup=admin_suppliers_cancel_keyboard(),
+        )
+        await callback.answer("Жду Telegram ID")
+        return True
+
+    if data == "admin:bind_supplier":
+        ADMIN_SUPPLIER_WAIT[callback.from_user.id] = {"action": "bind"}
+        await update_or_send(
+            callback,
+            "🔗 Привязка товара к поставщику\n\n"
+            "Пришлите Telegram ID поставщика и ID товара.\n\n"
+            "Пример:\n123456789 25\n\n"
+            "Для отмены напишите: отмена",
+            reply_markup=admin_suppliers_cancel_keyboard(),
+        )
+        await callback.answer("Жду ID поставщика и товара")
+        return True
+
+    if data == "admin:unbind_supplier":
+        ADMIN_SUPPLIER_WAIT[callback.from_user.id] = {"action": "unbind"}
+        await update_or_send(
+            callback,
+            "🔓 Отвязка товара от поставщика\n\n"
+            "Пришлите Telegram ID поставщика и ID товара.\n\n"
+            "Пример:\n123456789 25\n\n"
+            "Для отмены напишите: отмена",
+            reply_markup=admin_suppliers_cancel_keyboard(),
+        )
+        await callback.answer("Жду ID поставщика и товара")
+        return True
+
+    if data == "admin:supplier_action_cancel":
+        ADMIN_SUPPLIER_WAIT.pop(callback.from_user.id, None)
+        await update_or_send(
+            callback,
+            "🚚 Поставщики\n\nДействие отменено.",
+            reply_markup=admin_suppliers_keyboard(),
+        )
+        await callback.answer("Отменено")
+        return True
+
     if data == "admin:suppliers_list":
         async with SessionLocal() as session:
             text = await list_suppliers_text(session)
@@ -6396,8 +6627,6 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     help_texts = {
-        "admin:add_supplier_help": "Добавить поставщика:\n/add_supplier TELEGRAM_ID Имя\n\nПример:\n/add_supplier 123456789 proxy_supplier",
-        "admin:bind_supplier_help": "Привязать товар:\n/bind_supplier TELEGRAM_ID товар_или_ID\n\nПример:\n/bind_supplier 123456789 proxy",
         "admin:add_service_help": "Добавить сервис:\n/add_service Название\n\nПример:\n/add_service Telegram",
         "admin:service_emoji_help": "Эмодзи сервиса:\n/set_service_emoji Название | эмодзи\n\nПример:\n/set_service_emoji Telegram | 🔥",
         "admin:set_text_help": "Изменить текст:\n/set_text ключ | новый текст\n\nКлючи:\nthank_you\nservice_accepted\nservice_select\norder_not_found\ncontact_forbidden\norder_closed\nproblem_sent",
@@ -7096,17 +7325,134 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
 
     if data.startswith("buyer:proxycat:"):
         category_key = data.rsplit(":", 1)[1]
-        async with SessionLocal() as session:
-            products = await list_proxy_products_by_category(session, category_key)
+        countries = await available_proxyline_countries()
         await update_or_send(
             callback,
-            proxy_category_title(category_key),
-            reply_markup=special_products_keyboard(
-                products,
-                back_callback="buyer:proxy_catalog",
+            proxy_category_title(category_key)
+            + "\n\nВыберите страну прокси:",
+            reply_markup=countries_keyboard(category_key, countries, page=0),
+        )
+        await callback.answer()
+        return
+
+    if data.startswith("buyer:pxcountries:"):
+        _, _, category_key, page_raw = data.split(":")
+        countries = await available_proxyline_countries()
+        await update_or_send(
+            callback,
+            proxy_category_title(category_key)
+            + "\n\nВыберите страну прокси:",
+            reply_markup=countries_keyboard(
+                category_key,
+                countries,
+                page=int(page_raw),
             ),
         )
         await callback.answer()
+        return
+
+    if data.startswith("buyer:pxcountry:"):
+        _, _, category_key, country_code, page_raw = data.split(":")
+        async with SessionLocal() as session:
+            products = await list_proxy_products_by_category(session, category_key)
+        product = next(
+            (
+                row for row in products
+                if row.fulfillment_type == "proxyline"
+                and row.payment_enabled
+                and row.is_active
+            ),
+            None,
+        )
+        if product is None:
+            await callback.answer(
+                "Для этого типа прокси администратор ещё не создал активный товар.",
+                show_alert=True,
+            )
+            return
+
+        countries = dict(await available_proxyline_countries())
+        country_name = countries.get(country_code, country_code.upper())
+        await update_or_send(
+            callback,
+            f"{proxy_category_title(category_key)}\n\n"
+            f"Страна: {country_name}\n"
+            "Выберите срок:",
+            reply_markup=periods_keyboard(
+                category_key,
+                country_code,
+                product.id,
+                Decimal(str(product.price)),
+                product.currency,
+            ),
+        )
+        await callback.answer()
+        return
+
+    if data.startswith("buyer:pxperiod:"):
+        _, _, category_key, country_code, months_raw, product_id_raw = data.split(":")
+        months = int(months_raw)
+        product_id = int(product_id_raw)
+        if months not in PROXY_PERIODS:
+            await callback.answer("Некорректный срок.", show_alert=True)
+            return
+
+        async with SessionLocal() as session:
+            product = await session.get(ShopProduct, product_id)
+        if (
+            product is None
+            or product.is_deleted
+            or not product.is_active
+            or not product.payment_enabled
+            or product.fulfillment_type != "proxyline"
+        ):
+            await callback.answer(
+                "Тариф временно недоступен.",
+                show_alert=True,
+            )
+            return
+
+        countries = dict(await available_proxyline_countries())
+        country_name = countries.get(country_code, country_code.upper())
+        amount = (
+            Decimal(str(product.price)) * Decimal(months)
+        ).quantize(Decimal("0.01"))
+        provider_key = build_provider_key(
+            product.provider_key,
+            country_code,
+            months,
+        )
+        try:
+            purchase, payment = await create_purchase_invoice(
+                callback.from_user.id,
+                callback.from_user.username,
+                product.id,
+                amount_override=amount,
+                provider_key_override=provider_key,
+                active_suffix=f"{country_code}:{months}",
+                description_override=(
+                    f"{product.name}, {country_name}, {months} мес."
+                ),
+            )
+        except (PaymentConfigurationError, PaymentValidationError) as exc:
+            await callback.answer(str(exc), show_alert=True)
+            return
+
+        await update_or_send(
+            callback,
+            "🌐 Заказ прокси создан\n\n"
+            f"Тип: {proxy_category_title(category_key)}\n"
+            f"Страна: {country_name}\n"
+            f"Срок: {months} мес.\n"
+            f"Сумма: {amount} {product.currency}\n\n"
+            "Оплатите счёт через CryptoBot.",
+            reply_markup=invoice_keyboard(
+                payment.invoice_url,
+                purchase.id,
+                product.id,
+            ),
+        )
+        await callback.answer("Счёт создан")
         return
 
     if data == "buyer:noop":
@@ -7125,15 +7471,12 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             "residential": "residential",
         }
         category_key = key_map.get(legacy_key, legacy_key)
-        async with SessionLocal() as session:
-            products = await list_proxy_products_by_category(session, category_key)
+        countries = await available_proxyline_countries()
         await update_or_send(
             callback,
-            proxy_category_title(category_key),
-            reply_markup=special_products_keyboard(
-                products,
-                back_callback="buyer:proxy_catalog",
-            ),
+            proxy_category_title(category_key)
+            + "\n\nВыберите страну прокси:",
+            reply_markup=countries_keyboard(category_key, countries, page=0),
         )
         await callback.answer()
         return

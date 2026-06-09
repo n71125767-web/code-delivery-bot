@@ -1,0 +1,239 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+from decimal import Decimal
+from typing import Any
+
+from aiogram.types import InlineKeyboardMarkup
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+from app.config import (
+    PROXYLINE_API_KEY,
+    PROXYLINE_COUNTRIES_JSON,
+    PROXYLINE_ENABLED,
+)
+from app.proxyline import ProxylineService
+
+logger = logging.getLogger(__name__)
+
+PROXY_PERIODS = {
+    1: 30,
+    3: 90,
+    6: 180,
+    9: 270,
+    12: 360,
+}
+
+# Используется только если API временно не вернул справочник стран.
+FALLBACK_COUNTRIES = {
+    "al":"Албания","dz":"Алжир","ar":"Аргентина","am":"Армения","au":"Австралия",
+    "at":"Австрия","az":"Азербайджан","bh":"Бахрейн","bd":"Бангладеш","by":"Беларусь",
+    "be":"Бельгия","bo":"Боливия","ba":"Босния и Герцеговина","br":"Бразилия","bg":"Болгария",
+    "kh":"Камбоджа","cm":"Камерун","ca":"Канада","cl":"Чили","cn":"Китай",
+    "co":"Колумбия","cr":"Коста-Рика","hr":"Хорватия","cy":"Кипр","cz":"Чехия",
+    "dk":"Дания","do":"Доминикана","ec":"Эквадор","eg":"Египет","ee":"Эстония",
+    "fi":"Финляндия","fr":"Франция","ge":"Грузия","de":"Германия","gh":"Гана",
+    "gr":"Греция","gt":"Гватемала","hk":"Гонконг","hu":"Венгрия","is":"Исландия",
+    "in":"Индия","id":"Индонезия","ie":"Ирландия","il":"Израиль","it":"Италия",
+    "jp":"Япония","jo":"Иордания","kz":"Казахстан","ke":"Кения","kr":"Южная Корея",
+    "kw":"Кувейт","kg":"Кыргызстан","lv":"Латвия","lb":"Ливан","lt":"Литва",
+    "lu":"Люксембург","my":"Малайзия","mt":"Мальта","mx":"Мексика","md":"Молдова",
+    "mn":"Монголия","me":"Черногория","ma":"Марокко","np":"Непал","nl":"Нидерланды",
+    "nz":"Новая Зеландия","ng":"Нигерия","mk":"Северная Македония","no":"Норвегия",
+    "om":"Оман","pk":"Пакистан","pa":"Панама","py":"Парагвай","pe":"Перу",
+    "ph":"Филиппины","pl":"Польша","pt":"Португалия","qa":"Катар","ro":"Румыния",
+    "ru":"Россия","sa":"Саудовская Аравия","rs":"Сербия","sg":"Сингапур",
+    "sk":"Словакия","si":"Словения","za":"ЮАР","es":"Испания","lk":"Шри-Ланка",
+    "se":"Швеция","ch":"Швейцария","tw":"Тайвань","tj":"Таджикистан","th":"Таиланд",
+    "tn":"Тунис","tr":"Турция","tm":"Туркменистан","ua":"Украина","ae":"ОАЭ",
+    "gb":"Великобритания","us":"США","uy":"Уругвай","uz":"Узбекистан","ve":"Венесуэла",
+    "vn":"Вьетнам",
+}
+
+_cache: tuple[float, list[tuple[str, str]]] | None = None
+_cache_lock = asyncio.Lock()
+
+
+def _normalize_country_rows(payload: Any) -> list[tuple[str, str]]:
+    if isinstance(payload, dict):
+        for key in ("countries", "items", "data", "result"):
+            if key in payload:
+                return _normalize_country_rows(payload[key])
+        result = []
+        for code, value in payload.items():
+            code = str(code).strip().lower()
+            if len(code) != 2:
+                continue
+            if isinstance(value, dict):
+                name = value.get("name") or value.get("title") or value.get("country")
+            else:
+                name = value
+            result.append((code, str(name or code.upper())))
+        return result
+
+    if isinstance(payload, list):
+        result = []
+        for item in payload:
+            if isinstance(item, str):
+                code = item.strip().lower()
+                if len(code) == 2:
+                    result.append((code, FALLBACK_COUNTRIES.get(code, code.upper())))
+            elif isinstance(item, dict):
+                code = str(
+                    item.get("code")
+                    or item.get("country_code")
+                    or item.get("iso")
+                    or item.get("id")
+                    or ""
+                ).strip().lower()
+                if len(code) != 2:
+                    continue
+                name = (
+                    item.get("name")
+                    or item.get("title")
+                    or item.get("country")
+                    or FALLBACK_COUNTRIES.get(code)
+                    or code.upper()
+                )
+                result.append((code, str(name)))
+        return result
+    return []
+
+
+def _configured_countries() -> list[tuple[str, str]]:
+    if not PROXYLINE_COUNTRIES_JSON:
+        return []
+    try:
+        return _normalize_country_rows(json.loads(PROXYLINE_COUNTRIES_JSON))
+    except Exception:
+        logger.exception("Invalid PROXYLINE_COUNTRIES_JSON")
+        return []
+
+
+async def available_proxyline_countries(force: bool = False) -> list[tuple[str, str]]:
+    global _cache
+    now = time.monotonic()
+    if not force and _cache and now - _cache[0] < 600:
+        return _cache[1]
+
+    async with _cache_lock:
+        if not force and _cache and now - _cache[0] < 600:
+            return _cache[1]
+
+        rows: list[tuple[str, str]] = []
+        if PROXYLINE_ENABLED and PROXYLINE_API_KEY:
+            service = ProxylineService(PROXYLINE_API_KEY)
+            for endpoint in ("countries", "countries-list", "country-list"):
+                try:
+                    payload = await service.request("GET", endpoint, timeout=30)
+                    rows = _normalize_country_rows(payload)
+                    if rows:
+                        break
+                except Exception:
+                    logger.info("Proxyline country endpoint unavailable: %s", endpoint)
+
+        if not rows:
+            rows = _configured_countries()
+        if not rows:
+            rows = list(FALLBACK_COUNTRIES.items())
+
+        unique = {code: name for code, name in rows if len(code) == 2}
+        rows = sorted(unique.items(), key=lambda item: item[1].lower())
+        _cache = (time.monotonic(), rows)
+        return rows
+
+
+def countries_keyboard(
+    category_key: str,
+    countries: list[tuple[str, str]],
+    page: int = 0,
+    page_size: int = 12,
+) -> InlineKeyboardMarkup:
+    pages = max(1, (len(countries) + page_size - 1) // page_size)
+    page = max(0, min(page, pages - 1))
+    start = page * page_size
+    rows = countries[start:start + page_size]
+
+    kb = InlineKeyboardBuilder()
+    for code, name in rows:
+        kb.button(
+            text=f"🌍 {name}",
+            callback_data=f"buyer:pxcountry:{category_key}:{code}:{page}",
+        )
+    kb.adjust(2)
+
+    if page > 0:
+        kb.button(
+            text="⬅️ Назад",
+            callback_data=f"buyer:pxcountries:{category_key}:{page - 1}",
+            style="danger",
+        )
+    kb.button(text=f"{page + 1}/{pages}", callback_data="buyer:noop")
+    if page + 1 < pages:
+        kb.button(
+            text="Вперёд ➡️",
+            callback_data=f"buyer:pxcountries:{category_key}:{page + 1}",
+            style="success",
+        )
+    kb.button(
+        text="⬅️ К типам прокси",
+        callback_data="buyer:proxy_catalog",
+        style="danger",
+    )
+    return kb.as_markup()
+
+
+def periods_keyboard(
+    category_key: str,
+    country_code: str,
+    product_id: int,
+    monthly_price: Decimal,
+    currency: str,
+) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for months in PROXY_PERIODS:
+        amount = (monthly_price * Decimal(months)).quantize(Decimal("0.01"))
+        kb.button(
+            text=f"{months} мес. — {amount} {currency}",
+            callback_data=(
+                f"buyer:pxperiod:{category_key}:{country_code}:"
+                f"{months}:{product_id}"
+            ),
+        )
+    kb.button(
+        text="⬅️ К странам",
+        callback_data=f"buyer:pxcountries:{category_key}:0",
+        style="danger",
+    )
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def build_provider_key(
+    original_provider_key: str | None,
+    country_code: str,
+    months: int,
+) -> str:
+    data: dict[str, Any] = {}
+    if original_provider_key:
+        try:
+            parsed = json.loads(original_provider_key)
+            if isinstance(parsed, dict):
+                data.update(parsed)
+        except Exception:
+            pass
+
+    data.update(
+        {
+            "country": country_code.lower(),
+            "period": PROXY_PERIODS[months],
+            "months": months,
+            "count": max(1, int(data.get("count", 1))),
+            "ip_version": int(data.get("ip_version", 4)),
+            "type": str(data.get("type", data.get("proxy_type", "dedicated"))),
+        }
+    )
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))

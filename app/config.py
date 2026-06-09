@@ -40,12 +40,17 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///bot.db").strip()
 ADMIN_IDS = parse_ids(os.getenv("ADMIN_IDS", ""))
 
 # Общий чат/ЛС для алертов админам. Не обязательно.
-ADMIN_ALERT_CHAT_ID = os.getenv("ADMIN_ALERT_CHAT_ID", "").strip()
-ADMIN_ALERT_CHAT_ID = int(ADMIN_ALERT_CHAT_ID) if ADMIN_ALERT_CHAT_ID else None
+ADMIN_ALERT_CHAT_IDS = parse_ids(
+    os.getenv("ADMIN_ALERT_CHAT_ID", "")
+)
+ADMIN_ALERT_CHAT_ID = (
+    ADMIN_ALERT_CHAT_IDS[0]
+    if ADMIN_ALERT_CHAT_IDS
+    else None
+)
 
 # Старый SUPPLIER_IDS оставляем как стартовый список.
 # Новых поставщиков можно добавлять через /add_supplier.
-SUPPLIER_IDS = parse_ids(os.getenv("SUPPLIER_IDS", ""))
 
 
 # Можно оставить пустым. Обычно business_connection_id берётся из входящего business_message.
@@ -108,6 +113,7 @@ PROXYLINE_COUPON = os.getenv("PROXYLINE_COUPON", "").strip()
 # JSON maps own product names to Proxyline parameters.
 # Пример: {"Прокси RU 30 дней":{"country":"ru","period":30,"count":1,"ip_version":4,"type":"dedicated"}}
 PROXYLINE_PRODUCTS_JSON = os.getenv("PROXYLINE_PRODUCTS_JSON", "").strip()
+PROXYLINE_COUNTRIES_JSON = os.getenv("PROXYLINE_COUNTRIES_JSON", "").strip()
 
 
 # Crypto Pay / @CryptoBot
