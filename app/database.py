@@ -36,6 +36,7 @@ async def init_db() -> None:
     await seed_services()
     await seed_text_templates()
     await seed_catalog_display_settings()
+    await migrate_legacy_fulfillment()
 
 
 async def _critical_schema_migrations(conn) -> None:
@@ -50,14 +51,6 @@ async def _critical_schema_migrations(conn) -> None:
     dialect = conn.dialect.name
     timestamp = "TIMESTAMP" if dialect == "postgresql" else "DATETIME"
     additions = {
-        "broadcast_jobs": {
-            "cursor": "INTEGER DEFAULT 0 NOT NULL",
-            "recipients_json": "TEXT DEFAULT '[]' NOT NULL",
-            "last_error": "TEXT",
-        },
-        "runtime_states": {
-            "updated_at": f"{timestamp}",
-        },
         "digital_purchases": {
             "delivery_started_at": f"{timestamp}",
             "delivery_attempts": "INTEGER DEFAULT 0 NOT NULL",
@@ -66,10 +59,29 @@ async def _critical_schema_migrations(conn) -> None:
             "fulfillment_type": "VARCHAR(30) DEFAULT 'digital' NOT NULL",
             "provider_key": "VARCHAR(500)",
             "legacy_order_id": "INTEGER",
+            "refund_status": "VARCHAR(30)",
+            "refund_reason": "TEXT",
+            "refunded_at": f"{timestamp}",
         },
         "product_snapshots": {
             "fulfillment_type": "VARCHAR(30) DEFAULT 'digital' NOT NULL",
             "provider_key": "VARCHAR(500)",
+        },
+        "shop_products": {
+            "fulfillment_type": "VARCHAR(30) DEFAULT 'digital' NOT NULL",
+            "provider_key": "VARCHAR(500)",
+            "is_deleted": "BOOLEAN DEFAULT FALSE NOT NULL",
+            "deleted_at": f"{timestamp}",
+            "deleted_by": "BIGINT",
+        },
+        "product_stock_items": {
+            "reserved_at": f"{timestamp}",
+            "reserved_purchase_id": "BIGINT",
+        },
+        "broadcast_jobs": {
+            "last_user_id": "BIGINT",
+            "error_text": "TEXT",
+            "started_at": f"{timestamp}",
         },
     }
     for table, table_additions in additions.items():
@@ -86,6 +98,30 @@ async def _critical_schema_migrations(conn) -> None:
             except Exception:
                 logger.exception("Critical migration failed: %s", sql)
                 raise
+
+
+    # One-time cleanup of the legacy external-store column name.
+    if dialect == "postgresql":
+        try:
+            product_columns = await conn.run_sync(columns, "shop_products")
+            if "admaker_product_id" in product_columns and "internal_key" not in product_columns:
+                await conn.execute(
+                    text(
+                        "ALTER TABLE shop_products "
+                        "RENAME COLUMN admaker_product_id TO internal_key"
+                    )
+                )
+            provider_columns = await conn.run_sync(columns, "product_providers")
+            if "admaker_product_id" in provider_columns and "internal_key" not in provider_columns:
+                await conn.execute(
+                    text(
+                        "ALTER TABLE product_providers "
+                        "RENAME COLUMN admaker_product_id TO internal_key"
+                    )
+                )
+        except Exception:
+            logger.exception("Legacy internal_key column migration failed")
+            raise
 
     # Cross-process duplicate checkout protection.
     try:
@@ -301,3 +337,33 @@ async def seed_catalog_display_settings() -> None:
                 )
             )
             await session.commit()
+
+
+async def migrate_legacy_fulfillment() -> None:
+    """Backfill explicit fulfillment fields for products from older releases."""
+    from app.models import ProductProvider, ShopProduct
+
+    async with SessionLocal() as session:
+        products = list((await session.scalars(select(ShopProduct))).all())
+        providers = list((await session.scalars(select(ProductProvider))).all())
+        provider_map = {row.internal_key: row for row in providers if row.enabled}
+
+        changed = 0
+        for product in products:
+            provider = provider_map.get(product.internal_key)
+            if provider is not None:
+                if provider.provider_type == "proxyline":
+                    product.fulfillment_type = "proxyline"
+                    product.provider_key = provider.provider_key
+                elif provider.provider_type == "supplier":
+                    product.fulfillment_type = "supplier"
+                    product.provider_key = provider.provider_key
+            elif product.product_type == "quantity":
+                product.fulfillment_type = "stock"
+            elif not product.fulfillment_type:
+                product.fulfillment_type = "digital"
+            changed += 1
+
+        if changed:
+            await session.commit()
+            logger.info("Legacy fulfillment backfill checked products=%s", changed)

@@ -12,9 +12,6 @@ from aiogram.exceptions import TelegramRetryAfter
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from app.broadcast_service import create_broadcast_job, run_broadcast_job
-from app.id_utils import generate_internal_key
-from app.time_utils import utcnow
 from app.config import (
     ADMIN_IDS,
     AUTO_DELETE_MESSAGES,
@@ -113,7 +110,7 @@ from app.repositories.product_providers import (
     list_recent_internal_products,
 )
 
-from app.models import ShopCategory, ShopProduct, BugReport, ProductStockItem
+from app.models import ShopCategory, ShopProduct, BugReport, ProductStockItem, BroadcastJob
 
 from app.shop_admin_v20 import (
     customer_home_text,
@@ -124,7 +121,8 @@ from app.shop_admin_v20 import (
     category_counts,
     admin_categories_text,
     admin_categories_keyboard,
-    admin_admin_category_keyboard,
+    admin_category_text,
+    admin_category_keyboard,
     admin_products_text,
     admin_products_keyboard,
     product_admin_text,
@@ -137,14 +135,18 @@ from app.shop_admin_v20 import (
 from app.shop import (
     list_categories,
     get_product as get_shop_product,
+    category_text,
     product_text,
     products_keyboard,
     product_keyboard,
     process_admin_shop_command,
+    list_proxy_products,
     list_number_products,
     special_catalog_text,
     special_products_keyboard,
     list_general_products,
+    proxy_main_text,
+    proxy_main_keyboard,
     proxy_categories_text,
     proxy_categories_keyboard,
     proxy_category_title,
@@ -162,6 +164,7 @@ from app.catalog_v25 import (
     product_card_text as v25_product_card_text,
     product_card_keyboard as v25_product_card_keyboard,
     advanced_keyboard,
+    fulfillment_keyboard,
     delete_confirm_keyboard as v25_delete_confirm_keyboard,
     category_card_text,
     category_card_keyboard,
@@ -192,12 +195,12 @@ from app.admin_reference_v28 import (
 )
 
 from app.visual_ui_v32 import category_asset, category_caption, product_caption
+from app.commerce_v34 import validate_product_for_sale, write_audit
 from app.catalog_runtime_v29 import (
     search_visible_products,
     sort_products,
 )
 from app.user_registry import touch_user
-from app.runtime_state import PersistentDict, PersistentSet
 from app.fulfillment_service import sync_purchase_from_order
 from app.services import (
     create_or_update_order_from_purchase,
@@ -415,13 +418,13 @@ def validate_runtime_ui() -> None:
 
 validate_runtime_ui()
 
-SHOP_ADMIN_WAIT: dict[int, dict] = PersistentDict("shop_admin_wait")
-CATALOG_V25_STATE: dict[int, dict] = PersistentDict("catalog_v25_state")
-ADMIN_BROADCAST_V28: dict[int, dict] = PersistentDict("admin_broadcast_v28")
-BUYER_CATALOG_SEARCH_WAIT: set[int] = PersistentSet("buyer_catalog_search_wait")
-BUYER_FEEDBACK_WAIT: set[int] = PersistentSet("buyer_feedback_wait")
-ADMIN_TEXT_EDIT_WAIT: dict[int, str] = PersistentDict("admin_text_edit_wait")
-ADMIN_ADD_ADMIN_WAIT: set[int] = PersistentSet("admin_add_admin_wait")
+SHOP_ADMIN_WAIT: dict[int, dict] = {}
+CATALOG_V25_STATE: dict[int, dict] = {}
+ADMIN_BROADCAST_V28: dict[int, dict] = {}
+BUYER_CATALOG_SEARCH_WAIT: set[int] = set()
+BUYER_FEEDBACK_WAIT: set[int] = set()
+ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
+ADMIN_ADD_ADMIN_WAIT: set[int] = set()
 
 # Динамические панели ролей: храним последнее inline-сообщение панели,
 # чтобы команды и callback-кнопки редактировали его, а не спамили новым сообщением.
@@ -1350,109 +1353,70 @@ async def run_broadcast_v29(
     admin_id: int,
     recipients: list[int],
     text: str,
-    job_id: int | None = None,
+    job_id: int,
 ) -> None:
     sent = 0
     failed = 0
-
     async with SessionLocal() as session:
-        if job_id is None:
-            job = BroadcastJob(
-                admin_id=admin_id,
-                text=text,
-                status="running",
-                total_count=len(recipients),
-            )
-            session.add(job)
+        job = await session.get(BroadcastJob, job_id)
+        if job:
+            job.status = "running"
+            job.started_at = datetime.utcnow()
             await session.commit()
-            await session.refresh(job)
-            job_id = job.id
-        else:
-            job = await session.get(BroadcastJob, job_id)
-            if job:
-                job.status = "running"
-                job.total_count = len(recipients)
-                await session.commit()
 
-    for recipient_id in recipients:
-        try:
-            await bot.send_message(recipient_id, text)
-            sent += 1
-        except TelegramRetryAfter as exc:
-            await asyncio.sleep(float(exc.retry_after) + 0.5)
+    try:
+        for recipient_id in recipients:
             try:
                 await bot.send_message(recipient_id, text)
                 sent += 1
+            except TelegramRetryAfter as exc:
+                await asyncio.sleep(float(exc.retry_after) + 0.5)
+                try:
+                    await bot.send_message(recipient_id, text)
+                    sent += 1
+                except Exception:
+                    failed += 1
             except Exception:
                 failed += 1
-        except Exception:
-            failed += 1
 
-        if job_id and (sent + failed) % 10 == 0:
             async with SessionLocal() as session:
                 job = await session.get(BroadcastJob, job_id)
                 if job:
                     job.sent_count = sent
                     job.failed_count = failed
+                    job.last_user_id = recipient_id
                     await session.commit()
-        await asyncio.sleep(0.05)
+            await asyncio.sleep(0.05)
 
-    async with SessionLocal() as session:
-        if job_id:
+        async with SessionLocal() as session:
             job = await session.get(BroadcastJob, job_id)
             if job:
                 job.status = "finished"
-                job.total_count = len(recipients)
                 job.sent_count = sent
                 job.failed_count = failed
-                job.finished_at = utcnow()
+                job.finished_at = datetime.utcnow()
                 await session.commit()
+    except Exception as exc:
+        async with SessionLocal() as session:
+            job = await session.get(BroadcastJob, job_id)
+            if job:
+                job.status = "failed"
+                job.error_text = str(exc)[:2000]
+                job.finished_at = datetime.utcnow()
+                await session.commit()
+        logger.exception("BROADCAST_JOB_FAILED job_id=%s", job_id)
 
     try:
         await bot.send_message(
             admin_id,
             "📢 Рассылка завершена\n\n"
+            f"Задача: #{job_id}\n"
             f"Получателей: {len(recipients)}\n"
             f"Отправлено: {sent}\n"
             f"Ошибок: {failed}",
         )
     except Exception:
         logger.exception("BROADCAST_RESULT_SEND_FAILED admin_id=%s", admin_id)
-
-
-async def resume_broadcast_jobs(bot: Bot) -> None:
-    """Resume queued/running broadcasts after Render restart."""
-    async with SessionLocal() as session:
-        jobs = list(
-            (
-                await session.scalars(
-                    select(BroadcastJob)
-                    .where(BroadcastJob.status.in_(("queued", "running")))
-                    .order_by(BroadcastJob.id)
-                )
-            ).all()
-        )
-        recipients = sorted(
-            {
-                int(user_id)
-                for user_id in (
-                    await session.scalars(
-                        select(BotUser.telegram_id).where(BotUser.is_active.is_(True))
-                    )
-                ).all()
-                if user_id
-            }
-        )
-    for job in jobs:
-        asyncio.create_task(
-            run_broadcast_v29(
-                bot,
-                int(job.admin_id),
-                recipients,
-                str(job.text),
-                job_id=int(job.id),
-            )
-        )
 
 
 async def process_buyer_catalog_search(
@@ -1686,13 +1650,16 @@ async def process_catalog_v25_input(
                         )
                         return True
 
-                internal_product_key = generate_internal_key()
+                internal_product_key = int(datetime.utcnow().timestamp() * 1000000)
                 async with SessionLocal() as session:
                     product = ShopProduct(
                         internal_key=internal_product_key,
                         name=data["name"],
                         category_id=data.get("category_id"),
                         product_type=data["product_type"],
+                        fulfillment_type=(
+                            "stock" if data["product_type"] == "quantity" else "digital"
+                        ),
                         price=Decimal(data["price"]),
                         currency=data["currency"],
                         content_type=content_type,
@@ -1853,7 +1820,7 @@ async def process_catalog_v25_input(
                     if ok:
                         stock.status = "delivered"
                         stock.delivered_to = target_id
-                        stock.delivered_at = utcnow()
+                        stock.delivered_at = datetime.utcnow()
                         product.sales_count += 1
                         remaining = await v25_stock_count(session, product.id)
                         if remaining <= 0:
@@ -2315,6 +2282,80 @@ async def process_admin_command(
             business_connection_id,
         )
         return True
+
+    if text.startswith("/restore_product "):
+        if not await is_admin_user(user_id):
+            await answer_message(bot, message, "Нет доступа.", business_connection_id)
+            return
+        parts = text.split(maxsplit=1)
+        if len(parts) != 2 or not parts[1].isdigit():
+            await answer_message(
+                bot, message, "Формат: /restore_product PRODUCT_ID",
+                business_connection_id,
+            )
+            return
+        product_id = int(parts[1])
+        async with SessionLocal() as session:
+            product = await session.get(ShopProduct, product_id)
+            if not product:
+                await answer_message(bot, message, "Товар не найден.", business_connection_id)
+                return
+            product.is_deleted = False
+            product.deleted_at = None
+            product.deleted_by = None
+            product.updated_at = datetime.utcnow()
+            await session.commit()
+        await write_audit(user_id, "product_restored", "product", product_id)
+        await answer_message(bot, message, "✅ Товар восстановлен как скрытый.", business_connection_id)
+        return
+
+    if text == "/archived_products":
+        if not await is_admin_user(user_id):
+            await answer_message(bot, message, "Нет доступа.", business_connection_id)
+            return
+        async with SessionLocal() as session:
+            rows = list((await session.scalars(
+                select(ShopProduct)
+                .where(ShopProduct.is_deleted.is_(True))
+                .order_by(ShopProduct.deleted_at.desc(), ShopProduct.id.desc())
+                .limit(100)
+            )).all())
+        result = "🗄 Архив товаров\n\n" + (
+            "\n".join(f"#{row.id} — {row.name}" for row in rows)
+            if rows else "Архив пуст."
+        )
+        result += "\n\nВосстановление: /restore_product ID"
+        await answer_message(bot, message, result, business_connection_id)
+        return
+
+    if text.startswith("/set_provider_key "):
+        if not await is_admin_user(user_id):
+            await answer_message(bot, message, "Нет доступа.", business_connection_id)
+            return
+        parts = text.split(maxsplit=2)
+        if len(parts) != 3 or not parts[1].isdigit():
+            await answer_message(
+                bot, message,
+                "Формат: /set_provider_key PRODUCT_ID JSON_ИЛИ_TELEGRAM_ID",
+                business_connection_id,
+            )
+            return
+        product_id = int(parts[1])
+        provider_key = parts[2].strip()
+        async with SessionLocal() as session:
+            product = await session.get(ShopProduct, product_id)
+            if not product:
+                await answer_message(bot, message, "Товар не найден.", business_connection_id)
+                return
+            product.provider_key = provider_key
+            product.updated_at = datetime.utcnow()
+            await session.commit()
+        await write_audit(
+            user_id, "product_provider_key_changed", "product", product_id,
+            {"provider_key": provider_key},
+        )
+        await answer_message(bot, message, "✅ provider_key сохранён.", business_connection_id)
+        return
 
     if text == "/services":
         async with SessionLocal() as session:
@@ -2789,7 +2830,7 @@ async def process_main_reply_button(
     admin_access = await is_admin_user(user_id)
     is_business_context = bool(business_connection_id)
 
-    if text in {"🛒 Товар", "🛒 Товары", "🛍 Каталог товаров"}:
+    if text in {"🛒 Товар", "🛒 Товары"}:
         async with SessionLocal() as session:
             categories = await list_categories(session)
             display_settings = await get_display_settings(session)
@@ -2808,7 +2849,7 @@ async def process_main_reply_button(
         )
         return True
 
-    if text in {"🌐 Прокси", "🌐 Купить прокси"}:
+    if text == "🌐 Прокси":
         await answer_message(
             bot,
             message,
@@ -2818,7 +2859,7 @@ async def process_main_reply_button(
         )
         return True
 
-    if text in {"📱 Номера", "📱 Купить номер"}:
+    if text == "📱 Номера":
         async with SessionLocal() as session:
             products = await list_number_products(session)
 
@@ -2836,46 +2877,7 @@ async def process_main_reply_button(
         )
         return True
 
-    if text == "📦 Активный заказ":
-        async with SessionLocal() as session:
-            order = await find_active_order_for_customer(
-                session, user_id, message.from_user.username
-            )
-        await answer_message(
-            bot,
-            message,
-            format_buyer_active_order_text(order),
-            business_connection_id,
-            reply_markup=(
-                buyer_active_order_keyboard(
-                    order.id if order else None,
-                    order.status if order else None,
-                )
-                if is_business_context
-                else buyer_main_reply_keyboard(is_admin=admin_access)
-            ),
-        )
-        return True
-
-    if text == "👤 Мой профиль":
-        async with SessionLocal() as session:
-            profile_text = await buyer_profile_text(
-                session, user_id, message.from_user.username
-            )
-        await answer_message(
-            bot,
-            message,
-            profile_text,
-            business_connection_id,
-            reply_markup=(
-                buyer_inline_menu_keyboard(is_admin=admin_access)
-                if is_business_context
-                else buyer_main_reply_keyboard(is_admin=admin_access)
-            ),
-        )
-        return True
-
-    if text in {"🧾 Мои заказы", "🧾 История заказов"}:
+    if text == "🧾 Мои заказы":
         orders_text = await standalone_buyer_orders_text(user_id)
         await answer_message(
             bot,
@@ -2890,7 +2892,7 @@ async def process_main_reply_button(
         )
         return True
 
-    if text in {"✉️ Обратная связь", "🆘 Поддержка"}:
+    if text == "✉️ Обратная связь":
         BUYER_FEEDBACK_WAIT.add(user_id)
         await answer_message(
             bot,
@@ -2907,7 +2909,7 @@ async def process_main_reply_button(
         )
         return True
 
-    if text in {"📕 FAQ", "❓ Как это работает"}:
+    if text == "📕 FAQ":
         await answer_message(
             bot,
             message,
@@ -2975,7 +2977,7 @@ async def process_main_reply_button(
         )
         return True
 
-    if text in {"⚙️ Админ меню", "⚙️ Панель администратора"}:
+    if text == "⚙️ Админ меню":
         if not admin_access:
             await answer_message(
                 bot,
@@ -3121,12 +3123,8 @@ async def process_command_message(
             await send_buyer_role_panel(
                 bot,
                 message.chat.id,
-                "🛍 MCS SHOP\n\n"
-                "Покупка занимает 3 шага:\n"
-                "1. Выберите товар\n"
-                "2. Оплатите счёт\n"
-                "3. Получите товар в этом чате\n\n"
-                "Выберите нужный раздел ниже 👇",
+                "🛍 Добро пожаловать в MCS Shop\n\n"
+                "Выберите нужный раздел кнопкой ниже.",
                 reply_markup=buyer_inline_menu_keyboard(),
                 business_connection_id=business_connection_id,
             )
@@ -3134,12 +3132,8 @@ async def process_command_message(
             await answer_message(
                 bot,
                 message,
-                "🛍 MCS SHOP\n\n"
-                "Покупка занимает 3 шага:\n"
-                "1. Выберите товар\n"
-                "2. Оплатите счёт\n"
-                "3. Получите товар в этом чате\n\n"
-                "Главные разделы всегда доступны на клавиатуре ниже 👇",
+                "🛍 Добро пожаловать в MCS Shop\n\n"
+                "Выберите нужный раздел на панели ниже.",
                 business_connection_id=None,
                 reply_markup=buyer_main_reply_keyboard(is_admin=admin_access),
             )
@@ -3300,7 +3294,7 @@ async def show_proxy_country_selection(
         order.business_connection_id = None
         order.status = "waiting_proxy_country"
         order.service_name = selection_dump()
-        order.updated_at = utcnow()
+        order.updated_at = datetime.utcnow()
         await session.commit()
     if not target_chat_id:
         return False
@@ -3376,7 +3370,7 @@ async def process_proxyline_order(
             or selected_period not in settings.periods
         ):
             order.status = "problem"
-            order.updated_at = utcnow()
+            order.updated_at = datetime.utcnow()
             await session.commit()
             await notify_admins(
                 bot,
@@ -3405,7 +3399,7 @@ async def process_proxyline_order(
 
         if not order.customer_telegram_id and not order.buyer_chat_id:
             order.status = "problem"
-            order.updated_at = utcnow()
+            order.updated_at = datetime.utcnow()
             await session.commit()
             await notify_admins(
                 bot,
@@ -3428,7 +3422,7 @@ async def process_proxyline_order(
             order = await get_order_by_id(session, order_id)
             if order:
                 order.status = "problem"
-                order.updated_at = utcnow()
+                order.updated_at = datetime.utcnow()
                 await session.commit()
         await notify_admins(
             bot,
@@ -3458,7 +3452,7 @@ async def process_proxyline_order(
             order = await get_order_by_id(session, order_id)
             if order:
                 order.status = "problem"
-                order.updated_at = utcnow()
+                order.updated_at = datetime.utcnow()
                 await session.commit()
         await notify_admins(
             bot,
@@ -3493,7 +3487,7 @@ async def process_proxyline_order(
             return False
         order.verification_code = proxy_text
         order.status = "code_sent_to_customer" if ok else "problem"
-        order.updated_at = utcnow()
+        order.updated_at = datetime.utcnow()
         await session.commit()
 
     if ok:
@@ -3558,7 +3552,7 @@ async def process_legacy_external_shop_message_disabled(
                 db_order = await get_order_by_id(session, order.id)
                 if db_order:
                     db_order.status = "problem"
-                    db_order.updated_at = utcnow()
+                    db_order.updated_at = datetime.utcnow()
                     await session.commit()
                 await notify_admins(
                     bot,
@@ -3599,7 +3593,7 @@ async def process_legacy_external_shop_message_disabled(
                     db_order.customer_telegram_id or db_order.buyer_chat_id
                 )
                 db_order.business_connection_id = None
-                db_order.updated_at = utcnow()
+                db_order.updated_at = datetime.utcnow()
                 await session.commit()
         await notify_admins(
             bot,
@@ -3783,7 +3777,7 @@ async def accept_service_for_order(
         if business_connection_id:
             order.business_connection_id = business_connection_id
 
-        order.updated_at = utcnow()
+        order.updated_at = datetime.utcnow()
         await increment_service_usage(session, service_name)
         await session.commit()
         await session.refresh(order)
@@ -4024,7 +4018,7 @@ async def handle_supplier_message(
 
             # Сохраняем номер, но статус меняем только после реальной доставки.
             order.phone_number = phone
-            order.updated_at = utcnow()
+            order.updated_at = datetime.utcnow()
             await session.commit()
             await session.refresh(order)
 
@@ -4057,7 +4051,7 @@ async def handle_supplier_message(
 
             if not ok:
                 order.status = "waiting_supplier_number"
-                order.updated_at = utcnow()
+                order.updated_at = datetime.utcnow()
                 await session.commit()
                 await answer_message(
                     bot,
@@ -4084,9 +4078,9 @@ async def handle_supplier_message(
                 return
 
             order.status = "number_sent_to_customer"
-            order.updated_at = utcnow()
+            order.updated_at = datetime.utcnow()
             number_request.status = "answered"
-            number_request.answered_at = utcnow()
+            number_request.answered_at = datetime.utcnow()
             await session.commit()
             await session.refresh(order)
             logger.info(
@@ -4148,7 +4142,7 @@ async def handle_supplier_message(
             # Раньше статус code_sent_to_customer выставлялся заранее, поэтому при ошибке
             # Telegram заявка исчезала у поставщика, хотя покупатель ничего не получил.
             order.verification_code = code
-            order.updated_at = utcnow()
+            order.updated_at = datetime.utcnow()
             await session.commit()
             await session.refresh(order)
 
@@ -4192,7 +4186,7 @@ async def handle_supplier_message(
                 # Оставляем статус waiting_supplier_code и активный запрос.
                 # Поставщик сможет повторить отправку, код при этом сохранён в заказе.
                 order.status = "waiting_supplier_code"
-                order.updated_at = utcnow()
+                order.updated_at = datetime.utcnow()
                 await session.commit()
                 await answer_message(
                     bot,
@@ -4220,7 +4214,7 @@ async def handle_supplier_message(
 
             # Только после фактической доставки меняем статус и закрываем запрос кода.
             order.status = "code_sent_to_customer"
-            order.updated_at = utcnow()
+            order.updated_at = datetime.utcnow()
             await mark_code_waiting_buyer_confirm(session, code_request.id)
             await session.commit()
             await session.refresh(order)
@@ -4865,7 +4859,17 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
                         "Сначала добавьте позиции товара.", show_alert=True
                     )
                     return True
-            product.payment_enabled = not product.payment_enabled
+            target_enabled = not product.payment_enabled
+            if target_enabled:
+                errors = await validate_product_for_sale(product)
+                if errors:
+                    await callback.answer(
+                        "Нельзя включить оплату:\n• " + "\n• ".join(errors),
+                        show_alert=True,
+                    )
+                    return True
+            product.payment_enabled = target_enabled
+            product.updated_at = datetime.utcnow()
             await session.commit()
             await session.refresh(product)
             count = await v25_stock_count(session, product.id)
@@ -4881,25 +4885,17 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         product_id = int(data.rsplit(":", 1)[1])
         async with SessionLocal() as session:
             product = await session.get(ShopProduct, product_id)
-            if not product.is_active and (
-                product.price is None or not product.currency
-            ):
-                await callback.answer(
-                    "Сначала настройте цену и валюту.", show_alert=True
-                )
-                return True
-            if product.product_type == "static" and not (
-                product.content_text or product.content_file_id
-            ):
-                await callback.answer("Сначала добавьте контент.", show_alert=True)
-                return True
-            if (
-                product.product_type == "quantity"
-                and await v25_stock_count(session, product.id) == 0
-            ):
-                await callback.answer("Сначала добавьте позиции.", show_alert=True)
-                return True
-            product.is_active = not product.is_active
+            target_visible = not product.is_active
+            if target_visible:
+                errors = await validate_product_for_sale(product)
+                if errors:
+                    await callback.answer(
+                        "Нельзя показать товар:\n• " + "\n• ".join(errors),
+                        show_alert=True,
+                    )
+                    return True
+            product.is_active = target_visible
+            product.updated_at = datetime.utcnow()
             await session.commit()
             await session.refresh(product)
             count = await v25_stock_count(session, product.id)
@@ -4909,6 +4905,50 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             reply_markup=v25_product_card_keyboard(product),
         )
         await callback.answer("Статус товара изменен")
+        return True
+
+    if data.startswith("v34:fulfillment_menu:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        await update_or_send(
+            callback,
+            "⚙️ Выберите способ выдачи товара.",
+            reply_markup=fulfillment_keyboard(product_id),
+        )
+        await callback.answer()
+        return True
+
+    if data.startswith("v34:fulfillment:"):
+        _, _, product_id_raw, fulfillment_type = data.split(":")
+        product_id = int(product_id_raw)
+        if fulfillment_type not in {"digital", "stock", "proxyline", "supplier", "number"}:
+            await callback.answer("Неизвестный способ выдачи.", show_alert=True)
+            return True
+        async with SessionLocal() as session:
+            product = await session.get(ShopProduct, product_id)
+            if not product:
+                await callback.answer("Товар не найден.", show_alert=True)
+                return True
+            product.fulfillment_type = fulfillment_type
+            product.product_type = "quantity" if fulfillment_type == "stock" else "static"
+            product.updated_at = datetime.utcnow()
+            await session.commit()
+            await session.refresh(product)
+        await write_audit(
+            callback.from_user.id,
+            "product_fulfillment_changed",
+            "product",
+            product_id,
+            {"fulfillment_type": fulfillment_type},
+        )
+        await update_or_send(
+            callback,
+            "✅ Способ выдачи сохранён.\n\n"
+            "Для Proxyline задайте provider_key JSON через команду:\n"
+            f"/set_provider_key {product_id} {{JSON}}\n\n"
+            "Для поставщика или номера provider_key должен содержать Telegram ID поставщика.",
+            reply_markup=advanced_keyboard(product_id),
+        )
+        await callback.answer("Сохранено")
         return True
 
     if data.startswith("v25:advanced:"):
@@ -5009,26 +5049,27 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         async with SessionLocal() as session:
             product = await session.get(ShopProduct, product_id)
             if product:
-                stock_rows = list(
-                    (
-                        await session.scalars(
-                            select(ProductStockItem).where(
-                                ProductStockItem.product_id == product_id
-                            )
-                        )
-                    ).all()
-                )
-                for row in stock_rows:
-                    await session.delete(row)
-                await session.delete(product)
+                product.is_deleted = True
+                product.is_active = False
+                product.payment_enabled = False
+                product.deleted_at = datetime.utcnow()
+                product.deleted_by = callback.from_user.id
+                product.updated_at = datetime.utcnow()
                 await session.commit()
+        await write_audit(
+            callback.from_user.id,
+            "product_archived",
+            "product",
+            product_id,
+        )
+        async with SessionLocal() as session:
             categories, products = await admin_catalog_overview(session)
         await update_or_send(
             callback,
-            admin_catalog_text(categories, products),
+            "✅ Товар перенесён в архив.",
             reply_markup=admin_catalog_keyboard(categories, products),
         )
-        await callback.answer("Товар удален")
+        await callback.answer("Товар архивирован")
         return True
 
     if data.startswith("v25:category:"):
@@ -5255,7 +5296,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             await callback.answer("Мастер устарел", show_alert=True)
             return True
         state.setdefault("data", {})["currency"] = currency
-        state["data"]["internal_key"] = generate_internal_key()
+        state["data"]["internal_key"] = int(datetime.utcnow().timestamp() * 1000000)
         state["step"] = "category"
         async with SessionLocal() as session:
             categories = await all_categories(session)
@@ -6143,11 +6184,34 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
                 }
             )
 
+        async with SessionLocal() as session:
+            job = BroadcastJob(
+                admin_id=callback.from_user.id,
+                text=broadcast_text,
+                status="queued",
+                total_count=len(recipients),
+            )
+            session.add(job)
+            await session.commit()
+            await session.refresh(job)
+
         ADMIN_BROADCAST_V28.pop(callback.from_user.id, None)
-        job_id = await create_broadcast_job(
-            callback.from_user.id, recipients, broadcast_text
+        await write_audit(
+            callback.from_user.id,
+            "broadcast_started",
+            "broadcast",
+            job.id,
+            {"recipients": len(recipients)},
         )
-        asyncio.create_task(run_broadcast_job(bot, job_id))
+        asyncio.create_task(
+            run_broadcast_v29(
+                bot,
+                callback.from_user.id,
+                recipients,
+                broadcast_text,
+                job.id,
+            )
+        )
         await update_or_send(
             callback,
             "📢 Рассылка запущена в фоне.\n\n"
@@ -6829,7 +6893,7 @@ async def handle_proxy_callback(bot: Bot, callback: CallbackQuery) -> bool:
                 return True
             order.service_name = selection_dump(country=country)
             order.status = "waiting_proxy_period"
-            order.updated_at = utcnow()
+            order.updated_at = datetime.utcnow()
             await session.commit()
             await update_or_send(
                 callback,
@@ -6866,7 +6930,7 @@ async def handle_proxy_callback(bot: Bot, callback: CallbackQuery) -> bool:
                 return True
             order.service_name = selection_dump(country=country, period=period)
             order.status = "waiting_proxy_confirm"
-            order.updated_at = utcnow()
+            order.updated_at = datetime.utcnow()
             await session.commit()
             proxy_type = "выделенный" if settings.proxy_type == "dedicated" else "общий"
             text = (
@@ -6887,7 +6951,7 @@ async def handle_proxy_callback(bot: Bot, callback: CallbackQuery) -> bool:
         if action == "back_country":
             order.status = "waiting_proxy_country"
             order.service_name = selection_dump()
-            order.updated_at = utcnow()
+            order.updated_at = datetime.utcnow()
             await session.commit()
             await update_or_send(
                 callback,
@@ -6905,7 +6969,7 @@ async def handle_proxy_callback(bot: Bot, callback: CallbackQuery) -> bool:
                 country = settings.countries[0]
                 order.service_name = selection_dump(country=country)
             order.status = "waiting_proxy_period"
-            order.updated_at = utcnow()
+            order.updated_at = datetime.utcnow()
             await session.commit()
             await update_or_send(
                 callback,
@@ -6930,7 +6994,7 @@ async def handle_proxy_callback(bot: Bot, callback: CallbackQuery) -> bool:
                 )
                 return True
             order.status = "proxy_processing"
-            order.updated_at = utcnow()
+            order.updated_at = datetime.utcnow()
             await session.commit()
             business_id = order.business_connection_id or get_callback_business_id(
                 callback
@@ -7461,7 +7525,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
                 return
 
             order.status = "waiting_supplier_code"
-            order.updated_at = utcnow()
+            order.updated_at = datetime.utcnow()
             await session.commit()
             await session.refresh(order)
 
@@ -7536,7 +7600,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
                 return
 
             order.status = "confirmed"
-            order.updated_at = utcnow()
+            order.updated_at = datetime.utcnow()
             await close_waiting_supplier_requests_for_order(session, order.id)
             await session.commit()
             await session.refresh(order)
@@ -7596,7 +7660,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
                 return
 
             order.status = "problem"
-            order.updated_at = utcnow()
+            order.updated_at = datetime.utcnow()
             await session.commit()
 
         await sync_purchase_from_order(order.id, False, "Покупатель сообщил о проблеме")
@@ -7621,20 +7685,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         await callback.answer()
         return
 
-    logger.warning("UNHANDLED_CALLBACK user_id=%s data=%s", callback.from_user.id if callback.from_user else None, data)
-    if callback.from_user and await is_admin_user(callback.from_user.id):
-        await update_or_send(
-            callback,
-            "⚠️ Эта кнопка устарела после обновления. Открыто актуальное админ-меню.",
-            reply_markup=admin_panel_keyboard(),
-        )
-    else:
-        await update_or_send(
-            callback,
-            "⚠️ Эта кнопка устарела после обновления. Открыто актуальное меню.",
-            reply_markup=buyer_inline_menu_keyboard(is_admin=False),
-        )
-    await callback.answer()
+    await callback.answer("Неизвестная кнопка", show_alert=True)
 
 
 async def on_message(message: Message, bot: Bot) -> None:
@@ -7673,15 +7724,7 @@ logger.info("FIX_MARKER_FULL_VISUAL_SHOP_STYLE=v15 loaded")
 
 def admin_panel_text() -> str:
     return (
-        "⚙️ ПАНЕЛЬ АДМИНИСТРАТОРА\n\n"
-        "Здесь собраны все служебные разделы магазина.\n\n"
-        "📦 Каталог — категории, товары, цены и остатки\n"
-        "🧾 Заказы — проблемные и незавершённые заявки\n"
-        "💳 Платежи — счета и история оплат\n"
-        "🚚 Поставщики — выдача номеров и кодов\n"
-        "📢 Рассылка — сообщения пользователям\n"
-        "⚙️ Настройки — тексты и параметры магазина\n\n"
-        "Выберите раздел ниже 👇"
+        "⚙️ Админ меню\n\n" "Управляйте товарами, оплатами, настройками и рассылками."
     )
 
 
@@ -7721,16 +7764,16 @@ def supplier_commands_text() -> str:
 
 def supplier_main_panel_text() -> str:
     return (
-        "🚚 КАБИНЕТ ПОСТАВЩИКА\n\n"
-        "Работа с заявкой проходит по шагам:\n"
-        "1. Откройте «Новые заявки»\n"
-        "2. Выберите заявку и возьмите её\n"
-        "3. Нажмите «Отправить номер» или «Отправить код»\n"
-        "4. Пришлите данные обычным сообщением\n\n"
-        "📞 Ждут номер — покупателю нужен номер\n"
-        "🔑 Ждут код — покупателю нужен код\n"
-        "⏳ Ждём подтверждение — товар уже отправлен\n\n"
-        "Выберите нужный раздел ниже 👇"
+        "🚚 › Кабинет поставщика\n\n"
+        "Здесь вы можете брать заявки в работу, выдавать номера и коды, а также смотреть свой профиль.\n\n"
+        "Выберите раздел\n\n"
+        "📋 Заявки\n"
+        "├ ⏳ Ожидают — новые заявки\n"
+        "├ 📞 Ждут номер — нужно выдать номер\n"
+        "├ 🔑 Ждут код — нужно выдать код\n"
+        "└ 📊 Все активные — всё, что ещё не закрыто\n\n"
+        "👤 Профиль — ваша статистика\n"
+        "📖 Команды — справка по работе"
     )
 
 
@@ -7749,15 +7792,14 @@ def supplier_requests_panel_text() -> str:
 
 def buyer_main_panel_text() -> str:
     return (
-        "🛍 MCS SHOP\n\n"
-        "Всё просто:\n"
-        "1. Откройте каталог и выберите товар\n"
-        "2. Оплатите созданный счёт\n"
-        "3. Получите номер, код, прокси или другой товар здесь\n\n"
-        "📦 «Активный заказ» показывает текущий этап\n"
-        "🧾 «История заказов» хранит прошлые покупки\n"
-        "🆘 «Поддержка» отправит вопрос администратору\n\n"
-        "Выберите действие ниже 👇"
+        "🛒 › Кабинет покупателя\n\n"
+        "Здесь вы можете посмотреть свои заказы, открыть активный заказ, проверить профиль или получить помощь.\n\n"
+        "Выберите раздел\n\n"
+        "📦 Заказы\n"
+        "├ Активный заказ — текущий заказ и действия\n"
+        "└ Мои заказы — история последних покупок\n\n"
+        "👤 Профиль — информация о вашем аккаунте\n"
+        "🆘 Помощь — что делать на каждом этапе"
     )
 
 

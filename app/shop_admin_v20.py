@@ -23,7 +23,7 @@ async def all_categories(session):
 
 
 async def all_products(session, category_id: int | None = None):
-    stmt = select(ShopProduct)
+    stmt = select(ShopProduct).where(ShopProduct.is_deleted.is_(False))
     if category_id is not None:
         stmt = stmt.where(ShopProduct.category_id == category_id)
     return list(
@@ -35,16 +35,17 @@ async def all_products(session, category_id: int | None = None):
 
 async def category_counts(session, category_id: int) -> tuple[int, int]:
     products = await session.scalar(
-        select(func.count(ShopProduct.id)).where(ShopProduct.category_id == category_id)
+        select(func.count(ShopProduct.id)).where(
+            ShopProduct.category_id == category_id,
+            ShopProduct.is_deleted.is_(False),
+        )
     )
     return int(products or 0), 0
 
 
 def customer_home_text() -> str:
     return (
-        "🛍 КАТАЛОГ ТОВАРОВ\n\n"
-        "Выберите подходящую категорию. После выбора откроются товары, описание, цена и кнопка оплаты.\n\n"
-        "Не нашли нужное — воспользуйтесь поиском или напишите в поддержку 👇"
+        "Выберите товар:"
     )
 
 
@@ -75,10 +76,7 @@ def customer_home_keyboard(
     kb.adjust(columns)
 
     if search_enabled:
-        kb.button(text="🔍 Найти товар", callback_data="buyer:search")
-    kb.button(text="🧾 Мои заказы", callback_data="buyer:orders")
-    kb.button(text="🏠 Главное меню", callback_data="buyer:panel")
-    kb.adjust(columns, 1, 2)
+        kb.button(text="🔍 Поиск товара", callback_data="buyer:search")
 
     return kb.as_markup()
 

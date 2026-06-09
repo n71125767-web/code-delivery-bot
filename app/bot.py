@@ -6,8 +6,6 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 
-from app.runtime_state import restore_runtime_state, runtime_state_loop, save_runtime_state
-from app.broadcast_service import resume_broadcast_jobs
 from app.config import (
     BOT_TOKEN,
     CRYPTO_PAY_ENABLED,
@@ -42,6 +40,8 @@ async def health(_request):
     try:
         async with SessionLocal() as session:
             await session.execute(text("SELECT 1"))
+            await session.execute(text("SELECT id FROM shop_products LIMIT 1"))
+            await session.execute(text("SELECT id FROM digital_purchases LIMIT 1"))
         db_ok = True
     except Exception:
         logger.exception("HEALTH_DB_FAILED")
@@ -123,13 +123,10 @@ async def payment_recovery_loop(bot: Bot) -> None:
 async def main():
     logger.info("Starting MCS Clean V33")
     await init_db()
-    await restore_runtime_state()
-    logger.info("Database initialization and runtime-state restore completed")
+    logger.info("Database initialization completed")
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=None))
     await start_health_server(bot)
     recovery_task = asyncio.create_task(payment_recovery_loop(bot))
-    state_task = asyncio.create_task(runtime_state_loop())
-    resumed_broadcast_tasks = await resume_broadcast_jobs(bot)
 
     try:
         me = await bot.me()
@@ -137,7 +134,6 @@ async def main():
         logger.info("FIX_MARKER_CRYPTOPAY_STABLE=v26 loaded")
         logger.info("FIX_MARKER_MCS_HARDENED=v31 loaded")
         logger.info("FIX_MARKER_MCS_CLEAN=v33 loaded")
-        logger.info("FIX_MARKER_MCS_HARDENED=v34 loaded")
         dp = build_dispatcher()
         await dp.start_polling(
             bot,
@@ -152,11 +148,7 @@ async def main():
         )
     finally:
         recovery_task.cancel()
-        state_task.cancel()
-        for task in resumed_broadcast_tasks:
-            task.cancel()
-        await asyncio.gather(recovery_task, state_task, *resumed_broadcast_tasks, return_exceptions=True)
-        await save_runtime_state()
+        await asyncio.gather(recovery_task, return_exceptions=True)
         await close_crypto_client()
         await bot.session.close()
 

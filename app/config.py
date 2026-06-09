@@ -169,3 +169,7 @@ if (
     raise RuntimeError(
         "Render production requires DATABASE_URL for PostgreSQL; SQLite is ephemeral"
     )
+
+STOCK_RESERVATION_TTL_SECONDS = int(
+    os.getenv("STOCK_RESERVATION_TTL_SECONDS", "3900")
+)

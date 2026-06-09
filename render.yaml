@@ -16,7 +16,15 @@ services:
         sync: false
       - key: CRYPTO_PAY_NETWORK
         value: testnet
+      - key: CRYPTO_PAY_INVOICE_EXPIRES_SECONDS
+        value: "3600"
+      - key: CRYPTO_PAY_RECOVERY_INTERVAL_SECONDS
+        value: "300"
+      - key: STOCK_RESERVATION_TTL_SECONDS
+        value: "3900"
       - key: PROXYLINE_ENABLED
         value: "0"
       - key: PROXYLINE_API_KEY
         sync: false
+      - key: ALLOW_SQLITE_ON_RENDER
+        value: "0"

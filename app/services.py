@@ -2,7 +2,6 @@ from datetime import datetime, timedelta
 from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.time_utils import utcnow
 from app.config import POPULAR_SERVICE_THRESHOLD, PROBLEM_COOLDOWN_SECONDS
 from app.models import (
     Order,
@@ -61,7 +60,7 @@ async def create_or_update_order_from_purchase(
         existing.amount = data.get("amount")
         existing.currency = data.get("currency")
         existing.raw_message = data.get("raw_message")
-        existing.updated_at = utcnow()
+        existing.updated_at = datetime.utcnow()
 
         # Legacy idempotency: repeated purchase notification updates data,
         # но никогда не возвращает уже обработанный заказ в начало сценария.
@@ -81,8 +80,8 @@ async def create_or_update_order_from_purchase(
         currency=data.get("currency"),
         status="waiting_service",
         raw_message=data.get("raw_message"),
-        paid_at=utcnow(),
-        updated_at=utcnow(),
+        paid_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
     )
 
     session.add(order)
@@ -267,7 +266,7 @@ async def set_customer_by_order_id(
 
     order.customer_telegram_id = telegram_id
     order.buyer_chat_id = telegram_id
-    order.updated_at = utcnow()
+    order.updated_at = datetime.utcnow()
     await session.commit()
 
     return f"OK. К заказу #{order.operation_id} привязан покупатель {telegram_id}."
@@ -614,9 +613,9 @@ async def set_text(session: AsyncSession, key: str, value: str) -> str:
 
     if template:
         template.value = value
-        template.updated_at = utcnow()
+        template.updated_at = datetime.utcnow()
     else:
-        session.add(TextTemplate(key=key, value=value, updated_at=utcnow()))
+        session.add(TextTemplate(key=key, value=value, updated_at=datetime.utcnow()))
 
     await session.commit()
     return f"OK. Текст обновлён: {key}"
@@ -650,7 +649,7 @@ async def check_cooldown(
     action: str,
     seconds: int = PROBLEM_COOLDOWN_SECONDS,
 ) -> tuple[bool, int]:
-    now = utcnow()
+    now = datetime.utcnow()
 
     result = await session.execute(
         select(Cooldown).where(
@@ -812,7 +811,7 @@ async def mark_code_waiting_buyer_confirm(
     request = await get_supplier_request_by_id(session, request_id)
     if request:
         request.status = "waiting_buyer_confirm"
-        request.answered_at = utcnow()
+        request.answered_at = datetime.utcnow()
 
 
 async def close_waiting_supplier_requests_for_order(
@@ -834,7 +833,7 @@ async def close_waiting_supplier_requests_for_order(
     for request in requests:
         request.status = "answered"
         if not request.answered_at:
-            request.answered_at = utcnow()
+            request.answered_at = datetime.utcnow()
     return len(requests)
 
 
@@ -960,7 +959,7 @@ async def set_order_status(session: AsyncSession, order_id: int, status: str) ->
         return "Заказ не найден."
 
     order.status = status
-    order.updated_at = utcnow()
+    order.updated_at = datetime.utcnow()
     await session.commit()
     return f"OK. Статус заказа #{order.operation_id} изменён на {order_status_label(status)}."
 
@@ -990,7 +989,7 @@ async def admin_create_supplier_request_for_order(
     elif request_type == "code":
         order.status = "waiting_supplier_code"
 
-    order.updated_at = utcnow()
+    order.updated_at = datetime.utcnow()
     await session.commit()
     await session.refresh(order)
 
@@ -1031,7 +1030,7 @@ async def mark_supplier_request_in_progress(
         return False, "Эта заявка неактивна.", request, order
 
     request.status = "in_progress"
-    order.updated_at = utcnow()
+    order.updated_at = datetime.utcnow()
     await session.commit()
     await session.refresh(request)
     await session.refresh(order)
@@ -1344,7 +1343,7 @@ async def _buyer_money_stats(session: AsyncSession, user_id: int, username: str 
         or 0
     )
 
-    now = utcnow()
+    now = datetime.utcnow()
     sum_7 = (
         await session.scalar(
             select(func.coalesce(func.sum(Order.amount), 0)).where(

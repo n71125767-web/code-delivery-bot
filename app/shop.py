@@ -82,7 +82,7 @@ async def list_categories(session):
 async def list_products(session, category_id: int | None = None):
     stmt = select(ShopProduct).where(ShopProduct.is_active.is_(True))
     if category_id is not None:
-        stmt = stmt.where(ShopProduct.category_id == category_id)
+        stmt = stmt.where(ShopProduct.category_id == category_id, ShopProduct.is_deleted.is_(False))
     return list(
         (
             await session.scalars(stmt.order_by(ShopProduct.sort_order, ShopProduct.id))

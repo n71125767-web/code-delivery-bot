@@ -64,7 +64,7 @@ async def admin_catalog_overview(session):
     products = list(
         (
             await session.scalars(
-                select(ShopProduct).order_by(ShopProduct.sort_order, ShopProduct.id)
+                select(ShopProduct).where(ShopProduct.is_deleted.is_(False)).order_by(ShopProduct.sort_order, ShopProduct.id)
             )
         ).all()
     )
@@ -163,6 +163,7 @@ def product_card_text(product: ShopProduct, stock_count: int = 0) -> str:
         f"👁 Товар: {visibility}",
         "",
         f"💰 Цена: {product.price or 0} {product.currency}",
+        f"⚙️ Выдача: {product.fulfillment_type}",
     ]
 
     if product.old_price is not None:
@@ -231,8 +232,23 @@ def product_card_keyboard(product: ShopProduct) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def fulfillment_keyboard(product_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📄 Статический контент", callback_data=f"v34:fulfillment:{product_id}:digital")
+    kb.button(text="📦 Склад позиций", callback_data=f"v34:fulfillment:{product_id}:stock")
+    kb.button(text="🌐 Proxyline", callback_data=f"v34:fulfillment:{product_id}:proxyline")
+    kb.button(text="🚚 Поставщик", callback_data=f"v34:fulfillment:{product_id}:supplier")
+    kb.button(text="📱 Номер", callback_data=f"v34:fulfillment:{product_id}:number")
+    kb.button(text="⬅️ Назад", callback_data=f"v25:advanced:{product_id}", style="danger")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
 def advanced_keyboard(product_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    kb.button(
+        text="⚙️ Способ выдачи", callback_data=f"v34:fulfillment_menu:{product_id}"
+    )
     kb.button(
         text="💳 Платежные системы", callback_data=f"v25:payment_systems:{product_id}"
     )
