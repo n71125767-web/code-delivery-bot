@@ -7814,6 +7814,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             product.provider_key,
             country_code,
             months,
+            category_key,
         )
         try:
             purchase, payment = await create_purchase_invoice(

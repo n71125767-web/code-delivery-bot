@@ -173,6 +173,85 @@ def _safe_error(exc: Exception, limit: int = 500) -> str:
     return text[:limit]
 
 
+def _is_manual_fulfillment_issue_text(error_text: str | None) -> bool:
+    """Errors that require an admin action and must not be auto-retried."""
+    text = (error_text or "").lower()
+    markers = (
+        "not enough money",
+        "balance",
+        "not enough proxies",
+        "api is not configured",
+        "not configured",
+        "parameters are missing",
+        "product parameters are missing",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _buyer_fulfillment_delay_text(purchase_id: int) -> str:
+    return (
+        "✅ Оплата получена.\n\n"
+        "⏳ Автовыдача временно задержана: поставщик не смог выдать товар автоматически.\n"
+        f"Заказ #{purchase_id} передан администратору. После исправления поставщика товар выдадут повторно."
+    )
+
+
+async def _safe_notify_buyer_fulfillment_problem(bot: Bot, purchase: DigitalPurchase) -> None:
+    try:
+        await bot.send_message(purchase.buyer_id, _buyer_fulfillment_delay_text(purchase.id))
+    except Exception:
+        logger.exception("BUYER_FULFILLMENT_PROBLEM_NOTIFY_FAILED purchase_id=%s", purchase.id)
+
+
+async def _safe_notify_admins_fulfillment_problem(
+    bot: Bot, purchase: DigitalPurchase, product: ShopProduct | None, error_text: str
+) -> None:
+    try:
+        from app.fulfillment_service import notify_admins_simple
+
+        product_title = product.name if product else f"product_id={purchase.product_id}"
+        await notify_admins_simple(
+            bot,
+            "🚨 <b>Автовыдача остановлена</b>\n\n"
+            f"Заказ: #{purchase.id}\n"
+            f"Покупатель: <code>{purchase.buyer_id}</code> @{purchase.buyer_username or '-'}\n"
+            f"Товар: {product_title}\n"
+            f"Сумма: {purchase.amount} {purchase.currency}\n\n"
+            f"Ошибка поставщика: <code>{error_text[:900]}</code>\n\n"
+            "Если это Proxyline `Not enough money on balance`, пополните баланс Proxyline и выполните:\n"
+            f"<code>/retry_purchase {purchase.id}</code>",
+        )
+    except Exception:
+        logger.exception("ADMIN_FULFILLMENT_PROBLEM_NOTIFY_FAILED purchase_id=%s", purchase.id)
+
+
+async def _mark_external_fulfillment_failure(
+    bot: Bot, purchase_id: int, product: ShopProduct | None, exc: Exception
+) -> str:
+    """Persist external-provider errors and notify humans once."""
+    error_text = _safe_error(exc)
+    manual_issue = _is_manual_fulfillment_issue_text(error_text)
+    new_status = "fulfillment_problem" if manual_issue else "delivery_failed"
+    should_notify = False
+    purchase_snapshot: DigitalPurchase | None = None
+    async with SessionLocal() as session:
+        row = await session.get(DigitalPurchase, purchase_id)
+        if row is None:
+            return new_status
+        should_notify = row.status != new_status or row.delivery_error != error_text
+        row.status = new_status
+        row.delivery_error = error_text
+        row.active_key = None
+        row.updated_at = datetime.utcnow()
+        await session.commit()
+        purchase_snapshot = row
+    if should_notify and purchase_snapshot is not None:
+        if manual_issue:
+            await _safe_notify_buyer_fulfillment_problem(bot, purchase_snapshot)
+        await _safe_notify_admins_fulfillment_problem(bot, purchase_snapshot, product, error_text)
+    return new_status
+
+
 async def create_purchase_invoice(
     buyer_id: int,
     buyer_username: str | None,
@@ -562,13 +641,7 @@ async def deliver_purchase(bot: Bot, purchase_id: int) -> bool:
                 try:
                     return await fulfill_proxyline(bot, purchase, product)
                 except Exception as exc:
-                    async with SessionLocal() as session:
-                        row = await session.get(DigitalPurchase, purchase_id)
-                        row.status = "delivery_failed"
-                        row.delivery_error = _safe_error(exc)
-                        row.active_key = None
-                        row.updated_at = datetime.utcnow()
-                        await session.commit()
+                    await _mark_external_fulfillment_failure(bot, purchase_id, product, exc)
                     logger.exception(
                         "PROXYLINE_FULFILLMENT_FAILED purchase_id=%s", purchase_id
                     )
@@ -579,13 +652,7 @@ async def deliver_purchase(bot: Bot, purchase_id: int) -> bool:
                 try:
                     return await fulfill_supplier(bot, purchase, product)
                 except Exception as exc:
-                    async with SessionLocal() as session:
-                        row = await session.get(DigitalPurchase, purchase_id)
-                        row.status = "delivery_failed"
-                        row.delivery_error = _safe_error(exc)
-                        row.active_key = None
-                        row.updated_at = datetime.utcnow()
-                        await session.commit()
+                    await _mark_external_fulfillment_failure(bot, purchase_id, product, exc)
                     logger.exception(
                         "SUPPLIER_FULFILLMENT_FAILED purchase_id=%s", purchase_id
                     )
@@ -766,7 +833,12 @@ async def process_paid_invoice(bot: Bot, invoice_data: dict[str, Any]) -> bool:
         purchase = await session.get(DigitalPurchase, payment.purchase_id)
         if purchase.status == "delivered":
             return True
-        if purchase.status in {"delivering", "delivery_review_required"}:
+        if purchase.status in {"delivering", "delivery_review_required", "fulfillment_problem"}:
+            return False
+        if purchase.status == "delivery_failed" and _is_manual_fulfillment_issue_text(purchase.delivery_error):
+            purchase.status = "fulfillment_problem"
+            purchase.updated_at = datetime.utcnow()
+            await session.commit()
             return False
 
         payment.status = "paid"
@@ -877,6 +949,13 @@ async def check_purchase_payment(
             return "Оплата подтверждена, товар выдан."
         if current and current.status == "awaiting_supplier":
             return "Оплата подтверждена. Откройте /start и выберите сервис."
+        if current and current.status in {"fulfillment_problem", "delivery_failed"} and _is_manual_fulfillment_issue_text(current.delivery_error):
+            return (
+                "Оплата подтверждена. Автовыдача временно задержана: поставщик не смог выдать товар. "
+                "Администратор уже получил уведомление и сможет повторить выдачу после исправления поставщика."
+            )
+        if current and current.status == "delivery_review_required":
+            return "Оплата подтверждена. Выдача требует ручной проверки администратора."
         return "Оплата подтверждена, выдача обрабатывается."
 
     if status in {"expired", "cancelled"}:
@@ -951,7 +1030,14 @@ async def recover_pending_payments(bot: Bot) -> int:
                 async with SessionLocal() as session:
                     purchase = await session.get(DigitalPurchase, payment.purchase_id)
                     retryable = bool(
-                        purchase and purchase.status in {"paid", "delivery_failed"}
+                        purchase
+                        and (
+                            purchase.status == "paid"
+                            or (
+                                purchase.status == "delivery_failed"
+                                and not _is_manual_fulfillment_issue_text(purchase.delivery_error)
+                            )
+                        )
                     )
                 if retryable and await deliver_purchase(bot, payment.purchase_id):
                     recovered += 1

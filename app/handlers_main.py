@@ -2588,6 +2588,51 @@ async def process_admin_command(
         )
         return True
 
+    if text.startswith("/retry_purchase"):
+        if len(parts) != 2:
+            await answer_message(
+                bot,
+                message,
+                "Формат:\n/retry_purchase ID_ПОКУПКИ\n\nИспользуйте после пополнения баланса Proxyline/исправления поставщика.",
+                business_connection_id,
+            )
+            return True
+        try:
+            purchase_id = int(parts[1])
+        except ValueError:
+            await answer_message(bot, message, "ID покупки должен быть числом.", business_connection_id)
+            return True
+        async with SessionLocal() as session:
+            from app.models import DigitalPurchase
+
+            purchase = await session.get(DigitalPurchase, purchase_id)
+            if purchase is None:
+                await answer_message(bot, message, "Покупка не найдена.", business_connection_id)
+                return True
+            if purchase.status == "delivered":
+                await answer_message(bot, message, "Эта покупка уже выдана.", business_connection_id)
+                return True
+            purchase.status = "paid"
+            purchase.delivery_error = None
+            purchase.delivery_started_at = None
+            purchase.active_key = None
+            purchase.updated_at = datetime.utcnow()
+            await session.commit()
+        from app.cryptopay_service import deliver_purchase
+
+        ok = await deliver_purchase(bot, purchase_id)
+        await answer_message(
+            bot,
+            message,
+            (
+                f"✅ Повторная выдача покупки #{purchase_id} выполнена."
+                if ok
+                else f"⚠️ Повторная выдача покупки #{purchase_id} не выполнена. Смотрите лог/уведомление админа."
+            ),
+            business_connection_id,
+        )
+        return True
+
     if text == "/product_providers":
         async with SessionLocal() as session:
             rows = await list_product_providers(session)
@@ -7814,6 +7859,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             product.provider_key,
             country_code,
             months,
+            category_key,
         )
         try:
             purchase, payment = await create_purchase_invoice(

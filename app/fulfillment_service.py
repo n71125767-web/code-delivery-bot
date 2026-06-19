@@ -23,7 +23,7 @@ from app.models import (
     Supplier,
     SupplierProduct,
 )
-from app.proxyline import ProxylineError, ProxylineService, format_proxyline_result
+from app.proxyline import ProxylineError, ProxylineService, format_mtproxy_result, format_proxyline_result
 from app.proxyline_products import ProxylineProduct, resolve_proxyline_product
 
 logger = logging.getLogger(__name__)
@@ -121,10 +121,34 @@ async def fulfill_proxyline(
             f"Not enough proxies: available={available}, required={cfg.count}"
         )
     payload = await service.buy_proxy(cfg)
-    proxy_text = format_proxyline_result(payload)
+    proxy_kind = ""
+    try:
+        raw_key = json.loads(purchase.provider_key or "{}")
+        if isinstance(raw_key, dict):
+            proxy_kind = str(
+                raw_key.get("category")
+                or raw_key.get("kind")
+                or raw_key.get("proxy_kind")
+                or raw_key.get("tariff")
+                or ""
+            ).lower()
+    except Exception:
+        proxy_kind = ""
+    if not proxy_kind and product.note:
+        proxy_kind = str(product.note).replace("proxy_autofix:", "").lower()
+
+    if proxy_kind == "mtproxy":
+        proxy_text = format_mtproxy_result(payload)
+        message_title = "✅ Ваш MTProxy готов"
+        message_footer = "Нажмите на ссылку подключения или вручную введите IP, порт и секретный ключ в Telegram."
+    else:
+        proxy_text = format_proxyline_result(payload)
+        message_title = "✅ Ваш прокси готов"
+        message_footer = "Сохраните данные подключения."
+
     message = await bot.send_message(
         purchase.buyer_id,
-        "✅ Ваш прокси готов\n\n" + proxy_text + "\n\nСохраните данные подключения.",
+        message_title + "\n\n" + proxy_text + "\n\n" + message_footer,
     )
     async with SessionLocal() as session:
         row = await session.get(DigitalPurchase, purchase.id)

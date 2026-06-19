@@ -110,6 +110,9 @@ PROXYLINE_DEFAULT_IP_VERSION = int(os.getenv("PROXYLINE_DEFAULT_IP_VERSION", "4"
 PROXYLINE_DEFAULT_TYPE = (
     os.getenv("PROXYLINE_DEFAULT_TYPE", "dedicated").strip().lower()
 )
+# Тип/код продукта у провайдера для Telegram MTProxy.
+# Если ваш Proxyline/адаптер использует другое значение — поменяйте env на Render.
+PROXYLINE_MTPROXY_TYPE = os.getenv("PROXYLINE_MTPROXY_TYPE", "mtproxy").strip().lower()
 PROXYLINE_COUPON = os.getenv("PROXYLINE_COUPON", "").strip()
 # JSON maps own product names to Proxyline parameters.
 # Пример: {"Прокси RU 30 дней":{"country":"ru","period":30,"count":1,"ip_version":4,"type":"dedicated"}}
@@ -235,6 +238,7 @@ class Settings:
     PROXYLINE_DEFAULT_COUNT = PROXYLINE_DEFAULT_COUNT
     PROXYLINE_DEFAULT_IP_VERSION = PROXYLINE_DEFAULT_IP_VERSION
     PROXYLINE_DEFAULT_TYPE = PROXYLINE_DEFAULT_TYPE
+    PROXYLINE_MTPROXY_TYPE = PROXYLINE_MTPROXY_TYPE
     PROXYLINE_COUPON = PROXYLINE_COUPON
     PROXYLINE_PRODUCTS_JSON = PROXYLINE_PRODUCTS_JSON
     PROXYLINE_COUNTRIES_JSON = PROXYLINE_COUNTRIES_JSON

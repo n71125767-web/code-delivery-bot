@@ -11,7 +11,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import ADMIN_ALERT_CHAT_IDS, GA_IDS
+from app.config import ADMIN_ALERT_CHAT_IDS, GA_IDS, PROXYLINE_MTPROXY_TYPE
 from app.database import SessionLocal
 from app.models import (
     AdminUser,
@@ -348,7 +348,7 @@ async def _create_stock_items(session: AsyncSession, product_id: int, text: str,
 
 
 PROXY_AUTOFIX_PRODUCTS = [
-    ("mtproxy", "🧩 MTProxy", "Прокси для Telegram/MTProxy", "proxyline", "dedicated"),
+    ("mtproxy", "🧩 MTProxy", "Прокси для Telegram/MTProxy", "proxyline", PROXYLINE_MTPROXY_TYPE),
     ("premium", "💎 Премиум прокси", "Премиум-прокси с автовыдачей через Proxyline", "proxyline", "dedicated"),
     ("standard", "📦 Стандартные прокси", "Стандартные прокси с автовыдачей через Proxys", "proxys", "shared"),
     ("residential", "🏠 Резидентские прокси", "Резидентские прокси с автовыдачей через Proxys", "proxys", "residential"),
@@ -376,7 +376,7 @@ async def ensure_proxy_autofix_products(session: AsyncSession, price: Decimal, c
         note = f"proxy_autofix:{key}"
         product = await session.scalar(select(ShopProduct).where(ShopProduct.note == note))
         provider_payload = json.dumps(
-            {"provider": provider_type, "type": proxy_type, "count": 1, "ip_version": 4},
+            {"provider": provider_type, "category": key, "proxy_kind": key, "type": proxy_type, "count": 1, "ip_version": 4},
             ensure_ascii=False,
             separators=(",", ":"),
         )

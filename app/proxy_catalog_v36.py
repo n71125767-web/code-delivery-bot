@@ -207,6 +207,7 @@ def build_provider_key(
     original_provider_key: str | None,
     country_code: str,
     months: int,
+    category_key: str | None = None,
 ) -> str:
     data: dict[str, Any] = {}
     if original_provider_key:
@@ -227,4 +228,7 @@ def build_provider_key(
             "type": str(data.get("type", data.get("proxy_type", "dedicated"))),
         }
     )
+    if category_key:
+        data["category"] = str(category_key).lower()
+        data["proxy_kind"] = str(category_key).lower()
     return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
