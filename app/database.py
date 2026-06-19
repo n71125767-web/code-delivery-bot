@@ -60,9 +60,11 @@ async def _critical_schema_migrations(conn) -> None:
             "legacy_order_id": "INTEGER",
             "promo_code": "VARCHAR(80)",
             "discount_amount": "NUMERIC(24,8) DEFAULT 0 NOT NULL",
+            "quantity": "INTEGER DEFAULT 1 NOT NULL",
             "refund_status": "VARCHAR(30)",
             "refund_reason": "TEXT",
             "refunded_at": f"{timestamp}",
+            "updated_at": f"{timestamp} DEFAULT CURRENT_TIMESTAMP NOT NULL",
         },
         "product_snapshots": {
             "fulfillment_type": "VARCHAR(30) DEFAULT 'digital' NOT NULL",
