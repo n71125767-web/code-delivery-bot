@@ -20,7 +20,7 @@ from app.cryptopay_service import (
 from app.wallet_service import process_wallet_webhook
 from sqlalchemy import text
 from app.database import SessionLocal, init_db
-from app.handlers import (
+from app.handlers_main import (
     on_message,
     on_business_message,
     on_callback_query,
