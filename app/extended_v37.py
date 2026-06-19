@@ -375,33 +375,53 @@ async def ensure_proxy_autofix_products(session: AsyncSession, price: Decimal, c
     for sort_index, (key, name, description, provider_type, proxy_type) in enumerate(PROXY_AUTOFIX_PRODUCTS, start=10):
         note = f"proxy_autofix:{key}"
         product = await session.scalar(select(ShopProduct).where(ShopProduct.note == note))
-        if not product:
-            product = ShopProduct(
-                internal_key=await _next_internal_key(session),
-                note=note,
-                created_at=_now(),
-            )
-            session.add(product)
-            await session.flush()
-        product.category_id = category.id
-        product.name = name
-        product.description = description
-        product.price = price
-        product.currency = currency.upper()[:10]
-        product.product_type = "static"
-        product.fulfillment_type = "proxyline"
-        product.provider_key = json.dumps(
+        provider_payload = json.dumps(
             {"provider": provider_type, "type": proxy_type, "count": 1, "ip_version": 4},
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        product.content_type = "text"
-        product.content_text = f"Автовыдача через {provider_type} после оплаты."
-        product.payment_enabled = True
-        product.is_active = True
-        product.is_deleted = False
-        product.sort_order = sort_index
-        product.updated_at = _now()
+        now = _now()
+        if not product:
+            # PostgreSQL не разрешает NULL в shop_products.name.
+            # Поэтому новый товар создаём сразу полностью заполненным,
+            # без промежуточного flush() с пустыми name/price.
+            product = ShopProduct(
+                internal_key=await _next_internal_key(session),
+                category_id=category.id,
+                name=name,
+                description=description,
+                price=price,
+                currency=currency.upper()[:10],
+                product_type="static",
+                fulfillment_type="proxyline",
+                provider_key=provider_payload,
+                content_type="text",
+                content_text=f"Автовыдача через {provider_type} после оплаты.",
+                payment_enabled=True,
+                is_active=True,
+                is_deleted=False,
+                sort_order=sort_index,
+                note=note,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(product)
+        else:
+            product.category_id = category.id
+            product.name = name
+            product.description = description
+            product.price = price
+            product.currency = currency.upper()[:10]
+            product.product_type = "static"
+            product.fulfillment_type = "proxyline"
+            product.provider_key = provider_payload
+            product.content_type = "text"
+            product.content_text = f"Автовыдача через {provider_type} после оплаты."
+            product.payment_enabled = True
+            product.is_active = True
+            product.is_deleted = False
+            product.sort_order = sort_index
+            product.updated_at = now
 
         provider = await session.scalar(
             select(ProductProvider).where(ProductProvider.internal_key == product.internal_key)
