@@ -38,6 +38,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///bot.db").strip()
 
 ADMIN_IDS = parse_ids(os.getenv("ADMIN_IDS", ""))
+GA_IDS = sorted(set(ADMIN_IDS + parse_ids(os.getenv("GA_IDS", ""))))
 
 # Общий чат/ЛС для алертов админам. Не обязательно.
 ADMIN_ALERT_CHAT_IDS = parse_ids(
@@ -68,8 +69,8 @@ SERVICE_OPTIONS = parse_words(
 )
 
 SERVICE_PAGE_SIZE = int(os.getenv("SERVICE_PAGE_SIZE", "8"))
-SUPPLIER_PAGE_SIZE = int(os.getenv("SUPPLIER_PAGE_SIZE", "5"))
-PROBLEM_COOLDOWN_SECONDS = int(os.getenv("PROBLEM_COOLDOWN_SECONDS", "60"))
+SUPPLIER_PAGE_SIZE = int(os.getenv("SUPPLIER_PAGE_SIZE", "8"))
+PROBLEM_COOLDOWN_SECONDS = int(os.getenv("PROBLEM_COOLDOWN_SECONDS", "30"))
 POPULAR_SERVICE_THRESHOLD = int(os.getenv("POPULAR_SERVICE_THRESHOLD", "3"))
 
 if not BOT_TOKEN:
@@ -80,11 +81,11 @@ if not ADMIN_IDS:
 
 
 # FIX_MARKER_AUTODELETE_IGNORE_TEXT_BUTTONS=v2
-AUTO_DELETE_MESSAGES = os.getenv("AUTO_DELETE_MESSAGES", "1").strip() == "1"
-AUTO_DELETE_DELAY_SECONDS = int(os.getenv("AUTO_DELETE_DELAY_SECONDS", "30"))
-AUTO_DELETE_UNKNOWN_BUYERS = os.getenv("AUTO_DELETE_UNKNOWN_BUYERS", "1").strip() == "1"
-IGNORE_NON_BUYERS = os.getenv("IGNORE_NON_BUYERS", "1").strip() == "1"
-NOTIFY_UNKNOWN_BUYERS = os.getenv("NOTIFY_UNKNOWN_BUYERS", "0").strip() == "1"
+AUTO_DELETE_MESSAGES = os.getenv("AUTO_DELETE_MESSAGES", "0").strip() == "1"
+AUTO_DELETE_DELAY_SECONDS = int(os.getenv("AUTO_DELETE_DELAY_SECONDS", "3"))
+AUTO_DELETE_UNKNOWN_BUYERS = os.getenv("AUTO_DELETE_UNKNOWN_BUYERS", "0").strip() == "1"
+IGNORE_NON_BUYERS = os.getenv("IGNORE_NON_BUYERS", "0").strip() == "1"
+NOTIFY_UNKNOWN_BUYERS = os.getenv("NOTIFY_UNKNOWN_BUYERS", "1").strip() == "1"
 
 
 # Финальные настройки антиспама кнопок.
@@ -139,6 +140,16 @@ CRYPTO_PAY_DELIVERY_STALE_SECONDS = int(
     os.getenv("CRYPTO_PAY_DELIVERY_STALE_SECONDS", "600")
 )
 CRYPTO_PAY_ENABLED = bool(CRYPTO_PAY_TOKEN)
+
+# Direct wallet payments. The bot creates a pending wallet payment and can mark it
+# as paid either by admin command or by a signed /wallet/webhook event from your
+# own blockchain/payment monitor.
+WALLET_PAYMENT_ENABLED = os.getenv("WALLET_PAYMENT_ENABLED", "0").strip() == "1"
+WALLET_PAYMENT_ADDRESS = os.getenv("WALLET_PAYMENT_ADDRESS", "").strip()
+WALLET_PAYMENT_CURRENCY = os.getenv("WALLET_PAYMENT_CURRENCY", "USDT").strip().upper()
+WALLET_WEBHOOK_SECRET = os.getenv("WALLET_WEBHOOK_SECRET", "").strip()
+
+MARKETPLACE_ENABLED = os.getenv("MARKETPLACE_ENABLED", "1").strip() == "1"
 
 if CRYPTO_PAY_NETWORK not in {"mainnet", "testnet"}:
     raise RuntimeError("CRYPTO_PAY_NETWORK must be mainnet or testnet")

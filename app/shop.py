@@ -9,6 +9,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from app.config import WALLET_PAYMENT_ENABLED
 from app.models import ShopCategory, ShopProduct, ProductProvider
 
 SHOP_SYNC_LOCK = asyncio.Lock()
@@ -479,6 +480,12 @@ def product_keyboard(product: ShopProduct, shop_username: str) -> InlineKeyboard
             callback_data=f"buyer:buy:{product.id}",
             style="success",
         )
+        if WALLET_PAYMENT_ENABLED:
+            kb.button(
+                text="💼 Оплатить на кошелёк",
+                callback_data=f"buyer:walletbuy:{product.id}",
+                style="success",
+            )
     else:
         kb.button(text="⏸ Покупка недоступна", callback_data="buyer:noop")
     kb.button(

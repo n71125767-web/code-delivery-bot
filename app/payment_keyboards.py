@@ -2,7 +2,7 @@ from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
-def invoice_keyboard(invoice_url: str, purchase_id: int) -> InlineKeyboardMarkup:
+def invoice_keyboard(invoice_url: str, purchase_id: int, product_id: int | None = None) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="💳 Оплатить через CryptoBot", url=invoice_url, style="success")
     kb.button(text="🔄 Проверить оплату", callback_data=f"payment:check:{purchase_id}")

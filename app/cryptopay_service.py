@@ -27,6 +27,11 @@ from app.config import (
 )
 from app.database import SessionLocal
 from app.commerce_v34 import release_stale_reservations
+from app.extended_v37 import (
+    get_active_promo_discount,
+    finalize_promo_redemption,
+    award_purchase_trophies,
+)
 from app.models import (
     CryptoPayment,
     DigitalPurchase,
@@ -227,7 +232,9 @@ async def create_purchase_invoice(
                         ProductProvider.enabled.is_(True),
                     )
                 )
-                fulfillment_type = (
+                # V37: ShopProduct.fulfillment_type is the source of truth.
+                # ProductProvider is only a legacy fallback for older rows.
+                fulfillment_type = product.fulfillment_type or (
                     provider.provider_type
                     if provider
                     else ("stock" if product.product_type == "quantity" else "digital")
@@ -246,7 +253,7 @@ async def create_purchase_invoice(
                     product.content_text or product.content_file_id
                 ):
                     raise PaymentValidationError("У товара не настроена выдача.")
-                if fulfillment_type == "stock":
+                if fulfillment_type in {"stock", "number"}:
                     available_id = await session.scalar(
                         select(ProductStockItem.id)
                         .where(
@@ -262,15 +269,18 @@ async def create_purchase_invoice(
                         await session.commit()
                         raise PaymentValidationError("Товар закончился.")
 
-                final_amount = (
+                base_amount = (
                     _decimal(amount_override)
                     if amount_override is not None
                     else _decimal(product.price)
                 )
-                if final_amount <= 0:
+                if base_amount <= 0:
                     raise PaymentValidationError("Некорректная сумма заказа.")
 
                 currency = (product.currency or "").upper()
+                promo_code, final_amount, discount_amount = await get_active_promo_discount(
+                    session, buyer_id, product.id, base_amount, currency
+                )
                 if currency not in CRYPTO_ASSETS and currency not in FIAT_CURRENCIES:
                     raise PaymentValidationError(
                         f"Валюта {currency} не поддерживается Crypto Pay."
@@ -288,6 +298,8 @@ async def create_purchase_invoice(
                     active_key=checkout_identity,
                     fulfillment_type=fulfillment_type,
                     provider_key=provider_key,
+                    promo_code=promo_code,
+                    discount_amount=discount_amount,
                 )
                 session.add(purchase)
                 try:
@@ -314,7 +326,7 @@ async def create_purchase_invoice(
                         "Счёт уже создаётся. Повторите через несколько секунд."
                     )
 
-                if fulfillment_type == "stock":
+                if fulfillment_type in {"stock", "number"}:
                     result = await session.execute(
                         update(ProductStockItem)
                         .where(
@@ -322,9 +334,10 @@ async def create_purchase_invoice(
                             ProductStockItem.status == "available",
                         )
                         .values(
-                status="reserved",
-                reserved_at=datetime.utcnow(),
-            )
+                            status="reserved",
+                            reserved_at=datetime.utcnow(),
+                            reserved_purchase_id=purchase.id,
+                        )
                     )
                     if result.rowcount != 1:
                         await session.rollback()
@@ -399,8 +412,8 @@ async def create_purchase_invoice(
                             )
                             if stock and stock.status == "reserved":
                                 stock.status = "available"
-                        stock.reserved_at = None
-                        stock.reserved_purchase_id = None
+                                stock.reserved_at = None
+                                stock.reserved_purchase_id = None
                         await session.commit()
                 raise
 
@@ -451,7 +464,7 @@ async def _reserve_stock(session, product_id: int) -> ProductStockItem | None:
                 ProductStockItem.id == candidate_id,
                 ProductStockItem.status == "available",
             )
-            .values(status="reserved")
+            .values(status="reserved", reserved_at=datetime.utcnow())
         )
         if result.rowcount == 1:
             await session.commit()
@@ -576,7 +589,7 @@ async def deliver_purchase(bot: Bot, purchase_id: int) -> bool:
 
             stock = None
             if (
-                purchase.fulfillment_type == "stock"
+                purchase.fulfillment_type in {"stock", "number"}
                 or product.product_type == "quantity"
             ):
                 async with SessionLocal() as session:
@@ -593,6 +606,8 @@ async def deliver_purchase(bot: Bot, purchase_id: int) -> bool:
                             )
                             db_purchase.stock_item_id = stock.id
                             db_purchase.updated_at = datetime.utcnow()
+                            stock.reserved_purchase_id = db_purchase.id
+                            stock.reserved_at = datetime.utcnow()
                             await session.commit()
                     if stock is None:
                         db_product = await session.get(ShopProduct, product.id)
@@ -643,6 +658,8 @@ async def deliver_purchase(bot: Bot, purchase_id: int) -> bool:
                 db_product.revenue_total = _decimal(
                     db_product.revenue_total or 0
                 ) + _decimal(db_purchase.amount)
+                await finalize_promo_redemption(session, db_purchase)
+                await award_purchase_trophies(session, db_purchase.buyer_id)
                 if stock:
                     db_stock = await session.get(ProductStockItem, stock.id)
                     if db_stock is None:
@@ -650,6 +667,8 @@ async def deliver_purchase(bot: Bot, purchase_id: int) -> bool:
                     db_stock.status = "delivered"
                     db_stock.delivered_to = db_purchase.buyer_id
                     db_stock.delivered_at = datetime.utcnow()
+                    db_stock.reserved_at = None
+                    db_stock.reserved_purchase_id = None
                     remaining = await session.scalar(
                         select(ProductStockItem.id)
                         .where(
@@ -963,8 +982,8 @@ async def recover_pending_payments(bot: Bot) -> int:
                             )
                             if stock and stock.status == "reserved":
                                 stock.status = "available"
-                        stock.reserved_at = None
-                        stock.reserved_purchase_id = None
+                                stock.reserved_at = None
+                                stock.reserved_purchase_id = None
                     await session.commit()
         except Exception:
             logger.exception(

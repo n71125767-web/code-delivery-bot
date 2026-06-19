@@ -324,6 +324,8 @@ class DigitalPurchase(Base):
         String(30), default="digital", index=True
     )
     provider_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    promo_code: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    discount_amount: Mapped[float] = mapped_column(Numeric(24, 8), default=0)
     legacy_order_id: Mapped[int | None] = mapped_column(
         ForeignKey("orders.id"), nullable=True, index=True
     )
@@ -450,4 +452,120 @@ class ConversationState(Base):
     scope: Mapped[str] = mapped_column(String(50), primary_key=True)
     payload_json: Mapped[str] = mapped_column(Text)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class MarketplaceApplication(Base):
+    __tablename__ = "marketplace_applications"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    applicant_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    applicant_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    seller_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    title: Mapped[str] = mapped_column(String(255), index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    price: Mapped[float | None] = mapped_column(Numeric(24, 8), nullable=True)
+    currency: Mapped[str] = mapped_column(String(10), default="RUB")
+    category_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    content_preview: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    moderator_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("shop_products.id"), nullable=True, index=True)
+    reject_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class PromoCode(Base):
+    __tablename__ = "promo_codes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    discount_type: Mapped[str] = mapped_column(String(20), default="percent")
+    value: Mapped[float] = mapped_column(Numeric(24, 8), default=0)
+    max_uses: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    used_count: Mapped[int] = mapped_column(Integer, default=0)
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("shop_products.id"), nullable=True, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class PromoRedemption(Base):
+    __tablename__ = "promo_redemptions"
+    __table_args__ = (
+        UniqueConstraint("promo_id", "purchase_id", name="uq_promo_purchase"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    promo_id: Mapped[int] = mapped_column(ForeignKey("promo_codes.id"), index=True)
+    code: Mapped[str] = mapped_column(String(80), index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    purchase_id: Mapped[int] = mapped_column(ForeignKey("digital_purchases.id"), index=True)
+    discount_amount: Mapped[float] = mapped_column(Numeric(24, 8), default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class CooldownSetting(Base):
+    __tablename__ = "cooldown_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    action: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    seconds: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class CustomerTrophy(Base):
+    __tablename__ = "customer_trophies"
+    __table_args__ = (
+        UniqueConstraint("user_id", "trophy_key", name="uq_customer_trophy"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    trophy_key: Mapped[str] = mapped_column(String(80), index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    awarded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class InternalRewardEvent(Base):
+    __tablename__ = "internal_reward_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    event_type: Mapped[str] = mapped_column(String(80), index=True)
+    points: Mapped[int] = mapped_column(Integer, default=0)
+    source_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class WalletPayment(Base):
+    __tablename__ = "wallet_payments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    purchase_id: Mapped[int] = mapped_column(ForeignKey("digital_purchases.id"), index=True)
+    buyer_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("shop_products.id"), index=True)
+    address: Mapped[str] = mapped_column(String(500))
+    memo: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    amount: Mapped[float] = mapped_column(Numeric(24, 8))
+    currency: Mapped[str] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    tx_hash: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    provider_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ManualPage(Base):
+    __tablename__ = "manual_pages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(255), index=True)
+    body: Mapped[str] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

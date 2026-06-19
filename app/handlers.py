@@ -34,6 +34,8 @@ from app.config import (
     PROXYLINE_ENABLED,
     PROXYLINE_API_KEY,
     PROXYLINE_COUPON,
+    GA_IDS,
+    WALLET_PAYMENT_ENABLED,
 )
 from app.database import SessionLocal
 from app.keyboards import (
@@ -186,6 +188,13 @@ from app.cryptopay_service import (
     create_purchase_invoice,
 )
 from app.payment_keyboards import invoice_keyboard, payment_result_keyboard
+from app.extended_v37 import (
+    process_extended_command,
+    handle_marketplace_callback,
+    get_cooldown_seconds,
+    wallet_payment_keyboard,
+)
+from app.wallet_service import create_wallet_payment
 from app.proxy_catalog_v36 import (
     PROXY_PERIODS,
     available_proxyline_countries,
@@ -764,7 +773,7 @@ CONTACT_RE = re.compile("|".join(CONTACT_PATTERNS), re.IGNORECASE)
 
 
 def is_admin(user_id: int | None) -> bool:
-    return bool(user_id and user_id in ADMIN_IDS)
+    return bool(user_id and (user_id in ADMIN_IDS or user_id in GA_IDS))
 
 
 async def is_admin_user(user_id: int | None) -> bool:
@@ -782,6 +791,24 @@ async def get_user_role(user_id: int | None) -> str:
     if user_id and await is_supplier_user(user_id):
         return "supplier"
     return "buyer"
+
+
+def callback_user_owns_order(order, callback: CallbackQuery) -> bool:
+    if not order or not callback.from_user:
+        return False
+    user_id = callback.from_user.id
+    username = (callback.from_user.username or "").replace("@", "").lower()
+    if order.customer_telegram_id == user_id or order.buyer_chat_id == user_id:
+        return True
+    order_username = (order.customer_username or "").replace("@", "").lower()
+    return bool(username and order_username and username == order_username)
+
+
+async def guard_order_owner(callback: CallbackQuery, order) -> bool:
+    if callback_user_owns_order(order, callback):
+        return True
+    await callback.answer("Это не ваш заказ.", show_alert=True)
+    return False
 
 
 def get_business_id(message: Message | None, fallback: str | None = None) -> str | None:
@@ -1198,7 +1225,7 @@ async def handle_unknown_buyer(
         message.from_user.id if message.from_user else None,
         message.from_user.username if message.from_user else None,
         message.chat.id,
-        text[:200],
+        len(text),
     )
 
     if AUTO_DELETE_UNKNOWN_BUYERS:
@@ -2208,7 +2235,7 @@ async def process_shop_admin_pending_input(
                 row = await session.get(ShopProduct, object_id)
                 supplier_id = int(text)
                 await bind_product_provider(
-                    session, row.internal_key, row.name, "supplier", str(supplier_id)
+                    session, row.internal_key, "supplier", str(supplier_id), row.name
                 )
                 result = "✅ Поставщик назначен."
             else:
@@ -2238,6 +2265,7 @@ async def process_admin_command(
     if not message.from_user or not await is_admin_user(message.from_user.id):
         return False
 
+    user_id = message.from_user.id
     text = (message.text or "").strip()
     parts = text.split()
 
@@ -2455,20 +2483,20 @@ async def process_admin_command(
     if text.startswith("/restore_product "):
         if not await is_admin_user(user_id):
             await answer_message(bot, message, "Нет доступа.", business_connection_id)
-            return
+            return True
         parts = text.split(maxsplit=1)
         if len(parts) != 2 or not parts[1].isdigit():
             await answer_message(
                 bot, message, "Формат: /restore_product PRODUCT_ID",
                 business_connection_id,
             )
-            return
+            return True
         product_id = int(parts[1])
         async with SessionLocal() as session:
             product = await session.get(ShopProduct, product_id)
             if not product:
                 await answer_message(bot, message, "Товар не найден.", business_connection_id)
-                return
+                return True
             product.is_deleted = False
             product.deleted_at = None
             product.deleted_by = None
@@ -2476,12 +2504,12 @@ async def process_admin_command(
             await session.commit()
         await write_audit(user_id, "product_restored", "product", product_id)
         await answer_message(bot, message, "✅ Товар восстановлен как скрытый.", business_connection_id)
-        return
+        return True
 
     if text == "/archived_products":
         if not await is_admin_user(user_id):
             await answer_message(bot, message, "Нет доступа.", business_connection_id)
-            return
+            return True
         async with SessionLocal() as session:
             rows = list((await session.scalars(
                 select(ShopProduct)
@@ -2495,12 +2523,12 @@ async def process_admin_command(
         )
         result += "\n\nВосстановление: /restore_product ID"
         await answer_message(bot, message, result, business_connection_id)
-        return
+        return True
 
     if text.startswith("/set_provider_key "):
         if not await is_admin_user(user_id):
             await answer_message(bot, message, "Нет доступа.", business_connection_id)
-            return
+            return True
         parts = text.split(maxsplit=2)
         if len(parts) != 3 or not parts[1].isdigit():
             await answer_message(
@@ -2508,14 +2536,14 @@ async def process_admin_command(
                 "Формат: /set_provider_key PRODUCT_ID JSON_ИЛИ_TELEGRAM_ID",
                 business_connection_id,
             )
-            return
+            return True
         product_id = int(parts[1])
         provider_key = parts[2].strip()
         async with SessionLocal() as session:
             product = await session.get(ShopProduct, product_id)
             if not product:
                 await answer_message(bot, message, "Товар не найден.", business_connection_id)
-                return
+                return True
             product.provider_key = provider_key
             product.updated_at = datetime.utcnow()
             await session.commit()
@@ -2524,7 +2552,7 @@ async def process_admin_command(
             {"provider_key": provider_key},
         )
         await answer_message(bot, message, "✅ provider_key сохранён.", business_connection_id)
-        return
+        return True
 
     if text == "/services":
         async with SessionLocal() as session:
@@ -3184,6 +3212,16 @@ async def process_command_message(
     username = message.from_user.username
 
     if await process_bug_report_command(bot, message, business_connection_id):
+        return
+
+    admin_access = await is_admin_user(user_id)
+    if await process_extended_command(
+        bot,
+        message,
+        business_connection_id,
+        is_admin=admin_access,
+        is_super_admin=is_admin(user_id),
+    ):
         return
 
     if await process_admin_command(bot, message, business_connection_id):
@@ -4450,7 +4488,7 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
     await touch_user(user_id, username or None)
 
     logger.info(
-        "HANDLED_TEXT is_business=%s from_id=%s username=%s is_bot=%s chat_id=%s business_id=%s text=%s",
+        "HANDLED_TEXT is_business=%s from_id=%s username=%s is_bot=%s chat_id=%s business_id=%s text_len=%s",
         is_business,
         user_id,
         username,
@@ -5790,7 +5828,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         async with SessionLocal() as session:
             product = await session.get(ShopProduct, product_id)
             await bind_product_provider(
-                session, product.internal_key, product.name, "proxyline", "proxyline"
+                session, product.internal_key, "proxyline", "proxyline", product.name
             )
             text = await product_admin_text(session, product)
         await update_or_send(
@@ -7244,11 +7282,14 @@ async def check_button_cooldown(callback: CallbackQuery, action: str) -> bool:
         return True
 
     async with SessionLocal() as session:
+        cooldown_seconds = await get_cooldown_seconds(
+            session, f"button:{action}", BUTTON_COOLDOWN_SECONDS
+        )
         ok, remaining = await check_cooldown(
             session,
             callback.from_user.id,
             f"button:{action}",
-            BUTTON_COOLDOWN_SECONDS,
+            cooldown_seconds,
         )
 
     if not ok:
@@ -7274,6 +7315,13 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         callback.from_user.id if callback.from_user else None,
         data,
     )
+
+    if data.startswith("market:"):
+        handled = await handle_marketplace_callback(
+            bot, callback, is_admin=bool(callback.from_user and await is_admin_user(callback.from_user.id))
+        )
+        if handled:
+            return
 
     if data.startswith("proxy:"):
         handled = await handle_proxy_callback(bot, callback)
@@ -7568,6 +7616,44 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         await callback.answer()
         return
 
+    if data.startswith("buyer:walletbuy:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        try:
+            purchase, wallet_payment = await create_wallet_payment(
+                buyer_id=callback.from_user.id,
+                buyer_username=callback.from_user.username,
+                product_id=product_id,
+            )
+        except (PaymentConfigurationError, PaymentValidationError) as exc:
+            await callback.answer(str(exc), show_alert=True)
+            return True
+        except Exception:
+            logger.exception(
+                "CREATE_WALLET_PAYMENT_FAILED product_id=%s buyer_id=%s",
+                product_id,
+                callback.from_user.id,
+            )
+            await callback.answer(
+                "Не удалось создать оплату на кошелёк. Администратор уже может проверить ошибку.",
+                show_alert=True,
+            )
+            return True
+        await update_or_send(
+            callback,
+            (
+                "💼 Оплата на кошелёк\n\n"
+                f"Заказ: #{purchase.id}\n"
+                f"Сумма: {wallet_payment.amount} {wallet_payment.currency}\n"
+                f"Адрес: {wallet_payment.address}\n"
+                f"Комментарий/Memo: {wallet_payment.memo}\n\n"
+                "После поступления платежа внешний монитор может подтвердить его через /wallet/webhook. "
+                f"Админ также может подтвердить вручную: /wallet_confirm {wallet_payment.id}"
+            ),
+            reply_markup=wallet_payment_keyboard(wallet_payment.id),
+        )
+        await callback.answer("Реквизиты созданы")
+        return True
+
     if data.startswith("buyer:buy:"):
         product_id = int(data.rsplit(":", 1)[1])
         try:
@@ -7599,6 +7685,27 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             "После оплаты нажмите «Проверить оплату». "
             "Webhook также обработает платёж автоматически.",
             reply_markup=invoice_keyboard(payment.invoice_url, purchase.id),
+        )
+        await callback.answer()
+        return True
+
+    if data.startswith("wallet:check:"):
+        payment_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            from app.models import WalletPayment
+            wallet_payment = await session.get(WalletPayment, payment_id)
+            if not wallet_payment:
+                await callback.answer("Платёж не найден", show_alert=True)
+                return True
+            if wallet_payment.buyer_id != callback.from_user.id:
+                await callback.answer("Это не ваш платёж.", show_alert=True)
+                return True
+            status = wallet_payment.status
+        text = "Оплата подтверждена." if status == "paid" else "Оплата пока ожидается."
+        await update_or_send(
+            callback,
+            f"💼 Проверка оплаты на кошелёк\n\n{text}",
+            reply_markup=wallet_payment_keyboard(payment_id),
         )
         await callback.answer()
         return True
@@ -7768,6 +7875,8 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
                 )
                 await callback.answer(closed_text, show_alert=True)
                 return
+            if not await guard_order_owner(callback, order):
+                return
             services, max_page = await get_services_page(
                 session, page, SERVICE_PAGE_SIZE
             )
@@ -7800,6 +7909,8 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
                     session, "order_closed", "Заказ уже закрыт или уже в обработке."
                 )
                 await callback.answer(closed_text, show_alert=True)
+                return
+            if not await guard_order_owner(callback, order):
                 return
 
         if not service:
@@ -7835,6 +7946,8 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
                 )
                 await callback.answer(closed_text, show_alert=True)
                 return
+            if not await guard_order_owner(callback, order):
+                return
 
             business_id = order.business_connection_id
 
@@ -7855,6 +7968,8 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             order = await get_order_by_id(session, order_id)
             if not order:
                 await callback.answer("Заказ не найден", show_alert=True)
+                return
+            if not await guard_order_owner(callback, order):
                 return
 
             if order.status == "confirmed":
@@ -7937,6 +8052,8 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             if not order:
                 await callback.answer("Заказ не найден", show_alert=True)
                 return
+            if not await guard_order_owner(callback, order):
+                return
 
             if order.status == "confirmed":
                 await callback.answer("Заказ уже закрыт", show_alert=True)
@@ -7981,8 +8098,11 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         user_id = callback.from_user.id if callback.from_user else 0
 
         async with SessionLocal() as session:
+            problem_cooldown = await get_cooldown_seconds(
+                session, "problem", PROBLEM_COOLDOWN_SECONDS
+            )
             ok_cd, remaining = await check_cooldown(
-                session, user_id, "problem", PROBLEM_COOLDOWN_SECONDS
+                session, user_id, "problem", problem_cooldown
             )
 
             if not ok_cd:
@@ -7996,6 +8116,8 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             order = await get_order_by_id(session, order_id)
             if not order:
                 await callback.answer("Заказ не найден", show_alert=True)
+                return
+            if not await guard_order_owner(callback, order):
                 return
 
             if order.status == "confirmed":

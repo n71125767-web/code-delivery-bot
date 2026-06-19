@@ -2,7 +2,7 @@ import logging
 from sqlalchemy import text, select, inspect
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
-from app.config import DATABASE_URL, SERVICE_OPTIONS, ADMIN_IDS
+from app.config import DATABASE_URL, SERVICE_OPTIONS, ADMIN_IDS, GA_IDS
 from app.models import (
     Base,
     Supplier,
@@ -58,6 +58,8 @@ async def _critical_schema_migrations(conn) -> None:
             "fulfillment_type": "VARCHAR(30) DEFAULT 'digital' NOT NULL",
             "provider_key": "VARCHAR(500)",
             "legacy_order_id": "INTEGER",
+            "promo_code": "VARCHAR(80)",
+            "discount_amount": "NUMERIC(24,8) DEFAULT 0 NOT NULL",
             "refund_status": "VARCHAR(30)",
             "refund_reason": "TEXT",
             "refunded_at": f"{timestamp}",
@@ -81,6 +83,13 @@ async def _critical_schema_migrations(conn) -> None:
             "last_user_id": "BIGINT",
             "error_text": "TEXT",
             "started_at": f"{timestamp}",
+        },
+        "marketplace_applications": {
+            "content_preview": "TEXT",
+            "reject_reason": "TEXT",
+        },
+        "wallet_payments": {
+            "provider_payload": "TEXT",
         },
     }
     for table, table_additions in additions.items():
@@ -232,11 +241,12 @@ async def _sqlite_migrations(conn) -> None:
 
 
 async def seed_env_admins() -> None:
-    if not ADMIN_IDS:
+    admin_ids = sorted(set(ADMIN_IDS + GA_IDS))
+    if not admin_ids:
         return
 
     async with SessionLocal() as session:
-        for admin_id in ADMIN_IDS:
+        for admin_id in admin_ids:
             result = await session.execute(
                 select(AdminUser).where(AdminUser.telegram_id == admin_id)
             )

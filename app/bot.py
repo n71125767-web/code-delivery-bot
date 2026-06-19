@@ -10,12 +10,14 @@ from app.config import (
     BOT_TOKEN,
     CRYPTO_PAY_ENABLED,
     CRYPTO_PAY_RECOVERY_INTERVAL_SECONDS,
+    WALLET_PAYMENT_ENABLED,
 )
 from app.cryptopay_service import (
     close_crypto_client,
     process_webhook,
     recover_pending_payments,
 )
+from app.wallet_service import process_wallet_webhook
 from sqlalchemy import text
 from app.database import SessionLocal, init_db
 from app.handlers import (
@@ -51,6 +53,7 @@ async def health(_request):
             "status": "ok" if db_ok else "degraded",
             "database": "ok" if db_ok else "error",
             "cryptopay_enabled": CRYPTO_PAY_ENABLED,
+            "wallet_payment_enabled": WALLET_PAYMENT_ENABLED,
             "bot_ready": _web_bot is not None,
         },
         status=status,
@@ -69,6 +72,19 @@ async def crypto_webhook(request: web.Request):
     return web.Response(status=status, text=text)
 
 
+
+
+async def wallet_webhook(request: web.Request):
+    if not WALLET_PAYMENT_ENABLED:
+        return web.Response(status=503, text="wallet disabled")
+    if _web_bot is None:
+        return web.Response(status=503, text="bot unavailable")
+
+    raw_body = await request.read()
+    signature = request.headers.get("x-wallet-signature")
+    status, text = await process_wallet_webhook(_web_bot, raw_body, signature)
+    return web.Response(status=status, text=text)
+
 async def start_health_server(bot: Bot):
     global _health_runner, _web_bot
     _web_bot = bot
@@ -82,6 +98,7 @@ async def start_health_server(bot: Bot):
         app.router.add_get("/", health)
         app.router.add_get("/health", health)
         app.router.add_post("/crypto/webhook", crypto_webhook)
+        app.router.add_post("/wallet/webhook", wallet_webhook)
 
         runner = web.AppRunner(app)
         await runner.setup()
@@ -92,6 +109,8 @@ async def start_health_server(bot: Bot):
         logger.info("HTTP server started on port %s", port)
         if CRYPTO_PAY_ENABLED:
             logger.info("Crypto Pay webhook path configured: /crypto/webhook")
+        if WALLET_PAYMENT_ENABLED:
+            logger.info("Wallet webhook path configured: /wallet/webhook")
         return runner
 
 
@@ -136,6 +155,7 @@ async def main():
         logger.info("FIX_MARKER_MCS_CLEAN=v33 loaded")
         logger.info("FIX_MARKER_MCS_SERVER=v35 loaded")
         logger.info("FIX_MARKER_MCS_PROXYLINE=v36 loaded")
+        logger.info("FIX_MARKER_MCS_EXTENDED_MARKETPLACE_V37 loaded")
         logger.info("FIX_MARKER_MCS_ALERT_IDS=v36.1 loaded")
         dp = build_dispatcher()
         await dp.start_polling(
