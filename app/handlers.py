@@ -44,6 +44,7 @@ from app.keyboards import (
     service_keyboard_from_services,
     service_confirm_keyboard,
     admin_panel_keyboard,
+    admin_hidden_keyboard,
     supplier_request_actions_keyboard,
     supplier_reply_keyboard,
     supplier_orders_keyboard,
@@ -88,6 +89,7 @@ from app.keyboards import (
     confirm_delete_product_keyboard,
     confirm_delete_category_keyboard,
     supplier_selected_request_keyboard,
+    admin_main_reply_keyboard,
 )
 from app.parsers import extract_purchase_data, extract_phone, extract_code
 from app.proxyline_products import (
@@ -106,6 +108,7 @@ from app.proxy_settings import (
     selection_load,
 )
 from app.senders import safe_send_message, answer_message
+from app.text_utils import plain_text
 from app.repositories.product_providers import (
     get_product_provider,
     bind_product_provider,
@@ -217,6 +220,23 @@ from app.proxy_pricing_v39 import (
     multiplier_label,
 )
 from app.country_ru import country_display
+from app.v50_features import (
+    get_main_page_text,
+    get_faq_page_text,
+    main_settings_text,
+    set_main_page_text,
+    set_faq_text,
+    number_services_text,
+    add_number_service,
+    remove_number_service,
+    wallet_topup_amounts_keyboard,
+    wallet_topup_invoice_keyboard,
+    create_wallet_topup_invoice,
+    check_wallet_topup,
+    supplier_products_text,
+    set_supplier_product_price,
+    parse_money,
+)
 
 from app.admin_reference_v28 import (
     broadcast_preview_keyboard,
@@ -235,6 +255,16 @@ from app.catalog_runtime_v29 import (
 )
 from app.user_registry import touch_user
 from app.fulfillment_service import sync_purchase_from_order
+from app.market_wallet_v49 import (
+    notify_new_user,
+    notify_purchase_and_credit_supplier,
+    get_wallet_text,
+    wallet_keyboard,
+    supplier_orders_text,
+    create_withdrawal_request,
+    admin_withdrawals_text,
+    mark_withdrawal_done,
+)
 from app.services import (
     create_or_update_order_from_purchase,
     find_active_order_for_customer,
@@ -391,7 +421,6 @@ def validate_runtime_ui() -> None:
 
     required_reply_buttons = {
         "🛍 Каталог",
-        "🌐 Прокси",
         "📱 Номера",
         "🛒 Корзина",
     }
@@ -452,6 +481,7 @@ PROXY_COUNTRY_SEARCH_WAIT: dict[int, str] = {}
 CART_QUANTITY_WAIT: dict[int, int] = {}
 PARTNER_APPLICATION_WAIT: set[int] = set()
 BUYER_FEEDBACK_WAIT: set[int] = set()
+WALLET_TOPUP_WAIT: set[int] = set()
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
 ADMIN_SUPPLIER_WAIT: dict[int, dict] = {}
@@ -497,6 +527,7 @@ async def _raw_business_edit_text(
     if not business_connection_id:
         return False
 
+    text = plain_text(text)
     payload = {
         "business_connection_id": business_connection_id,
         "chat_id": chat_id,
@@ -559,6 +590,7 @@ async def _bot_edit_text_safe(
     business_connection_id: str | None = None,
 ) -> bool:
     """Редактирует сообщение. Возвращает True, если edit успешен или текст не изменился."""
+    text = plain_text(text)
     try:
         kwargs = {
             "chat_id": chat_id,
@@ -660,6 +692,7 @@ async def send_or_edit_role_panel(
     3) новое сообщение создаётся только если редактировать нечего/невозможно;
     4) нижняя reply-клавиатура убирается, чтобы не было дублей кнопок.
     """
+    text = plain_text(text)
     # ReplyKeyboardRemove нужен только при текстовой команде.
     # При callback не отправляем лишнее сообщение, иначе получится спам.
     if callback is None:
@@ -860,6 +893,7 @@ def contains_forbidden_contact(text: str) -> bool:
 
 
 async def update_or_send(callback: CallbackQuery, text: str, reply_markup=None) -> None:
+    text = plain_text(text)
     """
     Как у админа: callback редактирует текущее inline-сообщение.
     Важно: если Telegram отвечает "message is not modified", НЕ отправляем новое сообщение.
@@ -946,6 +980,7 @@ async def show_visual_card(
     video_file_id: str | None = None,
 ) -> None:
     """Показывает экран как в референсе: медиа-карточка + inline-кнопки."""
+    caption = plain_text(caption)
     if not callback.message:
         return
     chat_id = callback.message.chat.id
@@ -2137,7 +2172,7 @@ async def process_catalog_v25_input(
                 async with SessionLocal() as session:
                     category = ShopCategory(
                         name=data["name"],
-                        emoji="📦",
+                        emoji="",
                         description=description,
                         is_active=True,
                     )
@@ -2368,19 +2403,8 @@ async def process_shop_admin_pending_input(
     try:
         if action == "category_wizard":
             if step == "name":
-                data["name"] = text[:120]
-                state["step"] = "emoji"
-                await answer_message(
-                    bot,
-                    message,
-                    "Шаг 2. Отправьте эмодзи категории или слово «пропустить».",
-                    business_connection_id,
-                )
-                return True
-            if step == "emoji":
-                emoji = "📦" if text.lower() == "пропустить" else text[:20]
                 async with SessionLocal() as session:
-                    row = ShopCategory(name=data["name"], emoji=emoji, is_active=True)
+                    row = ShopCategory(name=text[:120], emoji="", is_active=True)
                     session.add(row)
                     await session.commit()
                 SHOP_ADMIN_WAIT.pop(admin_id, None)
@@ -2496,10 +2520,36 @@ async def process_admin_command(
         await answer_message(
             bot,
             message,
+            "🛠 Админ-панель открыта.",
+            business_connection_id,
+            reply_markup=admin_main_reply_keyboard(),
+        )
+        await answer_message(
+            bot,
+            message,
             admin_panel_text(),
             business_connection_id,
             reply_markup=admin_panel_keyboard(),
         )
+        return True
+
+    if text == "/main_settings":
+        await answer_message(bot, message, await main_settings_text(), business_connection_id, reply_markup=admin_hidden_keyboard())
+        return True
+    if text.startswith("/main_set"):
+        await answer_message(bot, message, await set_main_page_text(text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else ""), business_connection_id, reply_markup=admin_hidden_keyboard())
+        return True
+    if text.startswith("/faq_set"):
+        await answer_message(bot, message, await set_faq_text(text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else ""), business_connection_id, reply_markup=admin_hidden_keyboard())
+        return True
+    if text == "/number_services":
+        await answer_message(bot, message, await number_services_text(), business_connection_id, reply_markup=admin_hidden_keyboard())
+        return True
+    if text.startswith("/number_service_add"):
+        await answer_message(bot, message, await add_number_service(text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else ""), business_connection_id, reply_markup=admin_hidden_keyboard())
+        return True
+    if text.startswith("/number_service_remove"):
+        await answer_message(bot, message, await remove_number_service(text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else ""), business_connection_id, reply_markup=admin_hidden_keyboard())
         return True
 
     if text == "/admins":
@@ -2588,6 +2638,60 @@ async def process_admin_command(
         )
         return True
 
+    if text == "/withdrawals":
+        await answer_message(bot, message, await admin_withdrawals_text(), business_connection_id)
+        return True
+
+    if text.startswith("/withdraw_done"):
+        result = await mark_withdrawal_done(bot, user_id, text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else "")
+        await answer_message(bot, message, result, business_connection_id)
+        return True
+
+    if text.startswith("/retry_purchase"):
+        if len(parts) != 2:
+            await answer_message(
+                bot,
+                message,
+                "Формат:\n/retry_purchase ID_ПОКУПКИ\n\nИспользуйте после пополнения баланса или исправления поставщика.",
+                business_connection_id,
+            )
+            return True
+        try:
+            purchase_id = int(parts[1])
+        except ValueError:
+            await answer_message(bot, message, "ID покупки должен быть числом.", business_connection_id)
+            return True
+        async with SessionLocal() as session:
+            from app.models import DigitalPurchase
+
+            purchase = await session.get(DigitalPurchase, purchase_id)
+            if purchase is None:
+                await answer_message(bot, message, "Покупка не найдена.", business_connection_id)
+                return True
+            if purchase.status == "delivered":
+                await answer_message(bot, message, "Эта покупка уже выдана.", business_connection_id)
+                return True
+            purchase.status = "paid"
+            purchase.delivery_error = None
+            purchase.delivery_started_at = None
+            purchase.active_key = None
+            purchase.updated_at = datetime.utcnow()
+            await session.commit()
+        from app.cryptopay_service import deliver_purchase
+
+        ok = await deliver_purchase(bot, purchase_id)
+        await answer_message(
+            bot,
+            message,
+            (
+                f"✅ Повторная выдача покупки #{purchase_id} выполнена."
+                if ok
+                else f"⚠️ Повторная выдача покупки #{purchase_id} не выполнена. Смотрите лог/уведомление админа."
+            ),
+            business_connection_id,
+        )
+        return True
+
     if text == "/product_providers":
         async with SessionLocal() as session:
             rows = await list_product_providers(session)
@@ -2639,7 +2743,7 @@ async def process_admin_command(
         await answer_message(
             bot,
             message,
-            f"✅ Товар {row.internal_key} привязан к Proxyline.",
+            f"✅ Товар {row.internal_key} привязан к автопрокси.",
             business_connection_id,
         )
         return True
@@ -3161,6 +3265,68 @@ async def process_supplier_command(
         await send_supplier_pending_panel(bot, message, business_connection_id)
         return True
 
+    if text in {"🛍 Мои товары", "/supplier_products"}:
+        await send_supplier_role_panel(
+            bot,
+            message.chat.id,
+            await supplier_products_text(message.from_user.id),
+            reply_markup=supplier_inline_menu_keyboard(),
+            business_connection_id=business_connection_id,
+        )
+        return True
+
+    if text.startswith("/supplier_price"):
+        raw = text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else ""
+        await send_supplier_role_panel(
+            bot,
+            message.chat.id,
+            await set_supplier_product_price(message.from_user.id, raw),
+            reply_markup=supplier_inline_menu_keyboard(),
+            business_connection_id=business_connection_id,
+        )
+        return True
+
+    if text in {"💼 Баланс", "/wallet"}:
+        await send_supplier_role_panel(
+            bot,
+            message.chat.id,
+            await get_wallet_text(message.from_user.id),
+            reply_markup=supplier_inline_menu_keyboard(),
+            business_connection_id=business_connection_id,
+        )
+        return True
+
+    if text in {"↗️ Вывод", "/withdraw_help"}:
+        await send_supplier_role_panel(
+            bot,
+            message.chat.id,
+            "↗️ Вывод средств\n\nКомиссия вывода: 2.5 USDT.\nФормат: /withdraw СУММА USDT_АДРЕС\nПример: /withdraw 10 UQ...",
+            reply_markup=supplier_inline_menu_keyboard(),
+            business_connection_id=business_connection_id,
+        )
+        return True
+
+    if text.startswith("/withdraw") and not text.startswith("/withdraw_done"):
+        result = await create_withdrawal_request(message.from_user.id, text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else "")
+        await send_supplier_role_panel(
+            bot,
+            message.chat.id,
+            result,
+            reply_markup=supplier_inline_menu_keyboard(),
+            business_connection_id=business_connection_id,
+        )
+        return True
+
+    if text in {"📖 Помощь", "/supplier_help"}:
+        await send_supplier_role_panel(
+            bot,
+            message.chat.id,
+            "🚚 Панель поставщика\n\n• Мои заказы — покупки ваших товаров.\n• Мои товары — список и цена.\n• Цена товара: /supplier_price ID ЦЕНА [ВАЛЮТА].\n• Вывод: /withdraw СУММА АДРЕС.",
+            reply_markup=supplier_inline_menu_keyboard(),
+            business_connection_id=business_connection_id,
+        )
+        return True
+
     if text == "/profile" or text == "👤 Мой профиль":
         async with SessionLocal() as session:
             profile_text = await supplier_profile_text(
@@ -3260,6 +3426,42 @@ async def process_main_reply_button(
     user_id = message.from_user.id
     admin_access = await is_admin_user(user_id)
     is_business_context = bool(business_connection_id)
+
+    if admin_access and text in {"📦 Управление товарами", "💰 Управление товарами", "Управление товарами"}:
+        async with SessionLocal() as session:
+            categories, products = await admin_catalog_overview(session)
+        await answer_message(
+            bot,
+            message,
+            admin_catalog_text(categories, products),
+            business_connection_id,
+            reply_markup=admin_catalog_keyboard(categories, products),
+        )
+        return True
+
+    if admin_access and text in {"💳 Способы оплаты", "💳 Оплата", "Способы оплаты", "Оплата"}:
+        async with SessionLocal() as session:
+            text_value = await payments_text(session)
+        await answer_message(bot, message, text_value, business_connection_id, reply_markup=payments_keyboard())
+        return True
+
+    if admin_access and text in {"⚙️ Настройки", "Настройки", "⚙️ Админ меню"}:
+        await answer_message(bot, message, await main_settings_text(), business_connection_id, reply_markup=admin_hidden_keyboard())
+        return True
+
+    if admin_access and text in {"👁 Скрытые", "Скрытые"}:
+        await answer_message(bot, message, "👁 Скрытые действия администратора", business_connection_id, reply_markup=admin_hidden_keyboard())
+        return True
+
+    if text in {"🏠 Главное меню", "Главное меню", "🏠 Режим покупателя", "Режим покупателя"}:
+        await answer_message(
+            bot,
+            message,
+            await get_main_page_text(),
+            business_connection_id,
+            reply_markup=(buyer_inline_menu_keyboard(is_admin=admin_access) if is_business_context else buyer_main_reply_keyboard(is_admin=admin_access)),
+        )
+        return True
 
     if text in {"🛒 Товар", "🛒 Товары", "🛍 Каталог"}:
         async with SessionLocal() as session:
@@ -3367,10 +3569,7 @@ async def process_main_reply_button(
         await answer_message(
             bot,
             message,
-            "📕 FAQ\n\n"
-            "Как купить товар — откройте раздел «🛒 Товар».\n"
-            "Как купить прокси — откройте раздел «🌐 Прокси».\n"
-            "Как купить номер — откройте раздел «📱 Номера».",
+            await get_faq_page_text(),
             business_connection_id,
             reply_markup=(
                 buyer_inline_menu_keyboard(is_admin=admin_access)
@@ -3446,6 +3645,13 @@ async def process_main_reply_button(
             )
             return True
 
+        await answer_message(
+            bot,
+            message,
+            "🛠 Админ-панель открыта.",
+            business_connection_id,
+            reply_markup=admin_main_reply_keyboard(),
+        )
         await answer_message(
             bot,
             message,
@@ -3587,8 +3793,7 @@ async def process_command_message(
             await send_buyer_role_panel(
                 bot,
                 message.chat.id,
-                "🛍 Добро пожаловать в MCS Shop\n\n"
-                "Выберите нужный раздел кнопкой ниже.",
+                await get_main_page_text(),
                 reply_markup=buyer_inline_menu_keyboard(is_admin=admin_access),
                 business_connection_id=business_connection_id,
             )
@@ -3596,8 +3801,7 @@ async def process_command_message(
             await answer_message(
                 bot,
                 message,
-                "🛍 Добро пожаловать в MCS Shop\n\n"
-                "Выберите нужный раздел на панели ниже.",
+                await get_main_page_text(),
                 business_connection_id=None,
                 reply_markup=buyer_main_reply_keyboard(is_admin=admin_access),
             )
@@ -3732,16 +3936,16 @@ async def proxy_settings_text(session) -> tuple[str, object]:
     periods = ", ".join(f"{x} дней" for x in settings.periods)
     proxy_type = "Выделенные" if settings.proxy_type == "dedicated" else "Общие"
     text = (
-        "🌐 <b>Прокси / Proxyline</b>\n\n"
+        "🌐 Прокси\n\n"
         "Управление автовыдачей, странами, сроками и ценой.\n"
-        "Покупателю показывается финальная цена: <b>база × наценка</b>.\n\n"
+        "Покупателю показывается финальная цена: база × наценка.\n\n"
         f"Автовыдача: {'🟢 включена' if settings.enabled else '🔴 выключена'}\n"
         f"├ Страны — {countries}\n"
         f"├ Сроки — {periods}\n"
         f"├ Тип — {proxy_type}\n"
         f"├ Количество — {settings.count}\n"
         f"├ IP — IPv{settings.ip_version}\n"
-        f"└ Наценка — <b>{multiplier_label(markup)}</b>\n\n"
+        f"└ Наценка — {multiplier_label(markup)}\n\n"
         "Базовую цену меняйте через /proxy_price, коэффициент — через /proxy_markup."
     )
     return text, settings
@@ -3894,7 +4098,7 @@ async def process_proxyline_order(
                 await session.commit()
         await notify_admins(
             bot,
-            "Proxyline API не настроен. Добавь PROXYLINE_API_KEY и PROXYLINE_ENABLED=1 в Render Environment.\n\n"
+            "API автопрокси не настроен. Проверь ключ и включение в Render Environment.\n\n"
             f"Заказ: #{order_operation_id}\nТовар: {order_product_name}",
         )
         return False
@@ -3924,7 +4128,7 @@ async def process_proxyline_order(
                 await session.commit()
         await notify_admins(
             bot,
-            "Proxyline: ошибка автоматической покупки.\n\n"
+            "Ошибка автоматической покупки прокси.\n\n"
             f"Заказ: #{order_operation_id}\n"
             f"Товар: {order_product_name}\n"
             f"Ошибка: {exc}",
@@ -3961,7 +4165,7 @@ async def process_proxyline_order(
     if ok:
         await notify_admins(
             bot,
-            "✅ Proxyline заказ выдан автоматически.\n\n"
+            "✅ Прокси-заказ выдан автоматически.\n\n"
             f"Заказ: #{order_operation_id}\n"
             f"Товар: {order_product_name}\n"
             f"Покупатель: {target_chat_id}",
@@ -3975,7 +4179,7 @@ async def process_proxyline_order(
 
     await notify_admins(
         bot,
-        "Proxyline купил прокси, но не смог отправить покупателю.\n\n"
+        "Прокси куплен, но не удалось отправить покупателю.\n\n"
         f"Заказ: #{order_operation_id}\n"
         f"Товар: {order_product_name}\n"
         f"Покупатель: {target_chat_id}\n"
@@ -4066,9 +4270,9 @@ async def process_legacy_external_shop_message_disabled(
         await notify_admins(
             bot,
             (
-                "OK. Покупка Proxyline обработана. Покупателю предложен выбор страны и срока.\n\n"
+                "OK. Покупка прокси обработана. Покупателю предложен выбор страны и срока.\n\n"
                 if settings.enabled
-                else "Proxyline-магазин отключён в админ-панели. Заказ переведён в problem.\n\n"
+                else "Раздел автопрокси отключён в админ-панели. Заказ переведён в problem.\n\n"
             )
             + f"Заказ: #{order.operation_id}\n"
             + f"ID в базе: {order.id}\n"
@@ -4080,7 +4284,7 @@ async def process_legacy_external_shop_message_disabled(
             if not sent:
                 await notify_admins(
                     bot,
-                    "⚠️ Proxyline: не удалось открыть выбор в обычном боте.\n\n"
+                    "⚠️ Не удалось открыть выбор прокси в обычном боте.\n\n"
                     f"Заказ: #{order.operation_id}\n"
                     f"Покупатель ID: {order.customer_telegram_id}\n\n"
                     "Покупатель должен открыть обычный чат с ботом и нажать /start. "
@@ -4746,7 +4950,10 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
     text = (message.text or "").strip()
     business_connection_id = get_business_id(message) if is_business else None
 
-    await touch_user(user_id, username or None)
+    is_new_user = await touch_user(user_id, username or None)
+    if is_new_user:
+        full_name = " ".join(x for x in [getattr(sender, "first_name", None), getattr(sender, "last_name", None)] if x) or None
+        await notify_new_user(bot, user_id, username or None, full_name)
 
     logger.info(
         "HANDLED_TEXT is_business=%s from_id=%s username=%s is_bot=%s chat_id=%s business_id=%s text_len=%s",
@@ -4764,6 +4971,69 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
 
     if user_id == me.id:
         logger.info("IGNORED: own bot message")
+        return
+
+    if text in {"🚚 Я поставщик", "/supplier"}:
+        if await is_supplier_user(user_id):
+            await answer_message(bot, message, "🚚 Панель поставщика", business_connection_id, reply_markup=supplier_reply_keyboard())
+            await send_supplier_menu(bot, message.chat.id, supplier_main_panel_text(), business_connection_id)
+        else:
+            await answer_message(bot, message, "Вы пока не поставщик. Нажмите «🤝 Стать партнёром» и отправьте заявку на модерацию.", business_connection_id, reply_markup=buyer_inline_menu_keyboard(is_admin=await is_admin_user(user_id)))
+        return
+
+    if text in {"💼 Кошелёк", "/wallet"}:
+        await answer_message(bot, message, await get_wallet_text(user_id), business_connection_id, reply_markup=wallet_keyboard(is_supplier=await is_supplier_user(user_id)))
+        return
+
+    if text.lower().startswith(("@send ", "/send ", "/topup ")):
+        parts = text.split()
+        if len(parts) < 2:
+            await answer_message(bot, message, "Формат: @send 10 или /topup 10 USDT", business_connection_id)
+            return
+        try:
+            amount = parse_money(parts[1])
+            currency = parts[2].upper() if len(parts) > 2 else "USDT"
+            topup = await create_wallet_topup_invoice(user_id, username, amount, currency)
+            await answer_message(
+                bot,
+                message,
+                f"💼 Пополнение баланса\n\nСумма: {amount} {currency}\nПосле оплаты нажмите «Проверить пополнение».",
+                business_connection_id,
+                reply_markup=wallet_topup_invoice_keyboard(topup.invoice_url, topup.id),
+            )
+        except Exception as exc:
+            logger.exception("WALLET_TOPUP_CREATE_FAILED user_id=%s", user_id)
+            await answer_message(bot, message, f"Не удалось создать счёт: {exc}", business_connection_id)
+        return
+
+    if user_id in WALLET_TOPUP_WAIT and not text.startswith("/"):
+        WALLET_TOPUP_WAIT.discard(user_id)
+        if text.lower() in {"отмена", "cancel"}:
+            await answer_message(bot, message, "Пополнение отменено.", business_connection_id, reply_markup=wallet_keyboard(is_supplier=await is_supplier_user(user_id)))
+            return
+        parts = text.split()
+        try:
+            amount = parse_money(parts[0])
+            currency = parts[1].upper() if len(parts) > 1 else "USDT"
+            topup = await create_wallet_topup_invoice(user_id, username, amount, currency)
+            await answer_message(
+                bot,
+                message,
+                f"💼 Пополнение баланса\n\nСумма: {amount} {currency}\nПосле оплаты нажмите «Проверить пополнение».",
+                business_connection_id,
+                reply_markup=wallet_topup_invoice_keyboard(topup.invoice_url, topup.id),
+            )
+        except Exception as exc:
+            logger.exception("WALLET_TOPUP_CREATE_FAILED user_id=%s", user_id)
+            await answer_message(bot, message, f"Не удалось создать счёт: {exc}", business_connection_id, reply_markup=wallet_keyboard(is_supplier=await is_supplier_user(user_id)))
+        return
+
+    if text.startswith("/withdraw") and not text.startswith("/withdraw_done"):
+        if not await is_supplier_user(user_id):
+            await answer_message(bot, message, "Вывод доступен только поставщикам.", business_connection_id)
+            return
+        result = await create_withdrawal_request(user_id, text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else "")
+        await answer_message(bot, message, result, business_connection_id, reply_markup=wallet_keyboard(is_supplier=True))
         return
 
     if user_id in BUYER_CATALOG_SEARCH_WAIT and not text.startswith("/"):
@@ -4820,16 +5090,20 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         "🛒 Товар",
         "🛒 Товары",
         "🛍 Каталог",
-        "🌐 Прокси",
         "📱 Номера",
         "🛒 Корзина",
         "🧾 Мои заказы",
         "🤝 Стать партнёром",
         "✉️ Обратная связь",
         "📕 FAQ",
+        "📦 Управление товарами",
         "💰 Управление товарами",
         "💳 Оплата",
+        "💳 Способы оплаты",
+        "⚙️ Настройки",
         "📢 Рассылка",
+        "👁 Скрытые",
+        "🏠 Главное меню",
         "⚙️ Админ меню",
         "🛠 Админ",
     }
@@ -5126,13 +5400,24 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             CATALOG_V25_STATE.get(callback.from_user.id),
         )
         if state:
-            state["step"] = "price"
-            await update_or_send(
-                callback,
-                "Напишите цену товара в чат с ботом.",
-                reply_markup=price_back_keyboard(),
-            )
+            if state.get("action") == "category_create":
+                CATALOG_V25_STATE.pop(callback.from_user.id, None)
+                await update_or_send(callback, "Создание категории отменено.", reply_markup=admin_panel_keyboard())
+            else:
+                state["step"] = "price"
+                await update_or_send(
+                    callback,
+                    "Напишите цену товара в чат с ботом.",
+                    reply_markup=price_back_keyboard(),
+                )
         await callback.answer()
+        return True
+
+    if data == "v25:wizard:cancel":
+        CATALOG_V25_STATE.pop(callback.from_user.id, None)
+        SHOP_ADMIN_WAIT.pop(callback.from_user.id, None)
+        await update_or_send(callback, "Действие отменено.", reply_markup=admin_panel_keyboard())
+        await callback.answer("Отменено")
         return True
 
     if data.startswith("v25:product:"):
@@ -5285,7 +5570,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         kb = InlineKeyboardBuilder()
         for category in categories:
             kb.button(
-                text=f"{category.emoji} {category.name}",
+                text=f"{category.name}",
                 callback_data=f"v25:set_category:{product_id}:{category.id}",
             )
         kb.button(
@@ -5431,7 +5716,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         await update_or_send(
             callback,
             "✅ Способ выдачи сохранён.\n\n"
-            "Для Proxyline задайте provider_key JSON через команду:\n"
+            "Для автопрокси задайте provider_key JSON через команду:\n"
             f"/set_provider_key {product_id} {{JSON}}\n\n"
             "Для поставщика или номера provider_key должен содержать Telegram ID поставщика.",
             reply_markup=advanced_keyboard(product_id),
@@ -5564,17 +5849,14 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         category_id = int(data.rsplit(":", 1)[1])
         async with SessionLocal() as session:
             category = await session.get(ShopCategory, category_id)
-            count = int(
-                await session.scalar(
-                    select(func.count(ShopProduct.id)).where(
-                        ShopProduct.category_id == category_id
-                    )
-                )
-                or 0
-            )
+            products_in_category = list((await session.scalars(select(ShopProduct).where(ShopProduct.category_id == category_id, ShopProduct.is_deleted.is_(False)).order_by(ShopProduct.sort_order, ShopProduct.id))).all())
+            count = len(products_in_category)
+        text_value = category_card_text(category, count)
+        if products_in_category:
+            text_value += "\n\nТовары:\n" + "\n".join(f"• #{p.id} — {p.name} — {p.price} {p.currency}" for p in products_in_category[:25])
         await update_or_send(
             callback,
-            category_card_text(category, count),
+            text_value,
             reply_markup=category_card_keyboard(category.id, category.is_active),
         )
         await callback.answer()
@@ -6180,7 +6462,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             rows = await list_product_providers(session)
         if rows:
             text = "🔗 › Привязки товаров\n\n" + "\n".join(
-                f"{'✅' if row.enabled else '⛔'} {row.internal_key} — {row.product_name or 'Товар'} — {row.provider_type}"
+                f"{'✅' if row.enabled else '⛔'} {row.internal_key} — {row.product_name or 'Товар'}"
                 for row in rows
             )
         else:
@@ -6196,7 +6478,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             "🔗 › Привязка товара\n\n"
             "1. Выполните /products\n"
             "2. Скопируйте Product ID\n"
-            "3. Для Proxyline: /bind_proxyline PRODUCT_ID\n"
+            "3. Для автопрокси: /bind_proxyline PRODUCT_ID\n"
             "4. Для поставщика: /bind_product_supplier PRODUCT_ID TELEGRAM_ID\n"
             "5. Отвязать: /unbind_product PRODUCT_ID"
         )
@@ -6211,14 +6493,14 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             markup = await get_proxy_markup_multiplier(session)
             settings = await get_proxy_shop_settings(session)
         text = (
-            "💹 <b>Наценка прокси</b>\n\n"
+            "💹 Наценка прокси\n\n"
             "Финальная цена для покупателя считается так:\n"
-            "<b>базовая цена товара × коэффициент наценки</b>.\n\n"
-            f"Сейчас: <b>{multiplier_label(markup)}</b>\n\n"
+            "базовая цена товара × коэффициент наценки.\n\n"
+            f"Сейчас: {multiplier_label(markup)}\n\n"
             "Команды:\n"
             "├ /proxy_markup 1.77 — изменить коэффициент\n"
-            "├ /proxy_price 100 RUB — изменить базовую цену всех Proxyline-товаров\n"
-            "└ /proxy_autofix 100 RUB — создать/обновить Proxyline-товары"
+            "├ /proxy_price 100 RUB — изменить базовую цену прокси-товаров\n"
+            "└ /proxy_autofix 100 RUB — создать/обновить прокси-товары"
         )
         await update_or_send(callback, text, reply_markup=admin_proxy_settings_keyboard(settings))
         await callback.answer()
@@ -6619,25 +6901,34 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
     # Clean section navigation.
     if data == "admin:panel":
+        try:
+            await bot.send_message(callback.message.chat.id, "🛠 Админ-панель", reply_markup=admin_main_reply_keyboard())
+        except Exception:
+            pass
         await update_or_send(
             callback, admin_panel_text(), reply_markup=admin_panel_keyboard()
         )
         await callback.answer()
         return True
 
+    if data == "admin:withdrawals":
+        await update_or_send(callback, await admin_withdrawals_text(), reply_markup=admin_hidden_keyboard())
+        await callback.answer()
+        return True
+
     if data == "admin:hidden":
         text = (
-            "🕶 <b>Скрытые действия администратора</b>\n\n"
-            "Эти кнопки видны только после входа в админ-панель и не появляются у покупателя.\n\n"
-            "Быстрые команды:\n"
-            "├ /proxy_autofix 100 RUB — создать Proxyline-товары\n"
-            "├ /proxy_markup 1.77 — наценка прокси\n"
-            "├ /proxy_price 100 RUB — базовая цена прокси\n"
-            "├ /stats_full — полная статистика\n"
-            "├ /top_buyers week|month|all — топ покупателей\n"
-            "└ /v37_help — все команды"
+            "▫️ Скрытые действия администратора\n\n"
+            "Здесь только служебные разделы. Покупательские кнопки скрыты.\n\n"
+            "Команды:\n"
+            "• /proxy_autofix 100 RUB — создать/обновить прокси-товары\n"
+            "• /proxy_markup 1.77 — наценка прокси\n"
+            "• /proxy_price 100 RUB — базовая цена прокси\n"
+            "• /hide_proxy_category — убрать системную категорию из каталога\n"
+            "• /stats_full — полная статистика\n"
+            "• /top_buyers week|month|all — топ покупателей"
         )
-        await update_or_send(callback, text, reply_markup=admin_panel_keyboard())
+        await update_or_send(callback, text, reply_markup=admin_hidden_keyboard())
         await callback.answer()
         return True
 
@@ -6667,6 +6958,16 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             "⚙️ Настройки магазина\n\nВыберите нужный раздел.",
             reply_markup=store_settings_keyboard(),
         )
+        await callback.answer()
+        return True
+
+    if data == "admin:main_settings":
+        await update_or_send(callback, await main_settings_text(), reply_markup=admin_hidden_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "admin:number_settings":
+        await update_or_send(callback, await number_services_text(), reply_markup=admin_hidden_keyboard())
         await callback.answer()
         return True
 
@@ -6912,9 +7213,23 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data == "admin:panel":
+        try:
+            await bot.send_message(callback.message.chat.id, "🛠 Админ-панель", reply_markup=admin_main_reply_keyboard())
+        except Exception:
+            pass
         await update_or_send(
             callback, admin_panel_text(), reply_markup=admin_panel_keyboard()
         )
+        await callback.answer()
+        return True
+
+    if data == "admin:main_settings":
+        await update_or_send(callback, await main_settings_text(), reply_markup=admin_hidden_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "admin:number_settings":
+        await update_or_send(callback, await number_services_text(), reply_markup=admin_hidden_keyboard())
         await callback.answer()
         return True
 
@@ -7009,11 +7324,51 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
     data = callback.data or ""
 
     if data == "supplier:panel":
+        try:
+            await bot.send_message(callback.message.chat.id, "🚚 Панель поставщика", reply_markup=supplier_reply_keyboard())
+        except Exception:
+            pass
         await update_or_send(
             callback,
             supplier_main_panel_text(),
             reply_markup=supplier_inline_menu_keyboard(),
         )
+        await callback.answer()
+        return True
+
+    if data == "supplier:my_orders":
+        await update_or_send(callback, await supplier_orders_text(callback.from_user.id), reply_markup=supplier_inline_menu_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "supplier:products":
+        await update_or_send(callback, await supplier_products_text(callback.from_user.id), reply_markup=supplier_inline_menu_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "supplier:price_help":
+        await update_or_send(
+            callback,
+            "🛍 Товары поставщика\n\nЧтобы изменить цену своего товара:\n/supplier_price ID ЦЕНА [ВАЛЮТА]\n\nПример:\n/supplier_price 12 4.50 USD",
+            reply_markup=supplier_inline_menu_keyboard(),
+        )
+        await callback.answer()
+        return True
+
+    if data == "supplier:wallet":
+        await update_or_send(callback, await get_wallet_text(callback.from_user.id), reply_markup=supplier_inline_menu_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "supplier:withdraw_help":
+        withdraw_text = (
+            "↗️ Вывод средств\n\n"
+            "Комиссия вывода: 2.5 USDT.\n"
+            "Напишите командой:\n/withdraw СУММА АДРЕС\n\n"
+            "Пример:\n/withdraw 10 UQ...\n\n"
+            "Если автовыплата CryptoBot включена, бот создаст чек автоматически."
+        )
+        await update_or_send(callback, withdraw_text, reply_markup=supplier_inline_menu_keyboard())
         await callback.answer()
         return True
 
@@ -7338,9 +7693,13 @@ async def handle_buyer_callback(bot: Bot, callback: CallbackQuery) -> bool:
     if data == "buyer:panel":
         BUYER_CATALOG_SEARCH_WAIT.discard(callback.from_user.id)
         admin_access = await is_admin_user(callback.from_user.id)
+        try:
+            await bot.send_message(callback.message.chat.id, "🏠 Режим покупателя", reply_markup=buyer_main_reply_keyboard(is_admin=admin_access))
+        except Exception:
+            pass
         await update_or_send(
             callback,
-            buyer_main_panel_text(),
+            await get_main_page_text(),
             reply_markup=buyer_inline_menu_keyboard(is_admin=admin_access),
         )
         await callback.answer()
@@ -7362,6 +7721,11 @@ async def handle_buyer_callback(bot: Bot, callback: CallbackQuery) -> bool:
         async with SessionLocal() as session:
             text = await buyer_profile_text(session, user_id, username)
         await update_or_send(callback, text, reply_markup=buyer_back_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "buyer:wallet":
+        await update_or_send(callback, await get_wallet_text(user_id), reply_markup=wallet_keyboard(is_supplier=await is_supplier_user(user_id)))
         await callback.answer()
         return True
 
@@ -7465,7 +7829,7 @@ async def handle_proxy_callback(bot: Bot, callback: CallbackQuery) -> bool:
             provider and provider.enabled and provider.provider_type == "proxyline"
         )
         if not is_explicit_proxy and not is_proxyline_product(order.product_name):
-            await callback.answer("Этот товар не привязан к Proxyline", show_alert=True)
+            await callback.answer("Этот товар не привязан к автопрокси", show_alert=True)
             return True
         if not settings.enabled:
             await callback.answer(
@@ -7530,7 +7894,7 @@ async def handle_proxy_callback(bot: Bot, callback: CallbackQuery) -> bool:
                 f"├ Тип — {proxy_type}\n"
                 f"├ Количество — {settings.count}\n"
                 f"└ Версия IP — IPv{settings.ip_version}\n\n"
-                "После подтверждения бот купит прокси через Proxyline API и выдаст его в этом чате."
+                "После подтверждения бот купит прокси автоматически и выдаст его в этом чате."
             )
             await update_or_send(
                 callback, text, reply_markup=buyer_proxy_confirm_keyboard(order.id)
@@ -7592,7 +7956,7 @@ async def handle_proxy_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
     await update_or_send(
         callback,
-        "⏳ › Покупка прокси\n\nЗапрос отправлен в Proxyline. Не нажимайте кнопку повторно.",
+        "⏳ › Покупка прокси\n\nЗапрос отправлен. Не нажимайте кнопку повторно.",
         reply_markup=buyer_back_keyboard(),
     )
     await callback.answer("Покупаю прокси…")
@@ -7627,9 +7991,21 @@ async def check_button_cooldown(callback: CallbackQuery, action: str) -> bool:
 async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
     data = callback.data or ""
 
-    # Админы и поставщики работают без cooldown на inline-кнопках.
-    # Для покупателя защита от случайного многократного нажатия сохраняется.
-    if data and not data.startswith(("admin:", "supplier:")):
+    # Админы и поставщики работают без cooldown.
+    # Для покупателей оставляем защиту только на рискованных действиях: проверка оплаты,
+    # подтверждение/повторная выдача и оформление заказа. Навигация работает без задержек.
+    cooldown_prefixes = (
+        "payment:check",
+        "wallet:check",
+        "buyer:checkout",
+        "buyer:pxbuy",
+        "proxy:confirm",
+        "confirm_success",
+        "code_sent",
+        "number_invalid",
+        "code_invalid",
+    )
+    if data and data.startswith(cooldown_prefixes):
         if not await check_button_cooldown(callback, data.split(":")[0]):
             return
 
@@ -7645,6 +8021,55 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         )
         if handled:
             return
+
+    if data == "wallet:topup_help":
+        await update_or_send(
+            callback,
+            "💼 Пополнение баланса\n\nВыберите сумму или нажмите «Своя сумма». Также можно написать в чат: @send 10",
+            reply_markup=wallet_topup_amounts_keyboard(),
+        )
+        await callback.answer()
+        return
+
+    if data == "wallet:topup_custom":
+        if callback.from_user:
+            WALLET_TOPUP_WAIT.add(callback.from_user.id)
+        await update_or_send(callback, "Введите сумму пополнения. Например: 10 или 10 USDT. Для отмены: отмена", reply_markup=wallet_keyboard(is_supplier=bool(callback.from_user and await is_supplier_user(callback.from_user.id))))
+        await callback.answer("Жду сумму")
+        return
+
+    if data.startswith("wallet:topup_quick:"):
+        if not callback.from_user:
+            await callback.answer()
+            return
+        try:
+            _, _, amount_raw, currency = data.split(":", 3)
+            amount = parse_money(amount_raw)
+            topup = await create_wallet_topup_invoice(callback.from_user.id, callback.from_user.username, amount, currency)
+            await update_or_send(
+                callback,
+                f"💼 Пополнение баланса\n\nСумма: {amount} {currency}\nПосле оплаты нажмите «Проверить пополнение».",
+                reply_markup=wallet_topup_invoice_keyboard(topup.invoice_url, topup.id),
+            )
+        except Exception as exc:
+            logger.exception("WALLET_TOPUP_QUICK_FAILED user_id=%s", callback.from_user.id)
+            await update_or_send(callback, f"Не удалось создать счёт: {exc}", reply_markup=wallet_keyboard(is_supplier=await is_supplier_user(callback.from_user.id)))
+        await callback.answer()
+        return
+
+    if data.startswith("wallet_topup:check:"):
+        if not callback.from_user:
+            await callback.answer()
+            return
+        try:
+            topup_id = int(data.split(":")[2])
+            result = await check_wallet_topup(bot, topup_id, callback.from_user.id)
+        except Exception as exc:
+            logger.exception("WALLET_TOPUP_CHECK_FAILED user_id=%s data=%s", callback.from_user.id, data)
+            result = f"Не удалось проверить пополнение: {exc}"
+        await update_or_send(callback, result, reply_markup=wallet_keyboard(is_supplier=await is_supplier_user(callback.from_user.id)))
+        await callback.answer()
+        return
 
     if data.startswith("proxy:"):
         handled = await handle_proxy_callback(bot, callback)
@@ -8061,9 +8486,16 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
 
         products = sort_products(products, display_settings.sort_mode)
         category_photo = category.photo_file_id or category_asset(category.name)
+        preview_lines = []
+        for row in products[:10]:
+            price = f" — {row.price} {row.currency}" if row.price is not None else ""
+            preview_lines.append(f"• {row.name}{price}")
+        category_text = category_caption(category)
+        if preview_lines:
+            category_text += "\n\nТовары в категории:\n" + "\n".join(preview_lines)
         await show_visual_card(
             callback,
-            category_caption(category),
+            category_text,
             reply_markup=products_keyboard(
                 products,
                 category_id,
@@ -8279,7 +8711,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
     if data == "buyer:faq":
         await update_or_send(
             callback,
-            "📕 FAQ\n\n├ Как купить — откройте категорию и карточку товара\n├ Где заказ — раздел «Мои заказы»\n└ Поддержка — раздел «Обратная связь»",
+            await get_faq_page_text(),
             reply_markup=buyer_back_to_panel_keyboard(),
         )
         await callback.answer()
@@ -8629,13 +9061,13 @@ logger.info("FIX_MARKER_FULL_VISUAL_SHOP_STYLE=v15 loaded")
 
 def admin_panel_text() -> str:
     return (
-        "🛠 <b>Панель администратора</b>\n"
-        "<i>Компактное меню V39</i>\n\n"
-        "Основные разделы вынесены наверх, а редкие действия спрятаны в «🕶 Скрытые».\n\n"
-        "🛒 Магазин — товары, категории, склад\n"
-        "🌐 Прокси — Proxyline, страны, сроки, наценка\n"
-        "💳 Оплата — платежи и проверки\n"
-        "📢 Рассылка — сообщение всем покупателям"
+        "🛠 Панель администратора\n"
+        "Компактное служебное меню.\n\n"
+        "Покупательские кнопки здесь скрыты. Для возврата нажмите «Главная».\n\n"
+        "▫️ Магазин — товары, категории, склад\n"
+        "▫️ Прокси — страны, сроки, наценка\n"
+        "▫️ Оплата — платежи и проверки\n"
+        "▫️ Рассылка — сообщение всем покупателям"
     )
 
 
@@ -8703,11 +9135,10 @@ def supplier_requests_panel_text() -> str:
 
 def buyer_main_panel_text() -> str:
     return (
-        "🛍 <b>MCS Shop</b>\n"
-        "<i>быстрый магазин с автовыдачей</i>\n\n"
+        "🛍 MCS Shop\n"
+        "Быстрый магазин с автовыдачей.\n\n"
         "Выберите нужный раздел ниже.\n\n"
         "🛒 Каталог — все товары\n"
-        "🌐 Прокси — страны, сроки, автовыдача\n"
         "📱 Номера — товары со склада / поставщики\n"
         "🧾 Заказы — история и статусы\n"
         "💬 Поддержка — вопрос администратору"

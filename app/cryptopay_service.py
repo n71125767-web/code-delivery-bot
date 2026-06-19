@@ -802,6 +802,13 @@ async def _validate_paid_invoice(
 
 async def process_paid_invoice(bot: Bot, invoice_data: dict[str, Any]) -> bool:
     invoice_id = int(invoice_data.get("invoice_id"))
+    try:
+        from app.v50_features import process_wallet_topup_paid
+        if await process_wallet_topup_paid(bot, invoice_data):
+            return True
+    except Exception:
+        logger.exception("WALLET_TOPUP_PROCESS_FAILED invoice_id=%s", invoice_id)
+        raise
     async with SessionLocal() as session:
         payment = await session.scalar(
             select(CryptoPayment).where(CryptoPayment.invoice_id == invoice_id)

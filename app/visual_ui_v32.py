@@ -27,7 +27,7 @@ def category_asset(name: str):
 
 def category_caption(category) -> str:
     description = (getattr(category, "description", None) or "").strip()
-    title = f"{category.emoji} {category.name}"
+    title = f"{category.name}"
     if description:
         return f"{title}\n\n{description}\n\nВыберите тариф или категорию из списка ниже 👇"
     return f"{title}\n\nВыберите тариф или категорию из списка ниже 👇"

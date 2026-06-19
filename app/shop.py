@@ -42,7 +42,7 @@ async def ensure_default_category(session) -> ShopCategory:
 
     row = ShopCategory(
         name="Все товары",
-        emoji="🛍",
+        emoji="",
         sort_order=0,
         is_active=True,
     )
@@ -415,8 +415,8 @@ def shop_main_text() -> str:
 def category_text(category: ShopCategory, count: int = 0) -> str:
     description = getattr(category, "description", None)
     if description:
-        return f"{category.emoji} {category.name}\n\n{description}"
-    return f"{category.emoji} {category.name}"
+        return f"{category.name}\n\n{description}"
+    return f"{category.name}"
 
 
 def product_text(product: ShopProduct, provider_type: str | None = None) -> str:
@@ -439,7 +439,7 @@ def shop_main_keyboard(categories) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for row in categories:
         kb.button(
-            text=f"{row.emoji} › {row.name}", callback_data=f"buyer:shopcat:{row.id}"
+            text=f"{row.name}", callback_data=f"buyer:shopcat:{row.id}"
         )
     kb.button(text="🛒 › Корзина", callback_data="buyer:cart")
     kb.button(text="🧾 › Мои заказы", callback_data="buyer:orders")
@@ -529,7 +529,7 @@ async def process_admin_shop_command(session, text: str) -> str | None:
     if cmd == "/shop_categories":
         rows = await list_categories(session)
         return "📚 Категории\n\n" + (
-            "\n".join(f"{x.id}. {x.emoji} {x.name}" for x in rows) or "Категорий нет"
+            "\n".join(f"{x.id}. {x.name}" for x in rows) or "Категорий нет"
         )
     if cmd == "/shop_add_category":
         if len(parts) < 2:
@@ -537,7 +537,7 @@ async def process_admin_shop_command(session, text: str) -> str | None:
         name = text.split(maxsplit=1)[1].strip()
         if await session.scalar(select(ShopCategory).where(ShopCategory.name == name)):
             return "Такая категория уже существует."
-        session.add(ShopCategory(name=name, emoji="📦", is_active=True))
+        session.add(ShopCategory(name=name, emoji="", is_active=True))
         await session.commit()
         return f"✅ Категория «{name}» добавлена."
     if cmd == "/shop_set_product":

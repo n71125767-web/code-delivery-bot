@@ -9,7 +9,7 @@ from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 
-from app.config import ADMIN_IDS, ADMIN_ALERT_CHAT_IDS, ADMIN_ALERT_CHAT_ID
+from app.config import ADMIN_IDS, ADMIN_ALERT_CHAT_IDS, ADMIN_ALERT_CHAT_ID, WITHDRAWAL_FEE_USD, WITHDRAW_AUTO_CRYPTOBOT, WITHDRAW_PAYOUT_ASSET
 from app.database import SessionLocal
 from app.models import (
     CryptoPayment,
@@ -172,6 +172,30 @@ async def notify_purchase_and_credit_supplier(bot: Bot, purchase_id: int) -> Non
         await safe_send_message(bot, supplier_id, "💰 Купили ваш товар!\n\n" + text)
 
 
+def _obj_to_dict(obj: Any) -> dict[str, Any]:
+    if obj is None:
+        return {}
+    if isinstance(obj, dict):
+        return obj
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    if hasattr(obj, "dict"):
+        return obj.dict()
+    data: dict[str, Any] = {}
+    for name in dir(obj):
+        if name.startswith("_"):
+            continue
+        try:
+            value = getattr(obj, name)
+        except Exception:
+            continue
+        if callable(value):
+            continue
+        if isinstance(value, (str, int, float, bool, Decimal, type(None), datetime)):
+            data[name] = value
+    return data
+
+
 async def create_withdrawal_request(supplier_id: int, raw: str) -> str:
     parts = raw.split(maxsplit=2)
     if len(parts) < 2:
@@ -181,21 +205,92 @@ async def create_withdrawal_request(supplier_id: int, raw: str) -> str:
     except Exception:
         return "Сумма должна быть числом."
     address = parts[1].strip()
+    fee = money(WITHDRAWAL_FEE_USD)
     if amount <= 0:
         return "Сумма должна быть больше нуля."
+    if amount <= fee:
+        return f"Минимальная сумма должна быть больше комиссии вывода {fee} {WITHDRAW_PAYOUT_ASSET}."
+    net_amount = money(amount - fee)
     async with SessionLocal() as session:
         wallet = await session.get(UserWallet, supplier_id)
         if not wallet or money(wallet.balance) < amount:
             return f"Недостаточно средств. Баланс: {money(wallet.balance if wallet else 0)} {(wallet.currency if wallet else 'USD')}"
         wallet.balance = money(wallet.balance) - amount
         wallet.updated_at = datetime.utcnow()
-        wd = SupplierWithdrawal(supplier_id=supplier_id, amount=amount, currency=wallet.currency or "USD", payout_address=address, status="pending")
+        wd = SupplierWithdrawal(
+            supplier_id=supplier_id,
+            amount=amount,
+            currency=wallet.currency or WITHDRAW_PAYOUT_ASSET,
+            payout_address=address,
+            status="pending",
+        )
         session.add(wd)
         await session.flush()
-        session.add(WalletLedger(user_id=supplier_id, amount=-amount, currency=wallet.currency or "USD", event_type="withdraw_hold", source_type="withdrawal", source_id=wd.id, note=address))
+        session.add(WalletLedger(
+            user_id=supplier_id,
+            amount=-amount,
+            currency=wallet.currency or WITHDRAW_PAYOUT_ASSET,
+            event_type="withdraw_hold",
+            source_type="withdrawal",
+            source_id=wd.id,
+            note=f"{address}; fee={fee}; net={net_amount}",
+        ))
         await session.commit()
         await session.refresh(wd)
-    return f"✅ Заявка на вывод #{wd.id} создана. Администратор отправит выплату через CryptoBot и прикрепит ссылку."
+        withdrawal_id = wd.id
+
+    if WITHDRAW_AUTO_CRYPTOBOT:
+        try:
+            from app.cryptopay_service import crypto_client
+            try:
+                check = await crypto_client().create_check(
+                    asset=WITHDRAW_PAYOUT_ASSET,
+                    amount=float(net_amount),
+                    pin_to_user_id=supplier_id,
+                )
+            except TypeError:
+                check = await crypto_client().create_check(
+                    asset=WITHDRAW_PAYOUT_ASSET,
+                    amount=float(net_amount),
+                )
+            data = _obj_to_dict(check)
+            link = (
+                data.get("bot_check_url")
+                or data.get("check_url")
+                or data.get("url")
+                or getattr(check, "bot_check_url", None)
+            )
+            check_id = data.get("check_id") or data.get("id") or "—"
+            async with SessionLocal() as session:
+                wd = await session.get(SupplierWithdrawal, withdrawal_id)
+                if wd:
+                    wd.status = "paid"
+                    wd.payout_link = str(link or check_id)
+                    wd.updated_at = datetime.utcnow()
+                    await session.commit()
+            return (
+                f"✅ Вывод #{withdrawal_id} создан и отправлен через CryptoBot.\n"
+                f"Сумма: {amount} {WITHDRAW_PAYOUT_ASSET}\n"
+                f"Комиссия: {fee} {WITHDRAW_PAYOUT_ASSET}\n"
+                f"К выплате: {net_amount} {WITHDRAW_PAYOUT_ASSET}\n"
+                f"Ссылка: {link or check_id}"
+            )
+        except Exception:
+            return (
+                f"✅ Заявка на вывод #{withdrawal_id} создана.\n"
+                f"Сумма: {amount} {WITHDRAW_PAYOUT_ASSET}\n"
+                f"Комиссия: {fee} {WITHDRAW_PAYOUT_ASSET}\n"
+                f"К выплате: {net_amount} {WITHDRAW_PAYOUT_ASSET}\n\n"
+                "Автовыплата не прошла. Администратор отправит выплату вручную."
+            )
+
+    return (
+        f"✅ Заявка на вывод #{withdrawal_id} создана.\n"
+        f"Сумма: {amount} {WITHDRAW_PAYOUT_ASSET}\n"
+        f"Комиссия: {fee} {WITHDRAW_PAYOUT_ASSET}\n"
+        f"К выплате: {net_amount} {WITHDRAW_PAYOUT_ASSET}\n\n"
+        "Администратор отправит выплату через CryptoBot и прикрепит ссылку."
+    )
 
 
 async def admin_withdrawals_text() -> str:

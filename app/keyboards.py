@@ -845,7 +845,7 @@ def admin_category_select_keyboard(categories) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for row in categories:
         kb.button(
-            text=f"{row.emoji} {row.name}",
+            text=f"{row.name}",
             callback_data=f"admin:shop:wizard_category:{row.id}",
         )
     kb.button(
@@ -906,5 +906,123 @@ def supplier_selected_request_keyboard(
         style="danger",
     )
     kb.button(text="⬅️ К заявкам", callback_data="supplier:pending:0", style="danger")
+    kb.adjust(1)
+    return kb.as_markup()
+
+# V50 final UI overrides: role-separated reply panels, cleaner categories, no auto-emojis.
+def admin_main_reply_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text="📦 Управление товарами")],
+        [KeyboardButton(text="💳 Способы оплаты"), KeyboardButton(text="⚙️ Настройки")],
+        [KeyboardButton(text="📢 Рассылка"), KeyboardButton(text="👁 Скрытые")],
+        [KeyboardButton(text="🏠 Главное меню")],
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="Админ-панель",
+        selective=True,
+    )
+
+
+def supplier_reply_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text="📦 Мои заказы"), KeyboardButton(text="🛍 Мои товары")],
+        [KeyboardButton(text="💼 Баланс"), KeyboardButton(text="↗️ Вывод")],
+        [KeyboardButton(text="📖 Помощь"), KeyboardButton(text="🏠 Режим покупателя")],
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="Панель поставщика",
+        selective=True,
+    )
+
+
+def admin_panel_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📦 Управление товарами", callback_data="v25:catalog")
+    kb.button(text="💳 Способы оплаты", callback_data="admin:payments")
+    kb.button(text="⚙️ Настройки", callback_data="admin:main_settings")
+    kb.button(text="📢 Рассылка", callback_data="admin:broadcast")
+    kb.button(text="👥 Админы", callback_data="admin:admins")
+    kb.button(text="🧩 Прокси", callback_data="admin:proxy")
+    kb.button(text="👁 Скрытые", callback_data="admin:hidden")
+    kb.button(text="🏠 Главное меню", callback_data="buyer:panel")
+    kb.adjust(1, 2, 2, 2, 1)
+    return kb.as_markup()
+
+
+def admin_hidden_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🔗 Привязки прокси", callback_data="admin:proxy:products")
+    kb.button(text="📈 Наценка прокси", callback_data="admin:proxy:markup_help")
+    kb.button(text="🌍 Страны", callback_data="admin:proxy:countries")
+    kb.button(text="📱 Сервисы номеров", callback_data="admin:number_settings")
+    kb.button(text="🤝 Заявки партнёров", callback_data="market:admin:list")
+    kb.button(text="↗️ Выводы", callback_data="admin:withdrawals")
+    kb.button(text="📊 Статистика", callback_data="admin:status")
+    kb.button(text="⬅️ Назад", callback_data="admin:panel")
+    kb.adjust(2, 2, 2, 1, 1)
+    return kb.as_markup()
+
+
+def supplier_inline_menu_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📦 Мои заказы", callback_data="supplier:my_orders")
+    kb.button(text="🛍 Мои товары", callback_data="supplier:products")
+    kb.button(text="💼 Баланс", callback_data="supplier:wallet")
+    kb.button(text="↗️ Вывод", callback_data="supplier:withdraw_help")
+    kb.button(text="📝 Заявки в работе", callback_data="supplier:requests")
+    kb.button(text="📖 Помощь", callback_data="supplier:price_help")
+    kb.button(text="🏠 Режим покупателя", callback_data="buyer:panel")
+    kb.adjust(2, 2, 1, 1, 1)
+    return kb.as_markup()
+
+
+def buyer_inline_menu_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🛍 Каталог", callback_data="buyer:shop")
+    kb.button(text="🛒 Корзина", callback_data="buyer:cart")
+    kb.button(text="📱 Номера", callback_data="buyer:number_catalog")
+    kb.button(text="🧾 Заказы", callback_data="buyer:orders")
+    kb.button(text="💼 Кошелёк", callback_data="buyer:wallet")
+    kb.button(text="🤝 Стать партнёром", callback_data="buyer:partner")
+    kb.button(text="🚚 Я поставщик", callback_data="supplier:panel")
+    kb.button(text="💬 Поддержка", callback_data="buyer:feedback")
+    kb.button(text="📕 FAQ", callback_data="buyer:faq")
+    if is_admin:
+        kb.button(text="🛠 Админ", callback_data="admin:panel")
+    kb.adjust(2, 2, 2, 2, 1, 1)
+    return kb.as_markup()
+
+
+def buyer_main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text="🛍 Каталог"), KeyboardButton(text="🛒 Корзина")],
+        [KeyboardButton(text="📱 Номера"), KeyboardButton(text="🧾 Мои заказы")],
+        [KeyboardButton(text="💼 Кошелёк"), KeyboardButton(text="🚚 Я поставщик")],
+        [KeyboardButton(text="🤝 Стать партнёром")],
+        [KeyboardButton(text="✉️ Обратная связь"), KeyboardButton(text="📕 FAQ")],
+    ]
+    if is_admin:
+        rows.append([KeyboardButton(text="🛠 Админ")])
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="Выберите раздел",
+        selective=True,
+    )
+
+
+def admin_category_select_keyboard(categories) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for row in categories:
+        kb.button(text=f"{row.name}", callback_data=f"admin:shop:wizard_category:{row.id}")
+    kb.button(text="➕ Новая категория", callback_data="admin:shop:add_category")
+    kb.button(text="❌ Отмена", callback_data="admin:shop:wizard_cancel")
     kb.adjust(1)
     return kb.as_markup()

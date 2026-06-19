@@ -65,7 +65,7 @@ def customer_home_keyboard(
             continue
         visible.append(row)
         kb.button(
-            text=f"{row.emoji} {row.name}",
+            text=f"{row.name}",
             callback_data=f"buyer:shopcat:{row.id}:0",
         )
 
@@ -85,8 +85,8 @@ def category_customer_text(
     category, product_count: int, subcategory_count: int = 0
 ) -> str:
     if category.description:
-        return f"{category.emoji} {category.name}\n\n{category.description}\n\nВыберите товар 👇"
-    return f"{category.emoji} {category.name}\n\nВыберите товар 👇"
+        return f"{category.name}\n\n{category.description}\n\nВыберите товар 👇"
+    return f"{category.name}\n\nВыберите товар 👇"
 
 
 def admin_shop_text() -> str:
@@ -111,7 +111,7 @@ def admin_shop_keyboard() -> InlineKeyboardMarkup:
 def admin_categories_text(rows) -> str:
     return "Список ваших категорий и товаров:\n\n" + (
         "\n".join(
-            f"{'(скрыто) ' if not row.is_active else ''}{row.emoji} {row.name}"
+            f"{'(скрыто) ' if not row.is_active else ''}{row.name}"
             for row in rows
         )
         or "Категорий пока нет."
@@ -121,7 +121,7 @@ def admin_categories_text(rows) -> str:
 def admin_categories_keyboard(rows) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for row in rows:
-        prefix = "🙈" if not row.is_active else row.emoji
+        prefix = "🙈" if not row.is_active else "▫️"
         kb.button(
             text=f"{prefix} {row.name}", callback_data=f"admin:shop:category:{row.id}"
         )
@@ -135,7 +135,7 @@ def admin_categories_keyboard(rows) -> InlineKeyboardMarkup:
 
 def admin_category_text(category, product_count: int) -> str:
     return (
-        f"🏷 Категория: {category.emoji} {category.name}\n\n"
+        f"🏷 Категория: {category.name}\n\n"
         "📝 Описание:\n"
         f"{getattr(category, 'description', None) or 'Не установлено'}\n\n"
         "📦 Содержимое категории:\n"
@@ -302,11 +302,8 @@ async def delete_product(session, product_id: int):
 
 async def create_category(session, raw: str):
     raw = raw.strip()
-    emoji, name = "📦", raw
-    parts = raw.split(maxsplit=1)
-    if len(parts) == 2 and len(parts[0]) <= 4:
-        emoji, name = parts[0], parts[1]
-    row = ShopCategory(name=name[:120], emoji=emoji[:20], is_active=True)
+    name = raw
+    row = ShopCategory(name=name[:120], emoji="", is_active=True)
     session.add(row)
     await session.commit()
     await session.refresh(row)

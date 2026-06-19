@@ -107,7 +107,7 @@ async def _get_or_create_market_category(session: AsyncSession, name: str = "М�
     category = await session.scalar(select(ShopCategory).where(ShopCategory.name == name))
     if category:
         return category
-    category = ShopCategory(name=name, emoji="🛍", description="Товары от продавцов после модерации", is_active=True)
+    category = ShopCategory(name=name, emoji="", description="Товары от продавцов после модерации", is_active=True)
     session.add(category)
     await session.flush()
     return category
@@ -361,10 +361,10 @@ async def _create_stock_items(session: AsyncSession, product_id: int, text: str,
 
 
 PROXY_AUTOFIX_PRODUCTS = [
-    ("mtproxy", "🧩 Telegram-прокси", "Telegram-совместимый прокси с автовыдачей через Proxyline API", "proxyline", PROXYLINE_MTPROXY_API_TYPE),
-    ("premium", "💎 Премиум прокси", "Премиум-прокси с автовыдачей через Proxyline", "proxyline", "dedicated"),
-    ("standard", "📦 Стандартные прокси", "Стандартные прокси с автовыдачей через Proxys", "proxys", "shared"),
-    ("residential", "🏠 Резидентские прокси", "Резидентские прокси с автовыдачей через Proxys", "proxys", "residential"),
+    ("mtproxy", "Telegram-прокси", "Telegram-совместимый прокси с автовыдачей", "proxyline", PROXYLINE_MTPROXY_API_TYPE),
+    ("premium", "Премиум прокси", "Премиум-прокси с автовыдачей", "proxyline", "dedicated"),
+    ("standard", "Стандартные прокси", "Стандартные прокси с автовыдачей", "proxys", "shared"),
+    ("residential", "Резидентские прокси", "Резидентские прокси с автовыдачей", "proxys", "residential"),
 ]
 
 

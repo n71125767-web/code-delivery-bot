@@ -626,3 +626,21 @@ class SupplierWithdrawal(Base):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class WalletTopup(Base):
+    __tablename__ = "wallet_topups"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    amount: Mapped[float] = mapped_column(Numeric(24, 8))
+    currency: Mapped[str] = mapped_column(String(10), default="USDT")
+    invoice_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, unique=True, index=True)
+    invoice_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="creating", index=True)
+    payload: Mapped[str] = mapped_column(Text)
+    raw_response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

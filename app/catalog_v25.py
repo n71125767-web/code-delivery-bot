@@ -79,8 +79,11 @@ def admin_catalog_text(categories, products) -> str:
 
     for category in categories:
         hidden = " (скрыто)" if not category.is_active else ""
-        count = len([p for p in products if p.category_id == category.id])
-        lines.append(f"\n{category.emoji} {category.name} ({count}){hidden}")
+        cat_products = [p for p in products if p.category_id == category.id]
+        lines.append(f"\n{category.name} ({len(cat_products)}){hidden}")
+        for product in cat_products[:8]:
+            price = f"{product.price} {product.currency}" if getattr(product, "price", None) is not None else "без цены"
+            lines.append(f"  • #{product.id} — {product.name} — {price}")
 
     uncategorized = [p for p in products if not p.category_id]
     if uncategorized:
@@ -92,7 +95,7 @@ def admin_catalog_keyboard(categories, products) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for category in categories:
         count = len([p for p in products if p.category_id == category.id])
-        prefix = "🙈" if not category.is_active else category.emoji
+        prefix = "🙈" if not category.is_active else "▫️"
         kb.button(
             text=f"{prefix} {category.name} ({count})",
             callback_data=f"v25:category:{category.id}",
@@ -139,7 +142,10 @@ def price_back_keyboard() -> InlineKeyboardMarkup:
 
 def content_back_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ Назад", callback_data="v25:wizard:back_price", style="danger")
+    kb.button(text="⬅️ Назад", callback_data="v25:wizard:back_price")
+    kb.button(text="❌ Отмена", callback_data="v25:wizard:cancel")
+    kb.button(text="🏠 Главное меню", callback_data="buyer:panel")
+    kb.adjust(1)
     return kb.as_markup()
 
 
@@ -282,7 +288,7 @@ def delete_confirm_keyboard(product_id: int) -> InlineKeyboardMarkup:
 def category_card_text(category: ShopCategory, product_count: int) -> str:
     return (
         f"📁 КАТЕГОРИЯ #{category.id}\n\n"
-        f"Название: {category.emoji} {category.name}\n"
+        f"Название: {category.name}\n"
         f"Описание: {category.description or 'не задано'}\n"
         f"Товаров: {product_count}\n"
         f"Статус: {'показывается' if category.is_active else 'скрыта'}"
