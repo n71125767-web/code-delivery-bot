@@ -7,6 +7,8 @@ import time
 from decimal import Decimal
 from typing import Any
 
+from app.config import PROXYLINE_MTPROXY_API_TYPE
+
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -218,6 +220,11 @@ def build_provider_key(
         except Exception:
             pass
 
+    category = str(category_key or data.get("category") or data.get("proxy_kind") or "").lower()
+    proxy_type = str(data.get("type", data.get("proxy_type", "dedicated"))).lower()
+    if category == "mtproxy" and proxy_type not in {"dedicated", "shared"}:
+        proxy_type = PROXYLINE_MTPROXY_API_TYPE or "dedicated"
+
     data.update(
         {
             "country": country_code.lower(),
@@ -225,7 +232,7 @@ def build_provider_key(
             "months": months,
             "count": max(1, int(data.get("count", 1))),
             "ip_version": int(data.get("ip_version", 4)),
-            "type": str(data.get("type", data.get("proxy_type", "dedicated"))),
+            "type": proxy_type,
         }
     )
     if category_key:

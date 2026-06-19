@@ -4,13 +4,15 @@ import logging
 from datetime import datetime
 from decimal import Decimal
 from aiogram import Bot
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.config import (
     ADMIN_IDS,
     PROXYLINE_API_KEY,
     PROXYLINE_COUPON,
     PROXYLINE_ENABLED,
+    PROXYLINE_MTPROXY_MODE,
+    PROXYLINE_MTPROXY_API_TYPE,
     PROXYS_API_KEY,
     PROXYS_ENABLED,
 )
@@ -19,6 +21,7 @@ from app.models import (
     DigitalPurchase,
     Order,
     ProductProvider,
+    ProductStockItem,
     ShopProduct,
     Supplier,
     SupplierProduct,
@@ -70,14 +73,27 @@ def _proxy_cfg(
         try:
             raw = json.loads(provider_key)
             if isinstance(raw, dict):
+                raw_kind = str(
+                    raw.get("category")
+                    or raw.get("kind")
+                    or raw.get("proxy_kind")
+                    or ""
+                ).lower()
+                proxy_type = str(
+                    raw.get("type", raw.get("proxy_type", "dedicated"))
+                ).lower()
+                # Старые записи V45/V47 могли сохранить type=mtproxy.
+                # Публичный Proxyline new-order принимает dedicated/shared, поэтому
+                # для покупки через API переводим MTProxy/Telegram-тариф в dedicated
+                # или в значение из PROXYLINE_MTPROXY_API_TYPE.
+                if raw_kind == "mtproxy" and PROXYLINE_MTPROXY_MODE != "stock":
+                    proxy_type = PROXYLINE_MTPROXY_API_TYPE or "dedicated"
                 return ProxylineProduct(
                     country=str(raw.get("country", "ru")).lower(),
                     period=int(raw.get("period", 30)),
                     count=max(1, int(raw.get("count", raw.get("quantity", 1)))),
                     ip_version=int(raw.get("ip_version", 4)),
-                    proxy_type=str(
-                        raw.get("type", raw.get("proxy_type", "dedicated"))
-                    ).lower(),
+                    proxy_type=proxy_type,
                     coupon=raw.get("coupon"),
                 )
         except Exception:
@@ -85,10 +101,139 @@ def _proxy_cfg(
     return None
 
 
+
+def _proxy_kind_from_provider_key(provider_key: str | None, product: ShopProduct | None = None) -> str:
+    proxy_kind = ""
+    try:
+        raw_key = json.loads(provider_key or "{}")
+        if isinstance(raw_key, dict):
+            proxy_kind = str(
+                raw_key.get("category")
+                or raw_key.get("kind")
+                or raw_key.get("proxy_kind")
+                or raw_key.get("tariff")
+                or ""
+            ).lower()
+    except Exception:
+        proxy_kind = ""
+    if not proxy_kind and product is not None and product.note:
+        proxy_kind = str(product.note).replace("proxy_autofix:", "").lower()
+    return proxy_kind
+
+
+async def _reserve_mtproxy_stock(product_id: int, purchase_id: int) -> tuple[int, str] | None:
+    """Reserve one MTProxy stock line atomically.
+
+    Stock format accepted by the formatter:
+    ip:port:secret
+    tg://proxy?server=...&port=...&secret=...
+    IP: ...\nPort: ...\nSecret: ...
+    """
+    for _ in range(5):
+        async with SessionLocal() as session:
+            candidate_id = await session.scalar(
+                select(ProductStockItem.id)
+                .where(
+                    ProductStockItem.product_id == product_id,
+                    ProductStockItem.status == "available",
+                )
+                .order_by(ProductStockItem.id)
+                .limit(1)
+            )
+            if candidate_id is None:
+                return None
+            result = await session.execute(
+                update(ProductStockItem)
+                .where(
+                    ProductStockItem.id == candidate_id,
+                    ProductStockItem.status == "available",
+                )
+                .values(
+                    status="reserved",
+                    reserved_at=datetime.utcnow(),
+                    reserved_purchase_id=purchase_id,
+                )
+            )
+            if result.rowcount == 1:
+                stock = await session.get(ProductStockItem, candidate_id)
+                await session.commit()
+                if stock and stock.content_text:
+                    return stock.id, stock.content_text
+                return None
+            await session.rollback()
+    return None
+
+
+async def _fulfill_mtproxy_stock(bot: Bot, purchase: DigitalPurchase, product: ShopProduct) -> bool:
+    reserved = await _reserve_mtproxy_stock(product.id, purchase.id)
+    if reserved is None:
+        raise ProxylineError(
+            "MTProxy stock is empty. Upload real MTProxy lines with /mtproxy_stock_add PRODUCT_ID ip:port:secret"
+        )
+    stock_id, stock_text = reserved
+    proxy_text = format_mtproxy_result(stock_text)
+    if proxy_text.strip() == str(stock_text).strip():
+        # Formatter could not find ip/port/secret; do not deliver a broken item.
+        async with SessionLocal() as session:
+            stock = await session.get(ProductStockItem, stock_id)
+            if stock:
+                stock.status = "available"
+                stock.reserved_at = None
+                stock.reserved_purchase_id = None
+            row = await session.get(DigitalPurchase, purchase.id)
+            if row:
+                row.stock_item_id = None
+                row.updated_at = datetime.utcnow()
+            await session.commit()
+        raise ProxylineError(
+            "MTProxy stock line has invalid format. Use ip:port:secret or tg://proxy?..."
+        )
+
+    message = await bot.send_message(
+        purchase.buyer_id,
+        "✅ Ваш MTProxy готов\n\n"
+        + proxy_text
+        + "\n\nНажмите на ссылку подключения или вручную введите IP, порт и секретный ключ в Telegram.",
+    )
+    async with SessionLocal() as session:
+        row = await session.get(DigitalPurchase, purchase.id)
+        stock = await session.get(ProductStockItem, stock_id)
+        db_product = await session.get(ShopProduct, product.id)
+        if row:
+            row.status = "delivered"
+            row.stock_item_id = stock_id
+            row.delivered_at = datetime.utcnow()
+            row.delivery_message_id = message.message_id
+            row.delivery_error = None
+            row.active_key = None
+            row.updated_at = datetime.utcnow()
+        if stock:
+            stock.status = "delivered"
+            stock.delivered_to = purchase.buyer_id
+            stock.delivered_at = datetime.utcnow()
+            stock.reserved_at = None
+            stock.reserved_purchase_id = None
+        if db_product:
+            db_product.sales_count = int(db_product.sales_count or 0) + 1
+            db_product.revenue_total = Decimal(str(db_product.revenue_total or 0)) + Decimal(str(row.amount if row else purchase.amount))
+        await session.commit()
+    await notify_admins_simple(bot, f"✅ MTProxy purchase #{purchase.id} delivered from stock")
+    return True
+
+
 async def fulfill_proxyline(
     bot: Bot, purchase: DigitalPurchase, product: ShopProduct
 ) -> bool:
     cfg = _proxy_cfg(product, purchase.provider_key)
+    proxy_kind = _proxy_kind_from_provider_key(purchase.provider_key, product)
+
+    # MTProxy/Telegram-тариф может работать в двух режимах:
+    # stock — выдавать реальные MTProxy строки ip:port:secret из склада;
+    # api — покупать через Proxyline API. По умолчанию включён api, потому что
+    # пользователь хочет автоматическую покупку через Proxyline.
+    if proxy_kind == "mtproxy" and PROXYLINE_MTPROXY_MODE == "stock":
+        return await _fulfill_mtproxy_stock(bot, purchase, product)
+
     provider_name = "proxyline"
     try:
         if purchase.provider_key:
@@ -121,26 +266,19 @@ async def fulfill_proxyline(
             f"Not enough proxies: available={available}, required={cfg.count}"
         )
     payload = await service.buy_proxy(cfg)
-    proxy_kind = ""
-    try:
-        raw_key = json.loads(purchase.provider_key or "{}")
-        if isinstance(raw_key, dict):
-            proxy_kind = str(
-                raw_key.get("category")
-                or raw_key.get("kind")
-                or raw_key.get("proxy_kind")
-                or raw_key.get("tariff")
-                or ""
-            ).lower()
-    except Exception:
-        proxy_kind = ""
-    if not proxy_kind and product.note:
-        proxy_kind = str(product.note).replace("proxy_autofix:", "").lower()
-
     if proxy_kind == "mtproxy":
-        proxy_text = format_mtproxy_result(payload)
-        message_title = "✅ Ваш MTProxy готов"
-        message_footer = "Нажмите на ссылку подключения или вручную введите IP, порт и секретный ключ в Telegram."
+        # Если у провайдера/адаптера всё-таки вернулся настоящий MTProxy secret,
+        # покажем MTProxy-формат. Иначе выдаём обычный Proxyline HTTP/SOCKS формат.
+        mt_text = format_mtproxy_result(payload)
+        raw_text = str(payload)
+        if "Секретный ключ" in mt_text and mt_text.strip() != raw_text.strip():
+            proxy_text = mt_text
+            message_title = "✅ Ваш MTProxy готов"
+            message_footer = "Нажмите на ссылку подключения или введите данные вручную."
+        else:
+            proxy_text = format_proxyline_result(payload)
+            message_title = "✅ Ваш Telegram-прокси готов"
+            message_footer = "Proxyline выдал прокси в формате HTTP/SOCKS5. Сохраните данные подключения."
     else:
         proxy_text = format_proxyline_result(payload)
         message_title = "✅ Ваш прокси готов"

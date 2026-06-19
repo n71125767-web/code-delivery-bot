@@ -11,7 +11,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import ADMIN_ALERT_CHAT_IDS, GA_IDS, PROXYLINE_MTPROXY_TYPE
+from app.config import ADMIN_ALERT_CHAT_IDS, GA_IDS, PROXYLINE_MTPROXY_API_TYPE
 from app.database import SessionLocal
 from app.models import (
     AdminUser,
@@ -28,6 +28,8 @@ from app.models import (
     PromoRedemption,
     ShopCategory,
     ShopProduct,
+    Supplier,
+    SupplierProduct,
     WalletPayment,
 )
 from app.proxy_pricing_v39 import (
@@ -88,6 +90,17 @@ async def _next_internal_key(session: AsyncSession) -> int:
     current = await session.scalar(select(func.max(ShopProduct.internal_key)))
     base = int(current or 10_000)
     return max(base + 1, 10_001)
+
+
+async def _ensure_supplier_from_application(session: AsyncSession, app: MarketplaceApplication) -> Supplier:
+    supplier = await session.scalar(select(Supplier).where(Supplier.telegram_id == app.applicant_telegram_id))
+    if supplier is None:
+        supplier = Supplier(telegram_id=app.applicant_telegram_id, name=app.seller_name or app.applicant_username or f"supplier_{app.applicant_telegram_id}", is_active=True)
+        session.add(supplier)
+        await session.flush()
+    else:
+        supplier.is_active = True
+    return supplier
 
 
 async def _get_or_create_market_category(session: AsyncSession, name: str = "Маркетплейс") -> ShopCategory:
@@ -339,7 +352,7 @@ async def _create_stock_items(session: AsyncSession, product_id: int, text: str,
     for line in lines:
         session.add(ProductStockItem(product_id=product.id, content_type=content_type, content_text=line, status="available"))
     product.product_type = "quantity"
-    if product.fulfillment_type not in {"number", "proxy_stock"}:
+    if product.fulfillment_type not in {"number", "proxy_stock", "proxyline"}:
         product.fulfillment_type = "stock"
     product.payment_enabled = True
     product.updated_at = _now()
@@ -348,7 +361,7 @@ async def _create_stock_items(session: AsyncSession, product_id: int, text: str,
 
 
 PROXY_AUTOFIX_PRODUCTS = [
-    ("mtproxy", "🧩 MTProxy", "Прокси для Telegram/MTProxy", "proxyline", PROXYLINE_MTPROXY_TYPE),
+    ("mtproxy", "🧩 Telegram-прокси", "Telegram-совместимый прокси с автовыдачей через Proxyline API", "proxyline", PROXYLINE_MTPROXY_API_TYPE),
     ("premium", "💎 Премиум прокси", "Премиум-прокси с автовыдачей через Proxyline", "proxyline", "dedicated"),
     ("standard", "📦 Стандартные прокси", "Стандартные прокси с автовыдачей через Proxys", "proxys", "shared"),
     ("residential", "🏠 Резидентские прокси", "Резидентские прокси с автовыдачей через Proxys", "proxys", "residential"),
@@ -560,6 +573,7 @@ async def process_extended_command(
             "Маркетплейс: /market_applications, /market_approve ID [CATEGORY_ID], /market_reject ID причина\n"
             "Товары: /product_add Название | Цена | Валюта | CATEGORY_ID | Контент, /product_delete ID, /stock_add ID позиции\n"
             "Номера/прокси со склада: /number_stock_add ID позиции, /proxy_stock_add ID позиции\n"
+            "MTProxy: /mtproxy_stock_add PRODUCT_ID ip:port:secret — загрузить реальные MTProxy\n"
             "Прокси: /proxy_autofix 100 RUB, /proxy_markup 1.77, /proxy_price 100 RUB\n"
             "Промо: /promo_create CODE percent|fixed VALUE MAX_USES [YYYY-MM-DD] [PRODUCT_ID], /promos, /promo_disable CODE\n"
             "Статистика: /stats_full, /stats_product ID, /top_buyers week|month|all\n"
@@ -707,21 +721,26 @@ async def process_extended_command(
                 product_type="static",
                 fulfillment_type="digital",
                 content_type="text",
-                content_text="Товар одобрен маркетплейсом. Администратор должен настроить выдачу перед включением продаж.",
-                payment_enabled=False,
+                content_text=app.content_preview or app.description or "Выдача через поставщика после оплаты.",
+                payment_enabled=True,
                 is_active=False,
                 note=f"marketplace_application:{app.id}",
             )
             session.add(product)
             await session.flush()
+            supplier = await _ensure_supplier_from_application(session, app)
+            existing_link = await session.scalar(select(SupplierProduct).where(SupplierProduct.supplier_telegram_id == supplier.telegram_id, SupplierProduct.product_key == str(product.internal_key)))
+            if existing_link is None:
+                session.add(SupplierProduct(supplier_telegram_id=supplier.telegram_id, product_key=str(product.internal_key)))
+            session.add(ProductProvider(internal_key=product.internal_key, product_name=product.name, provider_type="supplier", provider_key=str(supplier.telegram_id), enabled=True))
             app.status = "approved"
             app.moderator_id = user_id
             app.product_id = product.id
             app.updated_at = _now()
             await session.commit()
             await session.refresh(product)
-        await answer_message(bot, message, f"✅ Заявка #{app_id} одобрена. Создан скрытый товар #{product.id}. Настройте выдачу и включите товар.", business_connection_id)
-        await safe_send_message(bot, app.applicant_telegram_id, f"✅ Ваша заявка #{app_id} одобрена. После настройки выдачи товар появится в маркете.")
+        await answer_message(bot, message, f"✅ Заявка #{app_id} одобрена. Создан товар #{product.id}, привязан к поставщику. Проверьте цену/описание и включите показ в каталоге.", business_connection_id)
+        await safe_send_message(bot, app.applicant_telegram_id, f"✅ Ваша заявка #{app_id} одобрена. Вы назначены поставщиком. Откройте «Я поставщик», чтобы смотреть заказы и баланс.")
         return True
 
     if command == "/market_reject":
@@ -915,10 +934,10 @@ async def process_extended_command(
         await answer_message(bot, message, "🗑 Товар удалён в архив.", business_connection_id)
         return True
 
-    if command in {"/stock_add", "/number_stock_add", "/proxy_stock_add"}:
+    if command in {"/stock_add", "/number_stock_add", "/proxy_stock_add", "/mtproxy_stock_add"}:
         parts = arg.split(maxsplit=1)
         if len(parts) != 2 or not parts[0].isdigit():
-            await answer_message(bot, message, f"Формат: {command} PRODUCT_ID позиции_каждая_с_новой_строки", business_connection_id)
+            await answer_message(bot, message, f"Формат: {command} PRODUCT_ID позиции_каждая_с_новой_строки\nДля MTProxy строка: ip:port:secret или tg://proxy?...", business_connection_id)
             return True
         product_id = int(parts[0])
         try:
@@ -932,6 +951,20 @@ async def process_extended_command(
                 elif command == "/proxy_stock_add":
                     product.fulfillment_type = "stock"
                     product.content_type = "text"
+                elif command == "/mtproxy_stock_add":
+                    product.fulfillment_type = "proxyline"
+                    product.product_type = "static"
+                    product.content_type = "text"
+                    product.payment_enabled = True
+                    product.is_active = True
+                    if not product.provider_key:
+                        product.provider_key = json.dumps(
+                            {"provider": "mtproxy_stock", "category": "mtproxy", "proxy_kind": "mtproxy", "type": "mtproxy", "count": 1, "ip_version": 4},
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                    if not product.note:
+                        product.note = "proxy_autofix:mtproxy"
                 count = await _create_stock_items(session, product_id, parts[1])
         except Exception as exc:
             await answer_message(bot, message, f"❌ {exc}", business_connection_id)
@@ -1020,13 +1053,18 @@ async def approve_marketplace_application(bot: Bot, app_id: int, moderator_id: i
             product_type="static",
             fulfillment_type="digital",
             content_type="text",
-            content_text="Товар одобрен маркетплейсом. Администратор должен настроить выдачу перед включением продаж.",
-            payment_enabled=False,
+            content_text=app.content_preview or app.description or "Выдача через поставщика после оплаты.",
+            payment_enabled=True,
             is_active=False,
             note=f"marketplace_application:{app.id}",
         )
         session.add(product)
         await session.flush()
+        supplier = await _ensure_supplier_from_application(session, app)
+        existing_link = await session.scalar(select(SupplierProduct).where(SupplierProduct.supplier_telegram_id == supplier.telegram_id, SupplierProduct.product_key == str(product.internal_key)))
+        if existing_link is None:
+            session.add(SupplierProduct(supplier_telegram_id=supplier.telegram_id, product_key=str(product.internal_key)))
+        session.add(ProductProvider(internal_key=product.internal_key, product_name=product.name, provider_type="supplier", provider_key=str(supplier.telegram_id), enabled=True))
         app.status = "approved"
         app.moderator_id = moderator_id
         app.product_id = product.id
@@ -1034,8 +1072,8 @@ async def approve_marketplace_application(bot: Bot, app_id: int, moderator_id: i
         await session.commit()
         await session.refresh(product)
         applicant_id = app.applicant_telegram_id
-    await safe_send_message(bot, applicant_id, f"✅ Ваша заявка #{app_id} одобрена. После настройки выдачи товар появится в маркете.")
-    return f"✅ Заявка #{app_id} одобрена. Создан скрытый товар #{product.id}. Настройте выдачу и включите товар."
+    await safe_send_message(bot, applicant_id, f"✅ Ваша заявка #{app_id} одобрена. Вы назначены поставщиком. Откройте «Я поставщик», чтобы смотреть заказы и баланс.")
+    return f"✅ Заявка #{app_id} одобрена. Создан товар #{product.id}, привязан к поставщику. Проверьте цену/описание и включите показ в каталоге."
 
 
 async def reject_marketplace_application(bot: Bot, app_id: int, moderator_id: int, reason: str) -> str:
@@ -1060,6 +1098,25 @@ async def handle_marketplace_callback(bot: Bot, callback: CallbackQuery, *, is_a
     if not is_admin or not callback.from_user:
         await callback.answer("Нет доступа.", show_alert=True)
         return True
+    if data == "market:admin:list":
+        async with SessionLocal() as session:
+            rows = list((await session.scalars(select(MarketplaceApplication).where(MarketplaceApplication.status == "pending").order_by(MarketplaceApplication.id.desc()).limit(20))).all())
+        if not rows:
+            text = "🤝 Заявок партнёров на модерации нет."
+            markup = None
+        else:
+            text = "🤝 Заявки партнёров на модерации\n\n" + "\n".join(f"#{r.id} — {r.title} — @{r.applicant_username or r.applicant_telegram_id}" for r in rows)
+            kb = InlineKeyboardBuilder()
+            for r in rows[:10]:
+                kb.button(text=f"✅ #{r.id}", callback_data=f"market:approve:{r.id}")
+                kb.button(text=f"❌ #{r.id}", callback_data=f"market:reject:{r.id}")
+            kb.adjust(2)
+            markup = kb.as_markup()
+        if callback.message:
+            await callback.message.edit_text(text, reply_markup=markup)
+        await callback.answer()
+        return True
+
     parts = data.split(":")
     if len(parts) != 3 or not parts[2].isdigit():
         await callback.answer("Некорректная заявка.", show_alert=True)

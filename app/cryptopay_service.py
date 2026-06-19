@@ -160,6 +160,24 @@ def _decimal(value: Any) -> Decimal:
     return Decimal(str(value))
 
 
+def _is_mtproxy_provider_key(provider_key: str | None) -> bool:
+    try:
+        raw = json.loads(provider_key or "{}")
+    except Exception:
+        return False
+    if not isinstance(raw, dict):
+        return False
+    markers = (
+        raw.get("category"),
+        raw.get("kind"),
+        raw.get("proxy_kind"),
+        raw.get("tariff"),
+        raw.get("type"),
+        raw.get("proxy_type"),
+    )
+    return any(str(value or "").strip().lower() == "mtproxy" for value in markers)
+
+
 def _payload_for(purchase_id: int, nonce: str) -> str:
     return json.dumps(
         {"purchase_id": purchase_id, "nonce": nonce, "version": 1},
@@ -349,6 +367,7 @@ async def create_purchase_invoice(
                         product.is_active = False
                         await session.commit()
                         raise PaymentValidationError("Товар закончился.")
+
 
                 base_amount = (
                     _decimal(amount_override)
@@ -850,6 +869,13 @@ async def process_paid_invoice(bot: Bot, invoice_data: dict[str, Any]) -> bool:
             purchase.paid_at = datetime.utcnow()
             purchase.updated_at = datetime.utcnow()
         await session.commit()
+        purchase_id_for_notify = payment.purchase_id
+
+    try:
+        from app.market_wallet_v49 import notify_purchase_and_credit_supplier
+        await notify_purchase_and_credit_supplier(bot, purchase_id_for_notify)
+    except Exception:
+        logger.exception("PURCHASE_NOTIFICATION_FAILED purchase_id=%s", purchase_id_for_notify)
 
     return await deliver_purchase(bot, payment.purchase_id)
 

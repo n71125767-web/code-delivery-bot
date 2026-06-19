@@ -372,6 +372,9 @@ def buyer_empty_section_keyboard(back_to: str = "buyer:panel") -> InlineKeyboard
 
 def supplier_inline_menu_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    kb.button(text="📦 Мои заказы", callback_data="supplier:my_orders")
+    kb.button(text="💼 Баланс", callback_data="supplier:wallet")
+    kb.button(text="↗️ Вывод средств", callback_data="supplier:withdraw_help")
     kb.button(text="📋 › Заявки", callback_data="supplier:requests")
     kb.button(text="⏳ › Ожидают", callback_data="supplier:pending:0")
     kb.button(text="📞 › Ждут номер", callback_data="supplier:filter:number:0")
@@ -771,6 +774,7 @@ def admin_hidden_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="▫️ Сроки", callback_data="admin:proxy:periods")
     kb.button(text="▫️ Статистика", callback_data="admin:status")
     kb.button(text="▫️ Заявки партнёров", callback_data="market:admin:list")
+    kb.button(text="▫️ Выводы поставщиков", callback_data="admin:withdrawals")
     kb.button(text="⬅️ Назад", callback_data="admin:panel")
     kb.button(text="🏠 Главная", callback_data="buyer:panel")
     kb.adjust(2, 2, 2, 1, 1)
@@ -783,14 +787,16 @@ def buyer_inline_menu_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
     kb.button(text="🛒 Корзина", callback_data="buyer:cart")
     kb.button(text="📱 Номера", callback_data="buyer:number_catalog")
     kb.button(text="🧾 Заказы", callback_data="buyer:orders")
-    kb.button(text="🤝 Партнёрство", callback_data="buyer:partner")
+    kb.button(text="💼 Кошелёк", callback_data="buyer:wallet")
+    kb.button(text="🤝 Стать партнёром", callback_data="buyer:partner")
+    kb.button(text="🚚 Я поставщик", callback_data="supplier:panel")
     kb.button(text="💬 Поддержка", callback_data="buyer:feedback")
     kb.button(text="📕 FAQ", callback_data="buyer:faq")
     if is_admin:
         kb.button(text="🛠 Админ", callback_data="admin:panel")
-        kb.adjust(2, 2, 2, 1, 1)
+        kb.adjust(2, 2, 2, 2, 1, 1)
     else:
-        kb.adjust(2, 2, 2, 1)
+        kb.adjust(2, 2, 2, 2, 1)
     return kb.as_markup()
 
 
@@ -809,6 +815,7 @@ def buyer_main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text="🛍 Каталог"), KeyboardButton(text="🛒 Корзина")],
         [KeyboardButton(text="📱 Номера"), KeyboardButton(text="🧾 Мои заказы")],
+        [KeyboardButton(text="💼 Кошелёк"), KeyboardButton(text="🚚 Я поставщик")],
         [KeyboardButton(text="🤝 Стать партнёром")],
         [KeyboardButton(text="✉️ Обратная связь"), KeyboardButton(text="📕 FAQ")],
     ]

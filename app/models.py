@@ -587,3 +587,42 @@ class ManualPage(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class UserWallet(Base):
+    __tablename__ = "user_wallets"
+
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    balance: Mapped[float] = mapped_column(Numeric(24, 8), default=0)
+    currency: Mapped[str] = mapped_column(String(10), default="USD")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class WalletLedger(Base):
+    __tablename__ = "wallet_ledger"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    amount: Mapped[float] = mapped_column(Numeric(24, 8))
+    currency: Mapped[str] = mapped_column(String(10), default="USD")
+    event_type: Mapped[str] = mapped_column(String(50), index=True)
+    source_type: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    source_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class SupplierWithdrawal(Base):
+    __tablename__ = "supplier_withdrawals"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    amount: Mapped[float] = mapped_column(Numeric(24, 8))
+    currency: Mapped[str] = mapped_column(String(10), default="USD")
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    payout_address: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    payout_link: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    admin_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

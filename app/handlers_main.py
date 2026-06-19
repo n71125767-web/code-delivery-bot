@@ -237,6 +237,16 @@ from app.catalog_runtime_v29 import (
 )
 from app.user_registry import touch_user
 from app.fulfillment_service import sync_purchase_from_order
+from app.market_wallet_v49 import (
+    notify_new_user,
+    notify_purchase_and_credit_supplier,
+    get_wallet_text,
+    wallet_keyboard,
+    supplier_orders_text,
+    create_withdrawal_request,
+    admin_withdrawals_text,
+    mark_withdrawal_done,
+)
 from app.services import (
     create_or_update_order_from_purchase,
     find_active_order_for_customer,
@@ -2594,6 +2604,15 @@ async def process_admin_command(
         )
         return True
 
+    if text == "/withdrawals":
+        await answer_message(bot, message, await admin_withdrawals_text(), business_connection_id)
+        return True
+
+    if text.startswith("/withdraw_done"):
+        result = await mark_withdrawal_done(bot, user_id, text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else "")
+        await answer_message(bot, message, result, business_connection_id)
+        return True
+
     if text.startswith("/retry_purchase"):
         if len(parts) != 2:
             await answer_message(
@@ -4804,7 +4823,10 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
     text = (message.text or "").strip()
     business_connection_id = get_business_id(message) if is_business else None
 
-    await touch_user(user_id, username or None)
+    is_new_user = await touch_user(user_id, username or None)
+    if is_new_user:
+        full_name = " ".join(x for x in [getattr(sender, "first_name", None), getattr(sender, "last_name", None)] if x) or None
+        await notify_new_user(bot, user_id, username or None, full_name)
 
     logger.info(
         "HANDLED_TEXT is_business=%s from_id=%s username=%s is_bot=%s chat_id=%s business_id=%s text_len=%s",
@@ -4822,6 +4844,25 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
 
     if user_id == me.id:
         logger.info("IGNORED: own bot message")
+        return
+
+    if text in {"🚚 Я поставщик", "/supplier"}:
+        if await is_supplier_user(user_id):
+            await send_supplier_menu(bot, message.chat.id, supplier_main_panel_text(), business_connection_id)
+        else:
+            await answer_message(bot, message, "Вы пока не поставщик. Нажмите «🤝 Стать партнёром» и отправьте заявку на модерацию.", business_connection_id, reply_markup=buyer_inline_menu_keyboard(is_admin=await is_admin_user(user_id)))
+        return
+
+    if text in {"💼 Кошелёк", "/wallet"}:
+        await answer_message(bot, message, await get_wallet_text(user_id), business_connection_id, reply_markup=wallet_keyboard(is_supplier=await is_supplier_user(user_id)))
+        return
+
+    if text.startswith("/withdraw") and not text.startswith("/withdraw_done"):
+        if not await is_supplier_user(user_id):
+            await answer_message(bot, message, "Вывод доступен только поставщикам.", business_connection_id)
+            return
+        result = await create_withdrawal_request(user_id, text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else "")
+        await answer_message(bot, message, result, business_connection_id, reply_markup=wallet_keyboard(is_supplier=True))
         return
 
     if user_id in BUYER_CATALOG_SEARCH_WAIT and not text.startswith("/"):
@@ -6677,9 +6718,18 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
     # Clean section navigation.
     if data == "admin:panel":
+        try:
+            await bot.send_message(callback.message.chat.id, "🛠 Админ-режим включён. Кнопки покупателя скрыты.", reply_markup=ReplyKeyboardRemove())
+        except Exception:
+            pass
         await update_or_send(
             callback, admin_panel_text(), reply_markup=admin_panel_keyboard()
         )
+        await callback.answer()
+        return True
+
+    if data == "admin:withdrawals":
+        await update_or_send(callback, await admin_withdrawals_text(), reply_markup=admin_hidden_keyboard())
         await callback.answer()
         return True
 
@@ -7075,6 +7125,27 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
         await callback.answer()
         return True
 
+    if data == "supplier:my_orders":
+        await update_or_send(callback, await supplier_orders_text(callback.from_user.id), reply_markup=supplier_inline_menu_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "supplier:wallet":
+        await update_or_send(callback, await get_wallet_text(callback.from_user.id), reply_markup=supplier_inline_menu_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "supplier:withdraw_help":
+        withdraw_text = (
+            "↗️ Вывод средств\n\n"
+            "Напишите командой:\n/withdraw СУММА АДРЕС\n\n"
+            "Пример:\n/withdraw 10 UQ...\n\n"
+            "После проверки админ отправит выплату через CryptoBot и отметит её в системе."
+        )
+        await update_or_send(callback, withdraw_text, reply_markup=supplier_inline_menu_keyboard())
+        await callback.answer()
+        return True
+
     if data == "supplier:requests":
         await update_or_send(
             callback,
@@ -7396,6 +7467,10 @@ async def handle_buyer_callback(bot: Bot, callback: CallbackQuery) -> bool:
     if data == "buyer:panel":
         BUYER_CATALOG_SEARCH_WAIT.discard(callback.from_user.id)
         admin_access = await is_admin_user(callback.from_user.id)
+        try:
+            await bot.send_message(callback.message.chat.id, "🏠 Режим покупателя", reply_markup=buyer_main_reply_keyboard(is_admin=admin_access))
+        except Exception:
+            pass
         await update_or_send(
             callback,
             buyer_main_panel_text(),
@@ -7420,6 +7495,11 @@ async def handle_buyer_callback(bot: Bot, callback: CallbackQuery) -> bool:
         async with SessionLocal() as session:
             text = await buyer_profile_text(session, user_id, username)
         await update_or_send(callback, text, reply_markup=buyer_back_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "buyer:wallet":
+        await update_or_send(callback, await get_wallet_text(user_id), reply_markup=wallet_keyboard(is_supplier=await is_supplier_user(user_id)))
         await callback.answer()
         return True
 
@@ -8131,9 +8211,16 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
 
         products = sort_products(products, display_settings.sort_mode)
         category_photo = category.photo_file_id or category_asset(category.name)
+        preview_lines = []
+        for row in products[:10]:
+            price = f" — {row.price} {row.currency}" if row.price is not None else ""
+            preview_lines.append(f"• {row.name}{price}")
+        category_text = category_caption(category)
+        if preview_lines:
+            category_text += "\n\nТовары в категории:\n" + "\n".join(preview_lines)
         await show_visual_card(
             callback,
-            category_caption(category),
+            category_text,
             reply_markup=products_keyboard(
                 products,
                 category_id,
