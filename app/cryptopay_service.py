@@ -182,6 +182,7 @@ async def create_purchase_invoice(
     provider_key_override: str | None = None,
     active_suffix: str | None = None,
     description_override: str | None = None,
+    quantity: int = 1,
 ) -> tuple[DigitalPurchase, CryptoPayment]:
     checkout_identity = (
         f"{buyer_id}:{product_id}:{active_suffix}"
@@ -225,6 +226,7 @@ async def create_purchase_invoice(
                     raise PaymentValidationError(
                         "У товара не настроена корректная цена."
                     )
+                quantity = max(1, min(int(quantity or 1), 99))
 
                 provider = await session.scalar(
                     select(ProductProvider).where(
@@ -300,6 +302,7 @@ async def create_purchase_invoice(
                     provider_key=provider_key,
                     promo_code=promo_code,
                     discount_amount=discount_amount,
+                    quantity=quantity,
                 )
                 session.add(purchase)
                 try:
@@ -358,6 +361,7 @@ async def create_purchase_invoice(
                     currency=currency,
                     fulfillment_type=fulfillment_type,
                     provider_key=provider_key,
+                    quantity=quantity,
                 )
                 session.add(snapshot)
                 await session.commit()

@@ -326,6 +326,7 @@ class DigitalPurchase(Base):
     provider_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
     promo_code: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     discount_amount: Mapped[float] = mapped_column(Numeric(24, 8), default=0)
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
     legacy_order_id: Mapped[int | None] = mapped_column(
         ForeignKey("orders.id"), nullable=True, index=True
     )
@@ -413,7 +414,22 @@ class ProductSnapshot(Base):
     currency: Mapped[str] = mapped_column(String(10))
     fulfillment_type: Mapped[str] = mapped_column(String(30), default="digital")
     provider_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class CartItem(Base):
+    __tablename__ = "cart_items"
+    __table_args__ = (
+        UniqueConstraint("user_id", "product_id", name="uq_cart_user_product"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("shop_products.id"), index=True)
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class BotUser(Base):
@@ -434,6 +450,8 @@ class BroadcastJob(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     admin_id: Mapped[int] = mapped_column(BigInteger, index=True)
     text: Mapped[str] = mapped_column(Text)
+    media_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    media_file_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="queued", index=True)
     total_count: Mapped[int] = mapped_column(Integer, default=0)
     sent_count: Mapped[int] = mapped_column(Integer, default=0)

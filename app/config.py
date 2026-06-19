@@ -116,6 +116,12 @@ PROXYLINE_COUPON = os.getenv("PROXYLINE_COUPON", "").strip()
 PROXYLINE_PRODUCTS_JSON = os.getenv("PROXYLINE_PRODUCTS_JSON", "").strip()
 PROXYLINE_COUNTRIES_JSON = os.getenv("PROXYLINE_COUNTRIES_JSON", "").strip()
 
+# Optional secondary proxy provider for standard/residential tariffs.
+# Configure only if you have a compatible Proxys API adapter/base URL.
+PROXYS_ENABLED = os.getenv("PROXYS_ENABLED", "0").strip() == "1"
+PROXYS_API_KEY = os.getenv("PROXYS_API_KEY", "").strip()
+PROXYS_API_BASE_URL = os.getenv("PROXYS_API_BASE_URL", "").strip()
+
 
 # Crypto Pay / @CryptoBot
 CRYPTO_PAY_TOKEN = os.getenv("CRYPTO_PAY_TOKEN", "").strip()

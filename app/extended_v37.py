@@ -348,10 +348,10 @@ async def _create_stock_items(session: AsyncSession, product_id: int, text: str,
 
 
 PROXY_AUTOFIX_PRODUCTS = [
-    ("mtproxy", "🧩 MTProxy", "Прокси для Telegram/MTProxy"),
-    ("premium", "💎 Премиум прокси", "Премиум-прокси с автовыдачей через Proxyline"),
-    ("standard", "📦 Стандартные прокси", "Стандартные прокси с автовыдачей через Proxyline"),
-    ("residential", "🏠 Резидентские прокси", "Резидентские прокси с автовыдачей через Proxyline"),
+    ("mtproxy", "🧩 MTProxy", "Прокси для Telegram/MTProxy", "proxyline", "dedicated"),
+    ("premium", "💎 Премиум прокси", "Премиум-прокси с автовыдачей через Proxyline", "proxyline", "dedicated"),
+    ("standard", "📦 Стандартные прокси", "Стандартные прокси с автовыдачей через Proxys", "proxys", "shared"),
+    ("residential", "🏠 Резидентские прокси", "Резидентские прокси с автовыдачей через Proxys", "proxys", "residential"),
 ]
 
 
@@ -372,7 +372,7 @@ async def ensure_proxy_autofix_products(session: AsyncSession, price: Decimal, c
         category.is_active = True
 
     created_or_updated: list[ShopProduct] = []
-    for sort_index, (key, name, description) in enumerate(PROXY_AUTOFIX_PRODUCTS, start=10):
+    for sort_index, (key, name, description, provider_type, proxy_type) in enumerate(PROXY_AUTOFIX_PRODUCTS, start=10):
         note = f"proxy_autofix:{key}"
         product = await session.scalar(select(ShopProduct).where(ShopProduct.note == note))
         if not product:
@@ -391,12 +391,12 @@ async def ensure_proxy_autofix_products(session: AsyncSession, price: Decimal, c
         product.product_type = "static"
         product.fulfillment_type = "proxyline"
         product.provider_key = json.dumps(
-            {"type": "dedicated", "count": 1, "ip_version": 4},
+            {"provider": provider_type, "type": proxy_type, "count": 1, "ip_version": 4},
             ensure_ascii=False,
             separators=(",", ":"),
         )
         product.content_type = "text"
-        product.content_text = "Автовыдача через Proxyline после оплаты."
+        product.content_text = f"Автовыдача через {provider_type} после оплаты."
         product.payment_enabled = True
         product.is_active = True
         product.is_deleted = False
@@ -410,7 +410,7 @@ async def ensure_proxy_autofix_products(session: AsyncSession, price: Decimal, c
             provider = ProductProvider(internal_key=product.internal_key)
             session.add(provider)
         provider.product_name = product.name
-        provider.provider_type = "proxyline"
+        provider.provider_type = provider_type
         provider.provider_key = product.provider_key
         provider.enabled = True
         provider.updated_at = _now()
@@ -474,7 +474,8 @@ async def process_extended_command(
             await session.commit()
             await session.refresh(app)
         await answer_message(bot, message, f"✅ Заявка #{app.id} отправлена на модерацию.", business_connection_id)
-        for admin_chat_id in ADMIN_ALERT_CHAT_IDS:
+        moderator_chat_ids = ADMIN_ALERT_CHAT_IDS or ADMIN_IDS
+        for admin_chat_id in moderator_chat_ids:
             await safe_send_message(
                 bot,
                 admin_chat_id,
@@ -569,6 +570,7 @@ async def process_extended_command(
             "",
             f"База за 1 месяц: {price} {currency.upper()}",
             f"Наценка: {multiplier_label(markup)}",
+            "Привязка API: MTProxy/Premium → Proxyline, Standard/Residential → Proxys.",
             f"Цена покупателю за 1 месяц: {final_month} {currency.upper()}",
             "",
             "Активные товары:",

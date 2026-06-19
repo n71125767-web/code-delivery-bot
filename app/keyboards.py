@@ -769,17 +769,19 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
 
 def buyer_inline_menu_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="🛒 Каталог", callback_data="buyer:shop")
+    kb.button(text="🛍 Каталог", callback_data="buyer:shop")
     kb.button(text="🌐 Прокси", callback_data="buyer:proxy_catalog")
     kb.button(text="📱 Номера", callback_data="buyer:number_catalog")
-    kb.button(text="🧾 Заказы", callback_data="buyer:orders")
+    kb.button(text="🛒 Корзина", callback_data="buyer:cart")
+    kb.button(text="🧾 Мои заказы", callback_data="buyer:orders")
+    kb.button(text="🤝 Стать партнёром", callback_data="buyer:partner")
     kb.button(text="💬 Поддержка", callback_data="buyer:feedback")
     kb.button(text="📕 FAQ", callback_data="buyer:faq")
     if is_admin:
         kb.button(text="🛠 Админ", callback_data="admin:panel")
-        kb.adjust(2, 2, 2, 1)
+        kb.adjust(2, 2, 2, 2, 1)
     else:
-        kb.adjust(2, 2, 2)
+        kb.adjust(2, 2, 2, 2)
     return kb.as_markup()
 
 
@@ -796,9 +798,10 @@ def buyer_back_to_panel_keyboard() -> InlineKeyboardMarkup:
 # Main sections reply keyboard v20.4
 def buyer_main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text="🛒 Товары")],
+        [KeyboardButton(text="🛍 Каталог")],
         [KeyboardButton(text="🌐 Прокси"), KeyboardButton(text="📱 Номера")],
-        [KeyboardButton(text="🧾 Мои заказы")],
+        [KeyboardButton(text="🛒 Корзина"), KeyboardButton(text="🧾 Мои заказы")],
+        [KeyboardButton(text="🤝 Стать партнёром")],
         [KeyboardButton(text="✉️ Обратная связь"), KeyboardButton(text="📕 FAQ")],
     ]
     # Админские кнопки не смешиваем с покупательскими действиями.

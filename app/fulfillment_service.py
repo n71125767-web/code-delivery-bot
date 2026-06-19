@@ -6,7 +6,14 @@ from decimal import Decimal
 from aiogram import Bot
 from sqlalchemy import select
 
-from app.config import ADMIN_IDS, PROXYLINE_API_KEY, PROXYLINE_COUPON, PROXYLINE_ENABLED
+from app.config import (
+    ADMIN_IDS,
+    PROXYLINE_API_KEY,
+    PROXYLINE_COUPON,
+    PROXYLINE_ENABLED,
+    PROXYS_API_KEY,
+    PROXYS_ENABLED,
+)
 from app.database import SessionLocal
 from app.models import (
     DigitalPurchase,
@@ -49,7 +56,7 @@ async def resolve_fulfillment(product: ShopProduct) -> tuple[str, str | None]:
         )
     if provider is None:
         return ("stock" if product.product_type == "quantity" else "digital", None)
-    if provider.provider_type == "proxyline":
+    if provider.provider_type in {"proxyline", "proxys"}:
         return "proxyline", provider.provider_key
     if provider.provider_type == "supplier":
         return "supplier", provider.provider_key
@@ -81,16 +88,33 @@ def _proxy_cfg(
 async def fulfill_proxyline(
     bot: Bot, purchase: DigitalPurchase, product: ShopProduct
 ) -> bool:
-    if not PROXYLINE_ENABLED or not PROXYLINE_API_KEY:
-        raise ProxylineError("Proxyline API is not configured")
     cfg = _proxy_cfg(product, purchase.provider_key)
+    provider_name = "proxyline"
+    try:
+        if purchase.provider_key:
+            raw_provider = json.loads(purchase.provider_key).get("provider")
+            if raw_provider:
+                provider_name = str(raw_provider).lower()
+    except Exception:
+        provider_name = "proxyline"
+
+    if provider_name == "proxys":
+        if not PROXYS_ENABLED or not PROXYS_API_KEY:
+            raise ProxylineError("Proxys API is not configured: set PROXYS_ENABLED=1, PROXYS_API_KEY and PROXYS_API_BASE_URL")
+    elif not PROXYLINE_ENABLED or not PROXYLINE_API_KEY:
+        raise ProxylineError("Proxyline API is not configured")
+
     if cfg is None:
         raise ProxylineError("Proxyline product parameters are missing")
     if PROXYLINE_COUPON and not cfg.coupon:
         from dataclasses import replace
 
         cfg = replace(cfg, coupon=PROXYLINE_COUPON)
-    service = ProxylineService(PROXYLINE_API_KEY)
+    if provider_name == "proxys":
+        from app.proxys import ProxysService
+        service = ProxysService(PROXYS_API_KEY)
+    else:
+        service = ProxylineService(PROXYLINE_API_KEY)
     available = await service.ips_count(cfg)
     if available < cfg.count:
         raise ProxylineError(

@@ -22,15 +22,15 @@ async def bind_product_provider(
     product_name: str | None = None,
 ) -> ProductProvider:
     provider_type = provider_type.strip().lower()
-    if provider_type not in {"proxyline", "supplier"}:
-        raise ValueError("provider_type must be proxyline or supplier")
+    if provider_type not in {"proxyline", "proxys", "supplier"}:
+        raise ValueError("provider_type must be proxyline, proxys or supplier")
     row = await get_product_provider(session, internal_key)
     if row is None:
         row = ProductProvider(internal_key=int(internal_key))
         session.add(row)
     row.provider_type = provider_type
     row.provider_key = provider_key or (
-        "proxyline" if provider_type == "proxyline" else None
+        provider_type if provider_type in {"proxyline", "proxys"} else None
     )
     row.product_name = product_name or row.product_name
     row.enabled = True

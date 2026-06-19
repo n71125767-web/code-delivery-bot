@@ -114,7 +114,7 @@ from app.repositories.product_providers import (
     list_recent_internal_products,
 )
 
-from app.models import ShopCategory, ShopProduct, BugReport, ProductStockItem, BroadcastJob
+from app.models import ShopCategory, ShopProduct, BugReport, ProductStockItem, BroadcastJob, MarketplaceApplication
 
 from app.shop_admin_v20 import (
     customer_home_text,
@@ -195,6 +195,14 @@ from app.extended_v37 import (
     wallet_payment_keyboard,
 )
 from app.wallet_service import create_wallet_payment
+from app.cart_v40 import (
+    add_to_cart,
+    cart_keyboard,
+    cart_text,
+    clear_cart,
+    get_cart_rows,
+    set_cart_quantity,
+)
 from app.proxy_catalog_v36 import (
     PROXY_PERIODS,
     available_proxyline_countries,
@@ -382,22 +390,15 @@ def validate_runtime_ui() -> None:
     admin_reply_texts = {button.text for row in admin_reply.keyboard for button in row}
 
     required_reply_buttons = {
-        "🛒 Товары",
+        "🛍 Каталог",
         "🌐 Прокси",
         "📱 Номера",
+        "🛒 Корзина",
     }
 
-    # Совместимость со старыми сообщениями: обработчик принимает и
-    # «🛒 Товар», и «🛒 Товары», но актуальная клавиатура показывает «🛒 Товары».
-    has_product_button = bool({"🛒 Товар", "🛒 Товары"} & buyer_reply_texts)
-    missing_reply = {
-        button
-        for button in required_reply_buttons
-        if (
-            button not in buyer_reply_texts
-            and not (button == "🛒 Товары" and has_product_button)
-        )
-    }
+    # Совместимость со старыми сообщениями: обработчик принимает старые кнопки
+    # «🛒 Товар/Товары», но актуальная клавиатура показывает «🛍 Каталог».
+    missing_reply = {button for button in required_reply_buttons if button not in buyer_reply_texts}
     if missing_reply:
         raise RuntimeError(
             f"UI self-check failed: missing reply buttons: {sorted(missing_reply)}"
@@ -448,6 +449,8 @@ CATALOG_V25_STATE: dict[int, dict] = {}
 ADMIN_BROADCAST_V28: dict[int, dict] = {}
 BUYER_CATALOG_SEARCH_WAIT: set[int] = set()
 PROXY_COUNTRY_SEARCH_WAIT: dict[int, str] = {}
+CART_QUANTITY_WAIT: dict[int, int] = {}
+PARTNER_APPLICATION_WAIT: set[int] = set()
 BUYER_FEEDBACK_WAIT: set[int] = set()
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
@@ -1558,6 +1561,8 @@ async def run_broadcast_v29(
     recipients: list[int],
     text: str,
     job_id: int,
+    media_type: str | None = None,
+    media_file_id: str | None = None,
 ) -> None:
     sent = 0
     failed = 0
@@ -1571,12 +1576,26 @@ async def run_broadcast_v29(
     try:
         for recipient_id in recipients:
             try:
-                await bot.send_message(recipient_id, text)
+                if media_type == "photo" and media_file_id:
+                    await bot.send_photo(recipient_id, media_file_id, caption=text or None)
+                elif media_type == "video" and media_file_id:
+                    await bot.send_video(recipient_id, media_file_id, caption=text or None)
+                elif media_type == "document" and media_file_id:
+                    await bot.send_document(recipient_id, media_file_id, caption=text or None)
+                else:
+                    await bot.send_message(recipient_id, text)
                 sent += 1
             except TelegramRetryAfter as exc:
                 await asyncio.sleep(float(exc.retry_after) + 0.5)
                 try:
-                    await bot.send_message(recipient_id, text)
+                    if media_type == "photo" and media_file_id:
+                        await bot.send_photo(recipient_id, media_file_id, caption=text or None)
+                    elif media_type == "video" and media_file_id:
+                        await bot.send_video(recipient_id, media_file_id, caption=text or None)
+                    elif media_type == "document" and media_file_id:
+                        await bot.send_document(recipient_id, media_file_id, caption=text or None)
+                    else:
+                        await bot.send_message(recipient_id, text)
                     sent += 1
                 except Exception:
                     failed += 1
@@ -1600,6 +1619,16 @@ async def run_broadcast_v29(
                 job.failed_count = failed
                 job.finished_at = datetime.utcnow()
                 await session.commit()
+    except asyncio.CancelledError:
+        async with SessionLocal() as session:
+            job = await session.get(BroadcastJob, job_id)
+            if job:
+                job.status = "interrupted"
+                job.error_text = "Broadcast task interrupted by process shutdown/SIGTERM"
+                job.finished_at = datetime.utcnow()
+                await session.commit()
+        logger.warning("BROADCAST_JOB_INTERRUPTED job_id=%s", job_id)
+        raise
     except Exception as exc:
         async with SessionLocal() as session:
             job = await session.get(BroadcastJob, job_id)
@@ -1718,6 +1747,100 @@ async def process_proxy_country_search(
 
 
 
+async def process_cart_quantity_input(
+    bot: Bot,
+    message: Message,
+    business_connection_id: str | None,
+) -> bool:
+    if not message.from_user:
+        return False
+    item_id = CART_QUANTITY_WAIT.get(message.from_user.id)
+    if not item_id:
+        return False
+    text = (message.text or "").strip().lower()
+    if text in {"отмена", "cancel", "/cancel"}:
+        CART_QUANTITY_WAIT.pop(message.from_user.id, None)
+        async with SessionLocal() as session:
+            rows = await get_cart_rows(session, message.from_user.id)
+        await answer_message(bot, message, cart_text(rows), business_connection_id, reply_markup=cart_keyboard(rows))
+        return True
+    try:
+        qty = int(text)
+    except ValueError:
+        await answer_message(bot, message, "Введите число от 1 до 99 или «отмена».", business_connection_id)
+        return True
+    if qty < 0 or qty > 99:
+        await answer_message(bot, message, "Количество должно быть от 1 до 99.", business_connection_id)
+        return True
+    async with SessionLocal() as session:
+        await set_cart_quantity(session, message.from_user.id, item_id, qty)
+        rows = await get_cart_rows(session, message.from_user.id)
+    CART_QUANTITY_WAIT.pop(message.from_user.id, None)
+    await answer_message(bot, message, cart_text(rows), business_connection_id, reply_markup=cart_keyboard(rows))
+    return True
+
+
+async def process_partner_application_input(
+    bot: Bot,
+    message: Message,
+    business_connection_id: str | None,
+) -> bool:
+    if not message.from_user or message.from_user.id not in PARTNER_APPLICATION_WAIT:
+        return False
+    text = (message.text or message.caption or "").strip()
+    if text.lower() in {"отмена", "cancel", "/cancel"}:
+        PARTNER_APPLICATION_WAIT.discard(message.from_user.id)
+        await answer_message(bot, message, "Заявка партнёра отменена.", business_connection_id, reply_markup=buyer_inline_menu_keyboard(is_admin=await is_admin_user(message.from_user.id)))
+        return True
+    if len(text) < 20:
+        await answer_message(
+            bot,
+            message,
+            "Опишите услугу подробнее: название, цена, формат выдачи и контакты внутри Telegram. Для отмены: отмена",
+            business_connection_id,
+        )
+        return True
+    username = (message.from_user.username or "").replace("@", "")
+    title = text.splitlines()[0][:255]
+    async with SessionLocal() as session:
+        app = MarketplaceApplication(
+            applicant_telegram_id=message.from_user.id,
+            applicant_username=username or None,
+            seller_name=username or str(message.from_user.id),
+            title=title,
+            description=text,
+            price=None,
+            currency="RUB",
+            category_name="Партнёры",
+            content_preview=text[:1000],
+            status="pending",
+        )
+        session.add(app)
+        await session.commit()
+        await session.refresh(app)
+    PARTNER_APPLICATION_WAIT.discard(message.from_user.id)
+    from app.extended_v37 import marketplace_moderation_keyboard
+    moderator_chat_ids = ADMIN_ALERT_CHAT_IDS or ADMIN_IDS
+    for admin_chat_id in moderator_chat_ids:
+        await safe_send_message(
+            bot,
+            admin_chat_id,
+            "🤝 Новая партнёрская заявка\n\n"
+            f"ID: {app.id}\n"
+            f"Пользователь: {message.from_user.id} @{username or 'нет'}\n\n"
+            f"{text}",
+            reply_markup=marketplace_moderation_keyboard(app.id),
+        )
+    await answer_message(
+        bot,
+        message,
+        f"✅ Заявка #{app.id} отправлена на модерацию. Администратор примет или отклонит её.",
+        business_connection_id,
+        reply_markup=buyer_inline_menu_keyboard(is_admin=await is_admin_user(message.from_user.id)),
+    )
+    return True
+
+
 async def process_broadcast_v28_input(
     bot: Bot,
     message: Message,
@@ -1730,24 +1853,65 @@ async def process_broadcast_v28_input(
         return False
 
     text = (message.text or message.caption or "").strip()
-    if not text:
+    media_type = None
+    media_file_id = None
+    if message.photo:
+        media_type = "photo"
+        media_file_id = message.photo[-1].file_id
+    elif message.video:
+        media_type = "video"
+        media_file_id = message.video.file_id
+    elif message.document:
+        media_type = "document"
+        media_file_id = message.document.file_id
+
+    if not text and not media_file_id:
         await answer_message(
             bot,
             message,
-            "Для рассылки отправьте текстовое сообщение.",
+            "Отправьте текст, фото с подписью, видео или документ для рассылки.",
             business_connection_id,
         )
         return True
 
     state["text"] = text
+    state["media_type"] = media_type
+    state["media_file_id"] = media_file_id
     state["step"] = "confirm"
-    await answer_message(
-        bot,
-        message,
-        "📢 Предварительный просмотр рассылки\\n\\n" + text,
-        business_connection_id,
-        reply_markup=broadcast_preview_keyboard(),
-    )
+
+    # Предпросмотр без служебной шапки: получатель увидит именно это.
+    if media_type == "photo" and media_file_id:
+        await bot.send_photo(
+            message.chat.id,
+            media_file_id,
+            caption=text or None,
+            reply_markup=broadcast_preview_keyboard(),
+            business_connection_id=business_connection_id,
+        )
+    elif media_type == "video" and media_file_id:
+        await bot.send_video(
+            message.chat.id,
+            media_file_id,
+            caption=text or None,
+            reply_markup=broadcast_preview_keyboard(),
+            business_connection_id=business_connection_id,
+        )
+    elif media_type == "document" and media_file_id:
+        await bot.send_document(
+            message.chat.id,
+            media_file_id,
+            caption=text or None,
+            reply_markup=broadcast_preview_keyboard(),
+            business_connection_id=business_connection_id,
+        )
+    else:
+        await answer_message(
+            bot,
+            message,
+            text,
+            business_connection_id,
+            reply_markup=broadcast_preview_keyboard(),
+        )
     return True
 
 
@@ -1771,6 +1935,16 @@ async def process_catalog_v25_input(
     step = state.get("step")
     data = state.setdefault("data", {})
     text = (message.text or message.caption or "").strip()
+    if text.lower() in {"отмена", "cancel", "/cancel", "❌ отмена"}:
+        CATALOG_V25_STATE.pop(admin_id, None)
+        await answer_message(
+            bot,
+            message,
+            "✅ Создание товара отменено. Можно открыть админку заново.",
+            business_connection_id,
+            reply_markup=admin_shop_keyboard(),
+        )
+        return True
 
     try:
         if action == "product_create":
@@ -3025,7 +3199,10 @@ async def standalone_buyer_orders_text(user_id: int) -> str:
             ).all()
         )
         if not rows:
-            return "🧾 Мои заказы\n\nУ вас пока нет заказов."
+            return (
+                "🧾 <b>Мои заказы</b>\n\n"
+                "Заказов пока нет. Откройте каталог, добавьте товар в корзину или купите сразу."
+            )
 
         product_ids = {row.product_id for row in rows}
         products = list(
@@ -3038,27 +3215,35 @@ async def standalone_buyer_orders_text(user_id: int) -> str:
         product_map = {row.id: row for row in products}
 
     labels = {
-        "new": "создан",
-        "creating_invoice": "создаётся счёт",
-        "pending_payment": "ожидает оплату",
-        "paid": "оплачен",
-        "delivering": "выдаётся",
-        "delivered": "выдан",
-        "delivery_failed": "ошибка выдачи",
-        "invoice_failed": "ошибка счёта",
+        "new": "🆕 создан",
+        "creating_invoice": "⏳ создаётся счёт",
+        "pending_payment": "💳 ожидает оплату",
+        "paid": "✅ оплачен",
+        "delivering": "📦 выдаётся",
+        "delivered": "🎁 выдан",
+        "delivery_failed": "⚠️ ошибка выдачи",
+        "invoice_failed": "❌ ошибка счёта",
+        "delivery_review_required": "🕵️ проверка выдачи",
+        "awaiting_supplier": "👤 у поставщика",
+        "fulfillment_problem": "⚠️ проблема выдачи",
     }
-    lines = ["🧾 Мои заказы", ""]
+    lines = ["🧾 <b>Мои заказы</b>", "", "Последние покупки:", ""]
     for row in rows:
         product = product_map.get(row.product_id)
+        name = product.name if product else f"Товар #{row.product_id}"
+        created = row.created_at.strftime("%d.%m.%Y %H:%M") if row.created_at else "—"
+        qty = int(getattr(row, "quantity", 1) or 1)
         lines.extend(
             [
-                f"Заказ #{row.id}",
-                product.name if product else f"Товар #{row.product_id}",
-                f"{row.amount} {row.currency}",
-                f"Статус: {labels.get(row.status, row.status)}",
+                f"<b>#{row.id}</b> · {labels.get(row.status, row.status)}",
+                f"├ 🛍 {name}",
+                f"├ 🔢 Кол-во: {qty} шт.",
+                f"├ 💰 {row.amount} {row.currency}",
+                f"└ 🕒 {created}",
                 "",
             ]
         )
+    lines.append("Если заказ завис или не пришла выдача — напишите в поддержку из главного меню.")
     return "\n".join(lines).strip()
 
 
@@ -3076,7 +3261,7 @@ async def process_main_reply_button(
     admin_access = await is_admin_user(user_id)
     is_business_context = bool(business_connection_id)
 
-    if text in {"🛒 Товар", "🛒 Товары"}:
+    if text in {"🛒 Товар", "🛒 Товары", "🛍 Каталог"}:
         async with SessionLocal() as session:
             categories = await list_categories(session)
             display_settings = await get_display_settings(session)
@@ -3123,6 +3308,18 @@ async def process_main_reply_button(
         )
         return True
 
+    if text == "🛒 Корзина":
+        async with SessionLocal() as session:
+            rows = await get_cart_rows(session, user_id)
+        await answer_message(
+            bot,
+            message,
+            cart_text(rows),
+            business_connection_id,
+            reply_markup=cart_keyboard(rows),
+        )
+        return True
+
     if text == "🧾 Мои заказы":
         orders_text = await standalone_buyer_orders_text(user_id)
         await answer_message(
@@ -3135,6 +3332,17 @@ async def process_main_reply_button(
                 if is_business_context
                 else buyer_main_reply_keyboard(is_admin=admin_access)
             ),
+        )
+        return True
+
+    if text == "🤝 Стать партнёром":
+        PARTNER_APPLICATION_WAIT.add(user_id)
+        await answer_message(
+            bot,
+            message,
+            "🤝 <b>Стать партнёром</b>\n\nОпишите, какие услуги хотите разместить в маркете.\nУкажите: название, цену, формат выдачи, сроки и условия.\n\nАдмины увидят заявку и смогут принять или отклонить её.\nДля отмены: отмена",
+            business_connection_id,
+            reply_markup=buyer_back_to_panel_keyboard(),
         )
         return True
 
@@ -4566,6 +4774,14 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         if await process_proxy_country_search(bot, message, business_connection_id):
             return
 
+    if user_id in CART_QUANTITY_WAIT and not text.startswith("/"):
+        if await process_cart_quantity_input(bot, message, business_connection_id):
+            return
+
+    if user_id in PARTNER_APPLICATION_WAIT and not text.startswith("/"):
+        if await process_partner_application_input(bot, message, business_connection_id):
+            return
+
     if user_id in BUYER_FEEDBACK_WAIT and not text.startswith("/"):
         BUYER_FEEDBACK_WAIT.discard(user_id)
         async with SessionLocal() as session:
@@ -4603,9 +4819,12 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
     main_reply_buttons = {
         "🛒 Товар",
         "🛒 Товары",
+        "🛍 Каталог",
         "🌐 Прокси",
         "📱 Номера",
+        "🛒 Корзина",
         "🧾 Мои заказы",
+        "🤝 Стать партнёром",
         "✉️ Обратная связь",
         "📕 FAQ",
         "💰 Управление товарами",
@@ -4623,6 +4842,8 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         ADMIN_SUPPLIER_WAIT.pop(user_id, None)
         BUYER_CATALOG_SEARCH_WAIT.discard(user_id)
         PROXY_COUNTRY_SEARCH_WAIT.pop(user_id, None)
+        CART_QUANTITY_WAIT.pop(user_id, None)
+        PARTNER_APPLICATION_WAIT.discard(user_id)
         if await process_main_reply_button(bot, message, business_connection_id):
             return
 
@@ -6463,11 +6684,13 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
     if data == "v28:broadcast_confirm":
         state = ADMIN_BROADCAST_V28.get(callback.from_user.id)
-        if not state or not state.get("text"):
-            await callback.answer("Текст рассылки не найден.", show_alert=True)
+        if not state or (not state.get("text") and not state.get("media_file_id")):
+            await callback.answer("Рассылка не найдена.", show_alert=True)
             return True
 
-        broadcast_text = state["text"]
+        broadcast_text = state.get("text", "")
+        broadcast_media_type = state.get("media_type")
+        broadcast_media_file_id = state.get("media_file_id")
         async with SessionLocal() as session:
             from app.models import BotUser
 
@@ -6489,6 +6712,8 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             job = BroadcastJob(
                 admin_id=callback.from_user.id,
                 text=broadcast_text,
+                media_type=broadcast_media_type,
+                media_file_id=broadcast_media_file_id,
                 status="queued",
                 total_count=len(recipients),
             )
@@ -6511,6 +6736,8 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
                 recipients,
                 broadcast_text,
                 job.id,
+                broadcast_media_type,
+                broadcast_media_file_id,
             )
         )
         await update_or_send(
@@ -7518,15 +7745,15 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         product = next(
             (
                 row for row in products
-                if row.fulfillment_type == "proxyline"
-                and row.payment_enabled
+                if row.payment_enabled
                 and row.is_active
+                and not row.is_deleted
             ),
             None,
         )
         if product is None:
             await callback.answer(
-                "Нет активного Proxyline-товара. Админу: создайте товар с fulfillment_type=proxyline или выполните /proxy_autofix 100 RUB.",
+                "Нет активного прокси-товара. Админу: выполните /proxy_autofix 100 RUB, затем /proxy_markup 1.77.",
                 show_alert=True,
             )
             return
@@ -7561,6 +7788,10 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         async with SessionLocal() as session:
             product = await session.get(ShopProduct, product_id)
             proxy_markup = await get_proxy_markup_multiplier(session)
+            if product and product.fulfillment_type != "proxyline":
+                # Товар выбран именно через прокси-витрину, значит выдача должна идти через proxy-provider.
+                product.fulfillment_type = "proxyline"
+                await session.commit()
         if (
             product is None
             or product.is_deleted
@@ -7614,6 +7845,119 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
                 product.id,
             ),
         )
+        await callback.answer("Счёт создан")
+        return
+
+
+    if data == "buyer:cart":
+        async with SessionLocal() as session:
+            rows = await get_cart_rows(session, callback.from_user.id)
+        await update_or_send(callback, cart_text(rows), reply_markup=cart_keyboard(rows))
+        await callback.answer()
+        return
+
+    if data.startswith("buyer:cart_add:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        try:
+            async with SessionLocal() as session:
+                await add_to_cart(session, callback.from_user.id, product_id, 1)
+                rows = await get_cart_rows(session, callback.from_user.id)
+        except Exception as exc:
+            await callback.answer(str(exc), show_alert=True)
+            return
+        await update_or_send(callback, cart_text(rows), reply_markup=cart_keyboard(rows))
+        await callback.answer("Добавлено в корзину")
+        return
+
+    if data.startswith("buyer:cart_inc:") or data.startswith("buyer:cart_dec:"):
+        parts = data.split(":")
+        action = parts[1].replace("cart_", "")
+        item_id = int(parts[-1])
+        async with SessionLocal() as session:
+            rows = await get_cart_rows(session, callback.from_user.id)
+            current = next((item for item, _ in rows if item.id == item_id), None)
+            if current:
+                qty = int(current.quantity or 1) + (1 if action == "inc" else -1)
+                await set_cart_quantity(session, callback.from_user.id, item_id, qty)
+            rows = await get_cart_rows(session, callback.from_user.id)
+        await update_or_send(callback, cart_text(rows), reply_markup=cart_keyboard(rows))
+        await callback.answer()
+        return
+
+    if data.startswith("buyer:cart_custom:"):
+        item_id = int(data.rsplit(":", 1)[1])
+        CART_QUANTITY_WAIT[callback.from_user.id] = item_id
+        await update_or_send(
+            callback,
+            "🔢 <b>Своё количество</b>\n\nОтправьте числом, сколько штук нужно. Например: 3\nЧтобы удалить позицию — отправьте 0.\nДля отмены: отмена",
+            reply_markup=buyer_back_to_panel_keyboard(),
+        )
+        await callback.answer("Введите количество")
+        return
+
+    if data == "buyer:cart_clear":
+        async with SessionLocal() as session:
+            await clear_cart(session, callback.from_user.id)
+            rows = await get_cart_rows(session, callback.from_user.id)
+        await update_or_send(callback, cart_text(rows), reply_markup=cart_keyboard(rows))
+        await callback.answer("Корзина очищена")
+        return
+
+    if data == "buyer:cart_checkout":
+        async with SessionLocal() as session:
+            rows = await get_cart_rows(session, callback.from_user.id)
+        if not rows:
+            await callback.answer("Корзина пуста", show_alert=True)
+            return
+        if len(rows) > 5:
+            await callback.answer("За один раз можно оформить до 5 позиций.", show_alert=True)
+            return
+        created = []
+        try:
+            for item, product in rows:
+                if not product or not product.is_active or not product.payment_enabled:
+                    continue
+                qty = int(item.quantity or 1)
+                if qty > 1 and product.fulfillment_type in {"stock", "number"}:
+                    await callback.answer(
+                        "Для складских товаров и номеров количество больше 1 оформляйте отдельными покупками.",
+                        show_alert=True,
+                    )
+                    return
+                amount = Decimal(str(product.price or 0)) * Decimal(qty)
+                purchase, payment = await create_purchase_invoice(
+                    callback.from_user.id,
+                    callback.from_user.username,
+                    product.id,
+                    amount_override=amount,
+                    active_suffix=f"cart:{item.id}:{qty}",
+                    description_override=f"{product.name} × {qty}",
+                    quantity=qty,
+                )
+                created.append((product, qty, purchase, payment))
+        except (PaymentConfigurationError, PaymentValidationError) as exc:
+            await callback.answer(str(exc), show_alert=True)
+            return
+        async with SessionLocal() as session:
+            await clear_cart(session, callback.from_user.id)
+        if len(created) == 1:
+            product, qty, purchase, payment = created[0]
+            await update_or_send(
+                callback,
+                f"✅ <b>Счёт создан</b>\n\n{product.name} × {qty}\nСумма: <b>{purchase.amount} {purchase.currency}</b>",
+                reply_markup=invoice_keyboard(payment.invoice_url, purchase.id, product.id),
+            )
+        else:
+            await update_or_send(
+                callback,
+                f"✅ Создано счетов: {len(created)}. Ссылки отправлены отдельными сообщениями.",
+                reply_markup=buyer_inline_menu_keyboard(is_admin=await is_admin_user(callback.from_user.id)),
+            )
+            for product, qty, purchase, payment in created:
+                await callback.message.answer(
+                    f"💳 {product.name} × {qty}\nСумма: {purchase.amount} {purchase.currency}",
+                    reply_markup=invoice_keyboard(payment.invoice_url, purchase.id, product.id),
+                )
         await callback.answer("Счёт создан")
         return
 
@@ -7865,19 +8209,9 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             await callback.answer("Товар не найден", show_alert=True)
             return True
         provider_type = provider.provider_type if provider else None
+        # Фото категории не подставляется в карточку товара.
+        # Если нужна картинка товара — задайте её самому товару.
         fallback_photo = None
-        if not product.photo_file_id and not product.video_file_id:
-            async with SessionLocal() as session:
-                category = (
-                    await session.get(ShopCategory, product.category_id)
-                    if product.category_id
-                    else None
-                )
-            fallback_photo = (
-                category.photo_file_id or category_asset(category.name)
-                if category
-                else None
-            )
         await show_visual_card(
             callback,
             product_caption(product, provider_type),
@@ -7909,19 +8243,9 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             await callback.answer("Товар недоступен", show_alert=True)
             return
         provider_type = provider.provider_type if provider else None
+        # Фото категории не подставляется в карточку товара.
+        # Если нужна картинка товара — задайте её самому товару.
         fallback_photo = None
-        if not product.photo_file_id and not product.video_file_id:
-            async with SessionLocal() as session:
-                category = (
-                    await session.get(ShopCategory, product.category_id)
-                    if product.category_id
-                    else None
-                )
-            fallback_photo = (
-                category.photo_file_id or category_asset(category.name)
-                if category
-                else None
-            )
         await show_visual_card(
             callback,
             product_caption(product, provider_type),
@@ -7933,12 +8257,13 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         return
 
     if data == "buyer:partner":
+        PARTNER_APPLICATION_WAIT.add(callback.from_user.id)
         await update_or_send(
             callback,
-            "👥 Партнерская программа\n\nРаздел находится в разработке.",
+            "🤝 <b>Стать партнёром</b>\n\nОпишите услугу одним сообщением:\n• что продаёте;\n• цена и валюта;\n• как выдаёте товар/услугу;\n• сроки и условия.\n\nЗаявка уйдёт администраторам на модерацию.\nДля отмены напишите: отмена",
             reply_markup=buyer_back_to_panel_keyboard(),
         )
-        await callback.answer()
+        await callback.answer("Жду описание заявки")
         return
 
     if data == "buyer:feedback":

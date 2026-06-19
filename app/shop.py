@@ -233,9 +233,9 @@ async def list_proxy_products_by_category(session, category_key: str):
 def proxy_categories_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="🧩 MTProxy", callback_data="buyer:proxycat:mtproxy")
-    kb.button(text="💎 Premium", callback_data="buyer:proxycat:premium")
-    kb.button(text="📦 Standard", callback_data="buyer:proxycat:standard")
-    kb.button(text="🏠 Residential", callback_data="buyer:proxycat:residential")
+    kb.button(text="💎 Премиум", callback_data="buyer:proxycat:premium")
+    kb.button(text="📦 Стандарт", callback_data="buyer:proxycat:standard")
+    kb.button(text="🏠 Резидентские", callback_data="buyer:proxycat:residential")
     kb.button(text="🏠 Главное меню", callback_data="buyer:panel", style="danger")
     kb.adjust(2, 2, 1)
     return kb.as_markup()
@@ -438,6 +438,7 @@ def shop_main_keyboard(categories) -> InlineKeyboardMarkup:
         kb.button(
             text=f"{row.emoji} › {row.name}", callback_data=f"buyer:shopcat:{row.id}"
         )
+    kb.button(text="🛒 › Корзина", callback_data="buyer:cart")
     kb.button(text="🧾 › Мои заказы", callback_data="buyer:orders")
     kb.button(text="🏠 › Главное меню", callback_data="buyer:panel")
     kb.adjust(1)
@@ -491,7 +492,11 @@ def product_keyboard(product: ShopProduct, shop_username: str) -> InlineKeyboard
     kb = InlineKeyboardBuilder()
     if product.is_active and product.payment_enabled:
         kb.button(
-            text="🤖 Оплатить • CryptoBot",
+            text="🛒 В корзину",
+            callback_data=f"buyer:cart_add:{product.id}",
+        )
+        kb.button(
+            text="🤖 Купить сразу • CryptoBot",
             callback_data=f"buyer:buy:{product.id}",
             style="success",
         )

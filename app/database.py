@@ -67,6 +67,7 @@ async def _critical_schema_migrations(conn) -> None:
         "product_snapshots": {
             "fulfillment_type": "VARCHAR(30) DEFAULT 'digital' NOT NULL",
             "provider_key": "VARCHAR(500)",
+            "quantity": "INTEGER DEFAULT 1 NOT NULL",
         },
         "shop_products": {
             "fulfillment_type": "VARCHAR(30) DEFAULT 'digital' NOT NULL",
@@ -80,6 +81,8 @@ async def _critical_schema_migrations(conn) -> None:
             "reserved_purchase_id": "BIGINT",
         },
         "broadcast_jobs": {
+            "media_type": "VARCHAR(30)",
+            "media_file_id": "VARCHAR(500)",
             "last_user_id": "BIGINT",
             "error_text": "TEXT",
             "started_at": f"{timestamp}",
@@ -340,7 +343,7 @@ async def migrate_legacy_fulfillment() -> None:
         for product in products:
             provider = provider_map.get(product.internal_key)
             if provider is not None:
-                if provider.provider_type == "proxyline":
+                if provider.provider_type in {"proxyline", "proxys"}:
                     product.fulfillment_type = "proxyline"
                     product.provider_key = provider.provider_key
                 elif provider.provider_type == "supplier":
