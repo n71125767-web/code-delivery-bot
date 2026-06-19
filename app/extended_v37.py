@@ -355,21 +355,21 @@ PROXY_AUTOFIX_PRODUCTS = [
 ]
 
 
-async def ensure_proxy_autofix_products(session: AsyncSession, price: Decimal, currency: str) -> list[ShopProduct]:
+async def hide_system_proxy_category(session: AsyncSession) -> bool:
     category = await session.scalar(select(ShopCategory).where(ShopCategory.name == "Прокси"))
     if not category:
-        category = ShopCategory(
-            name="Прокси",
-            emoji="🌐",
-            description="Автоматическая выдача прокси через Proxyline",
-            is_active=True,
-        )
-        session.add(category)
-        await session.flush()
-    else:
-        category.emoji = "🌐"
-        category.description = category.description or "Автоматическая выдача прокси через Proxyline"
-        category.is_active = True
+        return False
+    category.is_active = False
+    category.description = "Системная категория прокси скрыта из главного каталога."
+    await session.flush()
+    return True
+
+
+async def ensure_proxy_autofix_products(session: AsyncSession, price: Decimal, currency: str) -> list[ShopProduct]:
+    # Прокси продаются из отдельного скрытого раздела, поэтому системную категорию
+    # «Прокси» в главном каталоге не создаём и старую скрываем.
+    await hide_system_proxy_category(session)
+    category = None
 
     created_or_updated: list[ShopProduct] = []
     for sort_index, (key, name, description, provider_type, proxy_type) in enumerate(PROXY_AUTOFIX_PRODUCTS, start=10):
@@ -387,7 +387,7 @@ async def ensure_proxy_autofix_products(session: AsyncSession, price: Decimal, c
             # без промежуточного flush() с пустыми name/price.
             product = ShopProduct(
                 internal_key=await _next_internal_key(session),
-                category_id=category.id,
+                category_id=None,
                 name=name,
                 description=description,
                 price=price,
@@ -396,7 +396,7 @@ async def ensure_proxy_autofix_products(session: AsyncSession, price: Decimal, c
                 fulfillment_type="proxyline",
                 provider_key=provider_payload,
                 content_type="text",
-                content_text=f"Автовыдача через {provider_type} после оплаты.",
+                content_text="Автовыдача после оплаты.",
                 payment_enabled=True,
                 is_active=True,
                 is_deleted=False,
@@ -407,7 +407,7 @@ async def ensure_proxy_autofix_products(session: AsyncSession, price: Decimal, c
             )
             session.add(product)
         else:
-            product.category_id = category.id
+            product.category_id = None
             product.name = name
             product.description = description
             product.price = price
@@ -416,7 +416,7 @@ async def ensure_proxy_autofix_products(session: AsyncSession, price: Decimal, c
             product.fulfillment_type = "proxyline"
             product.provider_key = provider_payload
             product.content_type = "text"
-            product.content_text = f"Автовыдача через {provider_type} после оплаты."
+            product.content_text = "Автовыдача после оплаты."
             product.payment_enabled = True
             product.is_active = True
             product.is_deleted = False
@@ -586,18 +586,18 @@ async def process_extended_command(
             markup = await get_proxy_markup_multiplier(session)
             final_month = apply_proxy_markup(price, markup)
         lines = [
-            "✅ Proxyline-товары созданы/обновлены.",
+            "✅ Прокси-товары созданы/обновлены.",
             "",
             f"База за 1 месяц: {price} {currency.upper()}",
             f"Наценка: {multiplier_label(markup)}",
-            "Привязка API: MTProxy/Premium → Proxyline, Standard/Residential → Proxys.",
+            "API-привязка обновлена для всех типов прокси.",
             f"Цена покупателю за 1 месяц: {final_month} {currency.upper()}",
             "",
             "Активные товары:",
         ]
         lines.extend(f"#{row.id} — {row.name}" for row in rows)
         lines.append("")
-        lines.append("Теперь покупатель может открыть: 🌐 Прокси → тип → страна → срок.")
+        lines.append("Раздел прокси остаётся скрытым с главной и доступен через прямые кнопки/админ-настройки.")
         await answer_message(bot, message, "\n".join(lines), business_connection_id)
         return True
 
@@ -646,11 +646,26 @@ async def process_extended_command(
         await answer_message(
             bot,
             message,
-            "✅ Базовая цена Proxyline-товаров обновлена.\n\n"
+            "✅ Базовая цена прокси-товаров обновлена.\n\n"
             f"База: {price} {currency.upper()}\n"
             f"Наценка: {multiplier_label(markup)}\n"
             f"Покупателю за 1 месяц: {final_month} {currency.upper()}\n"
             f"Обновлено товаров: {len(rows)}",
+            business_connection_id,
+        )
+        return True
+
+    if command == "/hide_proxy_category":
+        async with SessionLocal() as session:
+            hidden = await hide_system_proxy_category(session)
+            proxy_products = list((await session.scalars(select(ShopProduct).where(ShopProduct.note.like("proxy_autofix:%")))).all())
+            for product in proxy_products:
+                product.category_id = None
+            await session.commit()
+        await answer_message(
+            bot,
+            message,
+            "✅ Системная категория «Прокси» скрыта из главного каталога. Прокси-товары отвязаны от категорий.",
             business_connection_id,
         )
         return True

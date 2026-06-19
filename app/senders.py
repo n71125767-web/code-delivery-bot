@@ -2,6 +2,8 @@ import logging
 from aiogram import Bot
 from aiogram.types import Message
 
+from app.text_utils import plain_text
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,6 +25,7 @@ async def safe_send_message(
        Это важно для Telegram Business: иначе уведомления начинают приходить
        в обычный чат с ботом, а не в Business-чат аккаунта.
     """
+    text = plain_text(text)
     me = await bot.me()
     has_keyboard = reply_markup is not None
 
@@ -97,6 +100,7 @@ async def answer_message(
     business_connection_id: str | None = None,
     reply_markup=None,
 ):
+    text = plain_text(text)
     me = await bot.me()
 
     if message.from_user and message.from_user.id == me.id:

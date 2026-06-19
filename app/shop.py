@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 
 from app.config import WALLET_PAYMENT_ENABLED
@@ -73,7 +73,10 @@ async def list_categories(session):
         (
             await session.scalars(
                 select(ShopCategory)
-                .where(ShopCategory.is_active.is_(True))
+                .where(
+                    ShopCategory.is_active.is_(True),
+                    func.lower(ShopCategory.name) != "прокси",
+                )
                 .order_by(ShopCategory.sort_order, ShopCategory.id)
             )
         ).all()
@@ -243,14 +246,14 @@ def proxy_categories_keyboard() -> InlineKeyboardMarkup:
 
 def proxy_categories_text() -> str:
     return (
-        "🌐 <b>Прокси</b>\n"
-        "<i>Автовыдача после оплаты</i>\n\n"
-        "1️⃣ Выберите тип\n"
-        "2️⃣ Найдите страну или выберите из списка\n"
-        "3️⃣ Выберите срок и оплатите\n\n"
-        "<b>Доступные разделы</b>\n"
+        "🌐 Прокси\n"
+        "Автовыдача после оплаты.\n\n"
+        "1. Выберите тип.\n"
+        "2. Найдите страну или выберите из списка.\n"
+        "3. Выберите срок и оплатите.\n\n"
+        "Разделы\n"
         "🧩 MTProxy — Telegram\n"
-        "💎 Premium — стабильные приватные\n"
+        "💎 Premium — приватные\n"
         "📦 Standard — базовый вариант\n"
         "🏠 Residential — прокси под гео-задачи"
     )

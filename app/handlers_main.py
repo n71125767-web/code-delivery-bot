@@ -44,6 +44,7 @@ from app.keyboards import (
     service_keyboard_from_services,
     service_confirm_keyboard,
     admin_panel_keyboard,
+    admin_hidden_keyboard,
     supplier_request_actions_keyboard,
     supplier_reply_keyboard,
     supplier_orders_keyboard,
@@ -106,6 +107,7 @@ from app.proxy_settings import (
     selection_load,
 )
 from app.senders import safe_send_message, answer_message
+from app.text_utils import plain_text
 from app.repositories.product_providers import (
     get_product_provider,
     bind_product_provider,
@@ -391,7 +393,6 @@ def validate_runtime_ui() -> None:
 
     required_reply_buttons = {
         "🛍 Каталог",
-        "🌐 Прокси",
         "📱 Номера",
         "🛒 Корзина",
     }
@@ -497,6 +498,7 @@ async def _raw_business_edit_text(
     if not business_connection_id:
         return False
 
+    text = plain_text(text)
     payload = {
         "business_connection_id": business_connection_id,
         "chat_id": chat_id,
@@ -559,6 +561,7 @@ async def _bot_edit_text_safe(
     business_connection_id: str | None = None,
 ) -> bool:
     """Редактирует сообщение. Возвращает True, если edit успешен или текст не изменился."""
+    text = plain_text(text)
     try:
         kwargs = {
             "chat_id": chat_id,
@@ -660,6 +663,7 @@ async def send_or_edit_role_panel(
     3) новое сообщение создаётся только если редактировать нечего/невозможно;
     4) нижняя reply-клавиатура убирается, чтобы не было дублей кнопок.
     """
+    text = plain_text(text)
     # ReplyKeyboardRemove нужен только при текстовой команде.
     # При callback не отправляем лишнее сообщение, иначе получится спам.
     if callback is None:
@@ -860,6 +864,7 @@ def contains_forbidden_contact(text: str) -> bool:
 
 
 async def update_or_send(callback: CallbackQuery, text: str, reply_markup=None) -> None:
+    text = plain_text(text)
     """
     Как у админа: callback редактирует текущее inline-сообщение.
     Важно: если Telegram отвечает "message is not modified", НЕ отправляем новое сообщение.
@@ -946,6 +951,7 @@ async def show_visual_card(
     video_file_id: str | None = None,
 ) -> None:
     """Показывает экран как в референсе: медиа-карточка + inline-кнопки."""
+    caption = plain_text(caption)
     if not callback.message:
         return
     chat_id = callback.message.chat.id
@@ -2593,7 +2599,7 @@ async def process_admin_command(
             await answer_message(
                 bot,
                 message,
-                "Формат:\n/retry_purchase ID_ПОКУПКИ\n\nИспользуйте после пополнения баланса Proxyline/исправления поставщика.",
+                "Формат:\n/retry_purchase ID_ПОКУПКИ\n\nИспользуйте после пополнения баланса или исправления поставщика.",
                 business_connection_id,
             )
             return True
@@ -2684,7 +2690,7 @@ async def process_admin_command(
         await answer_message(
             bot,
             message,
-            f"✅ Товар {row.internal_key} привязан к Proxyline.",
+            f"✅ Товар {row.internal_key} привязан к автопрокси.",
             business_connection_id,
         )
         return True
@@ -3494,6 +3500,13 @@ async def process_main_reply_button(
         await answer_message(
             bot,
             message,
+            "Режим администратора открыт.",
+            business_connection_id,
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        await answer_message(
+            bot,
+            message,
             admin_panel_text(),
             business_connection_id,
             reply_markup=admin_panel_keyboard(),
@@ -3777,16 +3790,16 @@ async def proxy_settings_text(session) -> tuple[str, object]:
     periods = ", ".join(f"{x} дней" for x in settings.periods)
     proxy_type = "Выделенные" if settings.proxy_type == "dedicated" else "Общие"
     text = (
-        "🌐 <b>Прокси / Proxyline</b>\n\n"
+        "🌐 Прокси\n\n"
         "Управление автовыдачей, странами, сроками и ценой.\n"
-        "Покупателю показывается финальная цена: <b>база × наценка</b>.\n\n"
+        "Покупателю показывается финальная цена: база × наценка.\n\n"
         f"Автовыдача: {'🟢 включена' if settings.enabled else '🔴 выключена'}\n"
         f"├ Страны — {countries}\n"
         f"├ Сроки — {periods}\n"
         f"├ Тип — {proxy_type}\n"
         f"├ Количество — {settings.count}\n"
         f"├ IP — IPv{settings.ip_version}\n"
-        f"└ Наценка — <b>{multiplier_label(markup)}</b>\n\n"
+        f"└ Наценка — {multiplier_label(markup)}\n\n"
         "Базовую цену меняйте через /proxy_price, коэффициент — через /proxy_markup."
     )
     return text, settings
@@ -3939,7 +3952,7 @@ async def process_proxyline_order(
                 await session.commit()
         await notify_admins(
             bot,
-            "Proxyline API не настроен. Добавь PROXYLINE_API_KEY и PROXYLINE_ENABLED=1 в Render Environment.\n\n"
+            "API автопрокси не настроен. Проверь ключ и включение в Render Environment.\n\n"
             f"Заказ: #{order_operation_id}\nТовар: {order_product_name}",
         )
         return False
@@ -3969,7 +3982,7 @@ async def process_proxyline_order(
                 await session.commit()
         await notify_admins(
             bot,
-            "Proxyline: ошибка автоматической покупки.\n\n"
+            "Ошибка автоматической покупки прокси.\n\n"
             f"Заказ: #{order_operation_id}\n"
             f"Товар: {order_product_name}\n"
             f"Ошибка: {exc}",
@@ -4006,7 +4019,7 @@ async def process_proxyline_order(
     if ok:
         await notify_admins(
             bot,
-            "✅ Proxyline заказ выдан автоматически.\n\n"
+            "✅ Прокси-заказ выдан автоматически.\n\n"
             f"Заказ: #{order_operation_id}\n"
             f"Товар: {order_product_name}\n"
             f"Покупатель: {target_chat_id}",
@@ -4020,7 +4033,7 @@ async def process_proxyline_order(
 
     await notify_admins(
         bot,
-        "Proxyline купил прокси, но не смог отправить покупателю.\n\n"
+        "Прокси куплен, но не удалось отправить покупателю.\n\n"
         f"Заказ: #{order_operation_id}\n"
         f"Товар: {order_product_name}\n"
         f"Покупатель: {target_chat_id}\n"
@@ -4111,9 +4124,9 @@ async def process_legacy_external_shop_message_disabled(
         await notify_admins(
             bot,
             (
-                "OK. Покупка Proxyline обработана. Покупателю предложен выбор страны и срока.\n\n"
+                "OK. Покупка прокси обработана. Покупателю предложен выбор страны и срока.\n\n"
                 if settings.enabled
-                else "Proxyline-магазин отключён в админ-панели. Заказ переведён в problem.\n\n"
+                else "Раздел автопрокси отключён в админ-панели. Заказ переведён в problem.\n\n"
             )
             + f"Заказ: #{order.operation_id}\n"
             + f"ID в базе: {order.id}\n"
@@ -4125,7 +4138,7 @@ async def process_legacy_external_shop_message_disabled(
             if not sent:
                 await notify_admins(
                     bot,
-                    "⚠️ Proxyline: не удалось открыть выбор в обычном боте.\n\n"
+                    "⚠️ Не удалось открыть выбор прокси в обычном боте.\n\n"
                     f"Заказ: #{order.operation_id}\n"
                     f"Покупатель ID: {order.customer_telegram_id}\n\n"
                     "Покупатель должен открыть обычный чат с ботом и нажать /start. "
@@ -5476,7 +5489,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         await update_or_send(
             callback,
             "✅ Способ выдачи сохранён.\n\n"
-            "Для Proxyline задайте provider_key JSON через команду:\n"
+            "Для автопрокси задайте provider_key JSON через команду:\n"
             f"/set_provider_key {product_id} {{JSON}}\n\n"
             "Для поставщика или номера provider_key должен содержать Telegram ID поставщика.",
             reply_markup=advanced_keyboard(product_id),
@@ -6225,7 +6238,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             rows = await list_product_providers(session)
         if rows:
             text = "🔗 › Привязки товаров\n\n" + "\n".join(
-                f"{'✅' if row.enabled else '⛔'} {row.internal_key} — {row.product_name or 'Товар'} — {row.provider_type}"
+                f"{'✅' if row.enabled else '⛔'} {row.internal_key} — {row.product_name or 'Товар'}"
                 for row in rows
             )
         else:
@@ -6241,7 +6254,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             "🔗 › Привязка товара\n\n"
             "1. Выполните /products\n"
             "2. Скопируйте Product ID\n"
-            "3. Для Proxyline: /bind_proxyline PRODUCT_ID\n"
+            "3. Для автопрокси: /bind_proxyline PRODUCT_ID\n"
             "4. Для поставщика: /bind_product_supplier PRODUCT_ID TELEGRAM_ID\n"
             "5. Отвязать: /unbind_product PRODUCT_ID"
         )
@@ -6256,14 +6269,14 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             markup = await get_proxy_markup_multiplier(session)
             settings = await get_proxy_shop_settings(session)
         text = (
-            "💹 <b>Наценка прокси</b>\n\n"
+            "💹 Наценка прокси\n\n"
             "Финальная цена для покупателя считается так:\n"
-            "<b>базовая цена товара × коэффициент наценки</b>.\n\n"
-            f"Сейчас: <b>{multiplier_label(markup)}</b>\n\n"
+            "базовая цена товара × коэффициент наценки.\n\n"
+            f"Сейчас: {multiplier_label(markup)}\n\n"
             "Команды:\n"
             "├ /proxy_markup 1.77 — изменить коэффициент\n"
-            "├ /proxy_price 100 RUB — изменить базовую цену всех Proxyline-товаров\n"
-            "└ /proxy_autofix 100 RUB — создать/обновить Proxyline-товары"
+            "├ /proxy_price 100 RUB — изменить базовую цену прокси-товаров\n"
+            "└ /proxy_autofix 100 RUB — создать/обновить прокси-товары"
         )
         await update_or_send(callback, text, reply_markup=admin_proxy_settings_keyboard(settings))
         await callback.answer()
@@ -6672,17 +6685,17 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
     if data == "admin:hidden":
         text = (
-            "🕶 <b>Скрытые действия администратора</b>\n\n"
-            "Эти кнопки видны только после входа в админ-панель и не появляются у покупателя.\n\n"
-            "Быстрые команды:\n"
-            "├ /proxy_autofix 100 RUB — создать Proxyline-товары\n"
-            "├ /proxy_markup 1.77 — наценка прокси\n"
-            "├ /proxy_price 100 RUB — базовая цена прокси\n"
-            "├ /stats_full — полная статистика\n"
-            "├ /top_buyers week|month|all — топ покупателей\n"
-            "└ /v37_help — все команды"
+            "▫️ Скрытые действия администратора\n\n"
+            "Здесь только служебные разделы. Покупательские кнопки скрыты.\n\n"
+            "Команды:\n"
+            "• /proxy_autofix 100 RUB — создать/обновить прокси-товары\n"
+            "• /proxy_markup 1.77 — наценка прокси\n"
+            "• /proxy_price 100 RUB — базовая цена прокси\n"
+            "• /hide_proxy_category — убрать системную категорию из каталога\n"
+            "• /stats_full — полная статистика\n"
+            "• /top_buyers week|month|all — топ покупателей"
         )
-        await update_or_send(callback, text, reply_markup=admin_panel_keyboard())
+        await update_or_send(callback, text, reply_markup=admin_hidden_keyboard())
         await callback.answer()
         return True
 
@@ -7510,7 +7523,7 @@ async def handle_proxy_callback(bot: Bot, callback: CallbackQuery) -> bool:
             provider and provider.enabled and provider.provider_type == "proxyline"
         )
         if not is_explicit_proxy and not is_proxyline_product(order.product_name):
-            await callback.answer("Этот товар не привязан к Proxyline", show_alert=True)
+            await callback.answer("Этот товар не привязан к автопрокси", show_alert=True)
             return True
         if not settings.enabled:
             await callback.answer(
@@ -7575,7 +7588,7 @@ async def handle_proxy_callback(bot: Bot, callback: CallbackQuery) -> bool:
                 f"├ Тип — {proxy_type}\n"
                 f"├ Количество — {settings.count}\n"
                 f"└ Версия IP — IPv{settings.ip_version}\n\n"
-                "После подтверждения бот купит прокси через Proxyline API и выдаст его в этом чате."
+                "После подтверждения бот купит прокси автоматически и выдаст его в этом чате."
             )
             await update_or_send(
                 callback, text, reply_markup=buyer_proxy_confirm_keyboard(order.id)
@@ -7637,7 +7650,7 @@ async def handle_proxy_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
     await update_or_send(
         callback,
-        "⏳ › Покупка прокси\n\nЗапрос отправлен в Proxyline. Не нажимайте кнопку повторно.",
+        "⏳ › Покупка прокси\n\nЗапрос отправлен. Не нажимайте кнопку повторно.",
         reply_markup=buyer_back_keyboard(),
     )
     await callback.answer("Покупаю прокси…")
@@ -7672,9 +7685,21 @@ async def check_button_cooldown(callback: CallbackQuery, action: str) -> bool:
 async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
     data = callback.data or ""
 
-    # Админы и поставщики работают без cooldown на inline-кнопках.
-    # Для покупателя защита от случайного многократного нажатия сохраняется.
-    if data and not data.startswith(("admin:", "supplier:")):
+    # Админы и поставщики работают без cooldown.
+    # Для покупателей оставляем защиту только на рискованных действиях: проверка оплаты,
+    # подтверждение/повторная выдача и оформление заказа. Навигация работает без задержек.
+    cooldown_prefixes = (
+        "payment:check",
+        "wallet:check",
+        "buyer:checkout",
+        "buyer:pxbuy",
+        "proxy:confirm",
+        "confirm_success",
+        "code_sent",
+        "number_invalid",
+        "code_invalid",
+    )
+    if data and data.startswith(cooldown_prefixes):
         if not await check_button_cooldown(callback, data.split(":")[0]):
             return
 
@@ -8674,13 +8699,13 @@ logger.info("FIX_MARKER_FULL_VISUAL_SHOP_STYLE=v15 loaded")
 
 def admin_panel_text() -> str:
     return (
-        "🛠 <b>Панель администратора</b>\n"
-        "<i>Компактное меню V39</i>\n\n"
-        "Основные разделы вынесены наверх, а редкие действия спрятаны в «🕶 Скрытые».\n\n"
-        "🛒 Магазин — товары, категории, склад\n"
-        "🌐 Прокси — Proxyline, страны, сроки, наценка\n"
-        "💳 Оплата — платежи и проверки\n"
-        "📢 Рассылка — сообщение всем покупателям"
+        "🛠 Панель администратора\n"
+        "Компактное служебное меню.\n\n"
+        "Покупательские кнопки здесь скрыты. Для возврата нажмите «Главная».\n\n"
+        "▫️ Магазин — товары, категории, склад\n"
+        "▫️ Прокси — страны, сроки, наценка\n"
+        "▫️ Оплата — платежи и проверки\n"
+        "▫️ Рассылка — сообщение всем покупателям"
     )
 
 
@@ -8748,11 +8773,10 @@ def supplier_requests_panel_text() -> str:
 
 def buyer_main_panel_text() -> str:
     return (
-        "🛍 <b>MCS Shop</b>\n"
-        "<i>быстрый магазин с автовыдачей</i>\n\n"
+        "🛍 MCS Shop\n"
+        "Быстрый магазин с автовыдачей.\n\n"
         "Выберите нужный раздел ниже.\n\n"
         "🛒 Каталог — все товары\n"
-        "🌐 Прокси — страны, сроки, автовыдача\n"
         "📱 Номера — товары со склада / поставщики\n"
         "🧾 Заказы — история и статусы\n"
         "💬 Поддержка — вопрос администратору"
