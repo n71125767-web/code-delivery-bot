@@ -23,11 +23,18 @@ from app.models import (
     MarketplaceApplication,
     ManualPage,
     ProductStockItem,
+    ProductProvider,
     PromoCode,
     PromoRedemption,
     ShopCategory,
     ShopProduct,
     WalletPayment,
+)
+from app.proxy_pricing_v39 import (
+    apply_proxy_markup,
+    get_proxy_markup_multiplier,
+    multiplier_label,
+    set_proxy_markup_multiplier,
 )
 from app.senders import answer_message, safe_send_message
 
@@ -340,6 +347,79 @@ async def _create_stock_items(session: AsyncSession, product_id: int, text: str,
     return len(lines)
 
 
+PROXY_AUTOFIX_PRODUCTS = [
+    ("mtproxy", "🧩 MTProxy", "Прокси для Telegram/MTProxy"),
+    ("premium", "💎 Премиум прокси", "Премиум-прокси с автовыдачей через Proxyline"),
+    ("standard", "📦 Стандартные прокси", "Стандартные прокси с автовыдачей через Proxyline"),
+    ("residential", "🏠 Резидентские прокси", "Резидентские прокси с автовыдачей через Proxyline"),
+]
+
+
+async def ensure_proxy_autofix_products(session: AsyncSession, price: Decimal, currency: str) -> list[ShopProduct]:
+    category = await session.scalar(select(ShopCategory).where(ShopCategory.name == "Прокси"))
+    if not category:
+        category = ShopCategory(
+            name="Прокси",
+            emoji="🌐",
+            description="Автоматическая выдача прокси через Proxyline",
+            is_active=True,
+        )
+        session.add(category)
+        await session.flush()
+    else:
+        category.emoji = "🌐"
+        category.description = category.description or "Автоматическая выдача прокси через Proxyline"
+        category.is_active = True
+
+    created_or_updated: list[ShopProduct] = []
+    for sort_index, (key, name, description) in enumerate(PROXY_AUTOFIX_PRODUCTS, start=10):
+        note = f"proxy_autofix:{key}"
+        product = await session.scalar(select(ShopProduct).where(ShopProduct.note == note))
+        if not product:
+            product = ShopProduct(
+                internal_key=await _next_internal_key(session),
+                note=note,
+                created_at=_now(),
+            )
+            session.add(product)
+            await session.flush()
+        product.category_id = category.id
+        product.name = name
+        product.description = description
+        product.price = price
+        product.currency = currency.upper()[:10]
+        product.product_type = "static"
+        product.fulfillment_type = "proxyline"
+        product.provider_key = json.dumps(
+            {"type": "dedicated", "count": 1, "ip_version": 4},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        product.content_type = "text"
+        product.content_text = "Автовыдача через Proxyline после оплаты."
+        product.payment_enabled = True
+        product.is_active = True
+        product.is_deleted = False
+        product.sort_order = sort_index
+        product.updated_at = _now()
+
+        provider = await session.scalar(
+            select(ProductProvider).where(ProductProvider.internal_key == product.internal_key)
+        )
+        if not provider:
+            provider = ProductProvider(internal_key=product.internal_key)
+            session.add(provider)
+        provider.product_name = product.name
+        provider.provider_type = "proxyline"
+        provider.provider_key = product.provider_key
+        provider.enabled = True
+        provider.updated_at = _now()
+        created_or_updated.append(product)
+
+    await session.commit()
+    return created_or_updated
+
+
 async def process_extended_command(
     bot: Bot,
     message: Message,
@@ -459,11 +539,96 @@ async def process_extended_command(
             "Маркетплейс: /market_applications, /market_approve ID [CATEGORY_ID], /market_reject ID причина\n"
             "Товары: /product_add Название | Цена | Валюта | CATEGORY_ID | Контент, /product_delete ID, /stock_add ID позиции\n"
             "Номера/прокси со склада: /number_stock_add ID позиции, /proxy_stock_add ID позиции\n"
+            "Прокси: /proxy_autofix 100 RUB, /proxy_markup 1.77, /proxy_price 100 RUB\n"
             "Промо: /promo_create CODE percent|fixed VALUE MAX_USES [YYYY-MM-DD] [PRODUCT_ID], /promos, /promo_disable CODE\n"
             "Статистика: /stats_full, /stats_product ID, /top_buyers week|month|all\n"
             "КД: /cooldowns, /set_cooldown ACTION SECONDS\n"
             "Мануалы: /manual_add Заголовок | Текст, /manuals\n"
             "ГА: /my_id, /grant_ga TELEGRAM_ID Имя",
+            business_connection_id,
+        )
+        return True
+
+    if command == "/proxy_autofix":
+        parts = arg.split()
+        try:
+            price = _parse_decimal(parts[0]) if parts else Decimal("100")
+            currency = parts[1].upper() if len(parts) > 1 else "RUB"
+        except Exception:
+            await answer_message(bot, message, "Формат: /proxy_autofix [PRICE] [CURRENCY]  пример: /proxy_autofix 100 RUB", business_connection_id)
+            return True
+        if price <= 0:
+            await answer_message(bot, message, "Цена должна быть больше 0.", business_connection_id)
+            return True
+        async with SessionLocal() as session:
+            rows = await ensure_proxy_autofix_products(session, price, currency)
+            markup = await get_proxy_markup_multiplier(session)
+            final_month = apply_proxy_markup(price, markup)
+        lines = [
+            "✅ Proxyline-товары созданы/обновлены.",
+            "",
+            f"База за 1 месяц: {price} {currency.upper()}",
+            f"Наценка: {multiplier_label(markup)}",
+            f"Цена покупателю за 1 месяц: {final_month} {currency.upper()}",
+            "",
+            "Активные товары:",
+        ]
+        lines.extend(f"#{row.id} — {row.name}" for row in rows)
+        lines.append("")
+        lines.append("Теперь покупатель может открыть: 🌐 Прокси → тип → страна → срок.")
+        await answer_message(bot, message, "\n".join(lines), business_connection_id)
+        return True
+
+    if command == "/proxy_markup":
+        parts = arg.split()
+        if not parts:
+            async with SessionLocal() as session:
+                markup = await get_proxy_markup_multiplier(session)
+            await answer_message(
+                bot,
+                message,
+                f"💹 Текущая наценка прокси: {multiplier_label(markup)}\n\nИзменить: /proxy_markup 1.77",
+                business_connection_id,
+            )
+            return True
+        try:
+            async with SessionLocal() as session:
+                markup = await set_proxy_markup_multiplier(session, parts[0])
+                await session.commit()
+        except Exception as exc:
+            await answer_message(bot, message, f"Не удалось сохранить наценку: {exc}", business_connection_id)
+            return True
+        await answer_message(
+            bot,
+            message,
+            f"✅ Наценка прокси сохранена: {multiplier_label(markup)}\n\nБазовые цены товаров не менялись, меняется только финальная цена для покупателя.",
+            business_connection_id,
+        )
+        return True
+
+    if command == "/proxy_price":
+        parts = arg.split()
+        try:
+            price = _parse_decimal(parts[0])
+            currency = parts[1].upper() if len(parts) > 1 else "RUB"
+        except Exception:
+            await answer_message(bot, message, "Формат: /proxy_price 100 RUB", business_connection_id)
+            return True
+        if price <= 0:
+            await answer_message(bot, message, "Базовая цена должна быть больше 0.", business_connection_id)
+            return True
+        async with SessionLocal() as session:
+            rows = await ensure_proxy_autofix_products(session, price, currency)
+            markup = await get_proxy_markup_multiplier(session)
+            final_month = apply_proxy_markup(price, markup)
+        await answer_message(
+            bot,
+            message,
+            "✅ Базовая цена Proxyline-товаров обновлена.\n\n"
+            f"База: {price} {currency.upper()}\n"
+            f"Наценка: {multiplier_label(markup)}\n"
+            f"Покупателю за 1 месяц: {final_month} {currency.upper()}\n"
+            f"Обновлено товаров: {len(rows)}",
             business_connection_id,
         )
         return True

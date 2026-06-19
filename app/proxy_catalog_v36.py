@@ -16,6 +16,7 @@ from app.config import (
     PROXYLINE_ENABLED,
 )
 from app.proxyline import ProxylineService
+from app.country_ru import COUNTRY_RU_NAMES, country_display, country_matches, country_ru_name
 
 logger = logging.getLogger(__name__)
 
@@ -28,30 +29,7 @@ PROXY_PERIODS = {
 }
 
 # Используется только если API временно не вернул справочник стран.
-FALLBACK_COUNTRIES = {
-    "al":"Албания","dz":"Алжир","ar":"Аргентина","am":"Армения","au":"Австралия",
-    "at":"Австрия","az":"Азербайджан","bh":"Бахрейн","bd":"Бангладеш","by":"Беларусь",
-    "be":"Бельгия","bo":"Боливия","ba":"Босния и Герцеговина","br":"Бразилия","bg":"Болгария",
-    "kh":"Камбоджа","cm":"Камерун","ca":"Канада","cl":"Чили","cn":"Китай",
-    "co":"Колумбия","cr":"Коста-Рика","hr":"Хорватия","cy":"Кипр","cz":"Чехия",
-    "dk":"Дания","do":"Доминикана","ec":"Эквадор","eg":"Египет","ee":"Эстония",
-    "fi":"Финляндия","fr":"Франция","ge":"Грузия","de":"Германия","gh":"Гана",
-    "gr":"Греция","gt":"Гватемала","hk":"Гонконг","hu":"Венгрия","is":"Исландия",
-    "in":"Индия","id":"Индонезия","ie":"Ирландия","il":"Израиль","it":"Италия",
-    "jp":"Япония","jo":"Иордания","kz":"Казахстан","ke":"Кения","kr":"Южная Корея",
-    "kw":"Кувейт","kg":"Кыргызстан","lv":"Латвия","lb":"Ливан","lt":"Литва",
-    "lu":"Люксембург","my":"Малайзия","mt":"Мальта","mx":"Мексика","md":"Молдова",
-    "mn":"Монголия","me":"Черногория","ma":"Марокко","np":"Непал","nl":"Нидерланды",
-    "nz":"Новая Зеландия","ng":"Нигерия","mk":"Северная Македония","no":"Норвегия",
-    "om":"Оман","pk":"Пакистан","pa":"Панама","py":"Парагвай","pe":"Перу",
-    "ph":"Филиппины","pl":"Польша","pt":"Португалия","qa":"Катар","ro":"Румыния",
-    "ru":"Россия","sa":"Саудовская Аравия","rs":"Сербия","sg":"Сингапур",
-    "sk":"Словакия","si":"Словения","za":"ЮАР","es":"Испания","lk":"Шри-Ланка",
-    "se":"Швеция","ch":"Швейцария","tw":"Тайвань","tj":"Таджикистан","th":"Таиланд",
-    "tn":"Тунис","tr":"Турция","tm":"Туркменистан","ua":"Украина","ae":"ОАЭ",
-    "gb":"Великобритания","us":"США","uy":"Уругвай","uz":"Узбекистан","ve":"Венесуэла",
-    "vn":"Вьетнам",
-}
+FALLBACK_COUNTRIES = COUNTRY_RU_NAMES
 
 _cache: tuple[float, list[tuple[str, str]]] | None = None
 _cache_lock = asyncio.Lock()
@@ -71,7 +49,7 @@ def _normalize_country_rows(payload: Any) -> list[tuple[str, str]]:
                 name = value.get("name") or value.get("title") or value.get("country")
             else:
                 name = value
-            result.append((code, str(name or code.upper())))
+            result.append((code, country_ru_name(code, str(name or code.upper()))))
         return result
 
     if isinstance(payload, list):
@@ -80,7 +58,7 @@ def _normalize_country_rows(payload: Any) -> list[tuple[str, str]]:
             if isinstance(item, str):
                 code = item.strip().lower()
                 if len(code) == 2:
-                    result.append((code, FALLBACK_COUNTRIES.get(code, code.upper())))
+                    result.append((code, country_ru_name(code)))
             elif isinstance(item, dict):
                 code = str(
                     item.get("code")
@@ -98,7 +76,7 @@ def _normalize_country_rows(payload: Any) -> list[tuple[str, str]]:
                     or FALLBACK_COUNTRIES.get(code)
                     or code.upper()
                 )
-                result.append((code, str(name)))
+                result.append((code, country_ru_name(code, str(name))))
         return result
     return []
 
@@ -140,7 +118,7 @@ async def available_proxyline_countries(force: bool = False) -> list[tuple[str, 
         if not rows:
             rows = list(FALLBACK_COUNTRIES.items())
 
-        unique = {code: name for code, name in rows if len(code) == 2}
+        unique = {code: country_ru_name(code, name) for code, name in rows if len(code) == 2}
         rows = sorted(unique.items(), key=lambda item: item[1].lower())
         _cache = (time.monotonic(), rows)
         return rows
@@ -160,10 +138,15 @@ def countries_keyboard(
     kb = InlineKeyboardBuilder()
     for code, name in rows:
         kb.button(
-            text=f"🌍 {name}",
+            text=country_display(code, name),
             callback_data=f"buyer:pxcountry:{category_key}:{code}:{page}",
         )
     kb.adjust(2)
+
+    kb.button(
+        text="🔎 Найти страну",
+        callback_data=f"buyer:pxsearch:{category_key}",
+    )
 
     if page > 0:
         kb.button(
@@ -184,6 +167,14 @@ def countries_keyboard(
         style="danger",
     )
     return kb.as_markup()
+
+
+def filter_countries(countries: list[tuple[str, str]], query: str) -> list[tuple[str, str]]:
+    query = (query or "").strip()
+    if not query:
+        return countries
+    result = [(code, name) for code, name in countries if country_matches(code, name, query)]
+    return sorted(result, key=lambda item: item[1].lower())
 
 
 def periods_keyboard(

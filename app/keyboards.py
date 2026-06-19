@@ -725,20 +725,21 @@ def admin_proxy_settings_keyboard(settings) -> InlineKeyboardMarkup:
         ),
         callback_data="admin:proxy:toggle",
     )
-    kb.button(text="🔗 › Привязки товаров", callback_data="admin:proxy:products")
-    kb.button(text="🌍 › Страны", callback_data="admin:proxy:countries")
-    kb.button(text="📅 › Сроки", callback_data="admin:proxy:periods")
+    kb.button(text="🔗 Товары", callback_data="admin:proxy:products")
+    kb.button(text="💹 Наценка", callback_data="admin:proxy:markup_help")
+    kb.button(text="🌍 Страны", callback_data="admin:proxy:countries")
+    kb.button(text="📅 Сроки", callback_data="admin:proxy:periods")
     type_label = "Выделенные" if settings.proxy_type == "dedicated" else "Общие"
-    kb.button(text=f"🔐 › Тип: {type_label}", callback_data="admin:proxy:type")
+    kb.button(text=f"🔐 {type_label}", callback_data="admin:proxy:type")
     kb.button(
-        text=f"📦 › Количество: {settings.count}", callback_data="admin:proxy:count"
+        text=f"📦 {settings.count} шт.", callback_data="admin:proxy:count"
     )
     kb.button(
-        text=f"🌐 › IPv{settings.ip_version}", callback_data="admin:proxy:ip_version"
+        text=f"🌐 IPv{settings.ip_version}", callback_data="admin:proxy:ip_version"
     )
-    kb.button(text="🔄 › Обновить", callback_data="admin:proxy")
-    kb.button(text="⬅️ › Назад", callback_data="admin:panel")
-    kb.adjust(1)
+    kb.button(text="🔄 Обновить", callback_data="admin:proxy")
+    kb.button(text="⬅️ Назад", callback_data="admin:panel")
+    kb.adjust(2, 2, 2, 1, 2)
     return kb.as_markup()
 
 
@@ -747,30 +748,38 @@ def admin_proxy_settings_keyboard(settings) -> InlineKeyboardMarkup:
 
 # Shop UI/admin v20 overrides
 def admin_panel_keyboard() -> InlineKeyboardMarkup:
+    """Компактная админ-панель V39.
+
+    Показываем только основные разделы. Редкие/опасные действия спрятаны
+    в разделе «Скрытые», чтобы админка была удобнее на телефоне.
+    """
     kb = InlineKeyboardBuilder()
-    kb.button(text="💰 Управление товарами", callback_data="v25:catalog")
-    kb.button(text="🪙 Способы оплаты", callback_data="admin:payment_methods")
-    kb.button(text="📊 Оплата", callback_data="admin:payments")
+    kb.button(text="🛒 Магазин", callback_data="v25:catalog")
+    kb.button(text="🌐 Прокси", callback_data="admin:proxy")
+    kb.button(text="💳 Оплата", callback_data="admin:payments")
     kb.button(text="📢 Рассылка", callback_data="admin:broadcast")
-    kb.button(text="⚙️ Настройки", callback_data="admin:store_settings")
-    kb.button(text="👮 Администраторы", callback_data="admin:admins")
+    kb.button(text="👥 Админы", callback_data="admin:admins")
     kb.button(text="⚠️ Проблемы", callback_data="admin:problems")
-    kb.button(text="🏠 Главное меню", callback_data="buyer:panel")
-    kb.adjust(2)
+    kb.button(text="⚙️ Настройки", callback_data="admin:store_settings")
+    kb.button(text="🕶 Скрытые", callback_data="admin:hidden")
+    kb.button(text="🏠 В магазин", callback_data="buyer:panel")
+    kb.adjust(2, 2, 2, 2, 1)
     return kb.as_markup()
 
 
 def buyer_inline_menu_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="🛒 Товары", callback_data="buyer:shop")
+    kb.button(text="🛒 Каталог", callback_data="buyer:shop")
     kb.button(text="🌐 Прокси", callback_data="buyer:proxy_catalog")
     kb.button(text="📱 Номера", callback_data="buyer:number_catalog")
-    kb.button(text="🧾 Мои заказы", callback_data="buyer:orders")
-    kb.button(text="✉️ Обратная связь", callback_data="buyer:feedback")
+    kb.button(text="🧾 Заказы", callback_data="buyer:orders")
+    kb.button(text="💬 Поддержка", callback_data="buyer:feedback")
     kb.button(text="📕 FAQ", callback_data="buyer:faq")
     if is_admin:
-        kb.button(text="⚙️ Админ меню", callback_data="admin:panel")
-    kb.adjust(1, 2, 1, 2, 1)
+        kb.button(text="🛠 Админ", callback_data="admin:panel")
+        kb.adjust(2, 2, 2, 1)
+    else:
+        kb.adjust(2, 2, 2)
     return kb.as_markup()
 
 
@@ -792,15 +801,10 @@ def buyer_main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🧾 Мои заказы")],
         [KeyboardButton(text="✉️ Обратная связь"), KeyboardButton(text="📕 FAQ")],
     ]
+    # Админские кнопки не смешиваем с покупательскими действиями.
+    # Только один скрытый вход, дальше всё через inline-панель админа.
     if is_admin:
-        rows.append([KeyboardButton(text="💰 Управление товарами")])
-        rows.append(
-            [
-                KeyboardButton(text="💳 Оплата"),
-                KeyboardButton(text="📢 Рассылка"),
-            ]
-        )
-        rows.append([KeyboardButton(text="⚙️ Админ меню")])
+        rows.append([KeyboardButton(text="🛠 Админ")])
     return ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,

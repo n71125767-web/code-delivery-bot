@@ -4,18 +4,9 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services import get_text, set_text
+from app.country_ru import COUNTRY_RU_NAMES, country_display
 
-SUPPORTED_COUNTRIES = {
-    "ru": "🇷🇺 Россия",
-    "us": "🇺🇸 США",
-    "de": "🇩🇪 Германия",
-    "nl": "🇳🇱 Нидерланды",
-    "gb": "🇬🇧 Великобритания",
-    "fr": "🇫🇷 Франция",
-    "ca": "🇨🇦 Канада",
-    "pl": "🇵🇱 Польша",
-    "kz": "🇰🇿 Казахстан",
-}
+SUPPORTED_COUNTRIES = {code: country_display(code, name) for code, name in COUNTRY_RU_NAMES.items()}
 SUPPORTED_PERIODS = [5, 10, 20, 30, 60, 90, 180, 360]
 SUPPORTED_TYPES = ["dedicated", "shared"]
 
@@ -77,7 +68,7 @@ async def save_proxy_setting(session: AsyncSession, key: str, value: str) -> Non
 
 
 def country_label(code: str) -> str:
-    return SUPPORTED_COUNTRIES.get(code, code.upper())
+    return country_display(code, SUPPORTED_COUNTRIES.get(code, code.upper()))
 
 
 def selection_dump(country: str | None = None, period: int | None = None) -> str:

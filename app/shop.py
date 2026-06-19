@@ -134,8 +134,10 @@ async def list_proxy_products(session):
     result = []
     for product in products:
         name = (product.name or "").lower()
-        if product.internal_key in explicit_keys or any(
-            word in name for word in proxy_words
+        if (
+            getattr(product, "fulfillment_type", None) == "proxyline"
+            or product.internal_key in explicit_keys
+            or any(word in name for word in proxy_words)
         ):
             result.append(product)
     return result
@@ -206,39 +208,52 @@ async def list_proxy_products_by_category(session, category_key: str):
     """
     rows = await list_proxy_products(session)
     definition = PROXY_CATEGORY_DEFINITIONS.get(category_key)
+    active_proxyline = [
+        row for row in rows
+        if getattr(row, "fulfillment_type", None) == "proxyline"
+        and getattr(row, "payment_enabled", False)
+        and getattr(row, "is_active", False)
+    ]
     if not definition:
-        return rows
+        return active_proxyline or rows
 
     keywords = definition["keywords"]
     result = []
-    for row in rows:
+    for row in active_proxyline or rows:
         name = (row.name or "").lower()
         if any(keyword in name for keyword in keywords):
             result.append(row)
-    return result
+
+    # Если админ создал один универсальный Proxyline-товар без слов
+    # «premium/standard/residential», используем его для любого типа.
+    # Это убирает ошибку «администратор ещё не создал активный товар».
+    return result or active_proxyline or rows
 
 
 def proxy_categories_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="🧩 MTProxy", callback_data="buyer:proxycat:mtproxy")
-    kb.button(text="💎 Премиум прокси", callback_data="buyer:proxycat:premium")
-    kb.button(text="📦 Стандарт", callback_data="buyer:proxycat:standard")
-    kb.button(text="🏠 Резидентские", callback_data="buyer:proxycat:residential")
-    kb.button(text="⬅️ › Назад", callback_data="buyer:panel", style="danger")
-    kb.adjust(1)
+    kb.button(text="💎 Premium", callback_data="buyer:proxycat:premium")
+    kb.button(text="📦 Standard", callback_data="buyer:proxycat:standard")
+    kb.button(text="🏠 Residential", callback_data="buyer:proxycat:residential")
+    kb.button(text="🏠 Главное меню", callback_data="buyer:panel", style="danger")
+    kb.adjust(2, 2, 1)
     return kb.as_markup()
 
 
 def proxy_categories_text() -> str:
     return (
-        "🌐 Прокси\n\n"
-        "Выберите тип прокси:\n\n"
-        "├ 🧩 MTProxy\n"
-        "├ 💎 Премиум прокси\n"
-        "├ 📦 Стандарт\n"
-        "└ 🏠 Резидентские"
+        "🌐 <b>Прокси</b>\n"
+        "<i>Автовыдача после оплаты</i>\n\n"
+        "1️⃣ Выберите тип\n"
+        "2️⃣ Найдите страну или выберите из списка\n"
+        "3️⃣ Выберите срок и оплатите\n\n"
+        "<b>Доступные разделы</b>\n"
+        "🧩 MTProxy — Telegram\n"
+        "💎 Premium — стабильные приватные\n"
+        "📦 Standard — базовый вариант\n"
+        "🏠 Residential — прокси под гео-задачи"
     )
-
 
 def special_catalog_text(title: str, count: int = 0) -> str:
     return title
