@@ -20,6 +20,7 @@ from app.config import (
     CRYPTO_PAY_TOKEN,
     CRYPTO_PAY_NETWORK,
     CRYPTO_PAY_API_BASE_URL,
+    CRYPTO_PAY_CHECK_BASE_URL,
 )
 from app.database import SessionLocal
 from app.models import (
@@ -59,25 +60,49 @@ def _crypto_pay_base_url() -> str:
     return "https://testnet-pay.crypt.bot/api"
 
 
+def _crypto_pay_method_urls(method: str) -> list[str]:
+    method = method.lstrip("/")
+    urls: list[str] = []
+    custom = (CRYPTO_PAY_CHECK_BASE_URL or "").strip().rstrip("/")
+    if custom:
+        urls.append(f"{custom}/{method}")
+    urls.append(f"{_crypto_pay_base_url()}/{method}")
+    # Compatibility with examples that use https://crypt.bot + createCheck.
+    # Kept as fallback only; official Crypto Pay API normally uses pay.crypt.bot/api.
+    urls.append(f"https://crypt.bot/{method}")
+    dedup: list[str] = []
+    for url in urls:
+        if url not in dedup:
+            dedup.append(url)
+    return dedup
+
+
 async def _raw_crypto_pay_request(method: str, payload: dict[str, Any]) -> dict[str, Any]:
     if not CRYPTO_PAY_TOKEN:
         raise RuntimeError("CRYPTO_PAY_TOKEN не задан")
-    url = f"{_crypto_pay_base_url()}/{method.lstrip('/')}"
     headers = {
         "Crypto-Pay-API-Token": CRYPTO_PAY_TOKEN,
         "Content-Type": "application/json",
     }
+    errors: list[str] = []
     async with aiohttp.ClientSession() as client:
-        async with client.post(url, headers=headers, json=payload, timeout=30) as response:
+        for url in _crypto_pay_method_urls(method):
             try:
-                data = await response.json()
-            except Exception:
-                text = await response.text()
-                raise RuntimeError(f"CryptoBot HTTP {response.status}: {text[:300]}")
-    if not data.get("ok"):
-        error = data.get("error") or data
-        raise RuntimeError(f"CryptoBot API error: {error}")
-    return data.get("result") or {}
+                async with client.post(url, headers=headers, json=payload, timeout=30) as response:
+                    try:
+                        data = await response.json()
+                    except Exception:
+                        text = await response.text()
+                        errors.append(f"{url}: HTTP {response.status}: {text[:300]}")
+                        continue
+                if not data.get("ok"):
+                    error = data.get("error") or data
+                    errors.append(f"{url}: {error}")
+                    continue
+                return data.get("result") or {}
+            except Exception as exc:
+                errors.append(f"{url}: {exc}")
+    raise RuntimeError("; ".join(errors[-3:]) or "CryptoBot API request failed")
 
 
 def _extract_check_link(data: dict[str, Any]) -> str | None:
@@ -377,20 +402,21 @@ def _obj_to_dict(obj: Any) -> dict[str, Any]:
     return data
 
 
-async def create_withdrawal_request(supplier_id: int, raw: str) -> str:
+async def create_withdrawal_request(supplier_id: int, raw: str, asset: str | None = None) -> str:
     parts = raw.split(maxsplit=2)
     if len(parts) < 2:
-        return "Формат: /withdraw СУММА USDT_АДРЕС\nПример: /withdraw 10 UQ..."
+        return "Формат: СУММА АДРЕС\nПример: 10 UQ..."
     try:
         amount = money(parts[0])
     except Exception:
         return "Сумма должна быть числом."
     address = parts[1].strip()
+    payout_asset = (asset or (parts[2].strip().upper() if len(parts) > 2 else WITHDRAW_PAYOUT_ASSET) or "USDT").upper()
     fee = money(WITHDRAWAL_FEE_USD)
     if amount <= 0:
         return "Сумма должна быть больше нуля."
     if amount <= fee:
-        return f"Минимальная сумма должна быть больше комиссии вывода {money_text(fee, WITHDRAW_PAYOUT_ASSET)}."
+        return f"Минимальная сумма должна быть больше комиссии вывода {money_text(fee, payout_asset)}."
     net_amount = money(amount - fee)
     async with SessionLocal() as session:
         wallet = await session.get(UserWallet, supplier_id)
@@ -401,7 +427,7 @@ async def create_withdrawal_request(supplier_id: int, raw: str) -> str:
         wd = SupplierWithdrawal(
             supplier_id=supplier_id,
             amount=amount,
-            currency=wallet.currency or WITHDRAW_PAYOUT_ASSET,
+            currency=payout_asset,
             payout_address=address,
             status="pending",
         )
@@ -410,7 +436,7 @@ async def create_withdrawal_request(supplier_id: int, raw: str) -> str:
         session.add(WalletLedger(
             user_id=supplier_id,
             amount=-amount,
-            currency=wallet.currency or WITHDRAW_PAYOUT_ASSET,
+            currency=payout_asset,
             event_type="withdraw_hold",
             source_type="withdrawal",
             source_id=wd.id,
@@ -425,7 +451,7 @@ async def create_withdrawal_request(supplier_id: int, raw: str) -> str:
             link, check_id = await _create_cryptobot_withdraw_check(
                 supplier_id=supplier_id,
                 amount=net_amount,
-                asset=WITHDRAW_PAYOUT_ASSET,
+                asset=payout_asset,
             )
             async with SessionLocal() as session:
                 wd = await session.get(SupplierWithdrawal, withdrawal_id)
@@ -436,9 +462,9 @@ async def create_withdrawal_request(supplier_id: int, raw: str) -> str:
                     await session.commit()
             return (
                 f"✅ Вывод #{withdrawal_id} создан и отправлен через CryptoBot.\n"
-                f"Сумма: {money_text(amount, WITHDRAW_PAYOUT_ASSET)}\n"
-                f"Комиссия: {money_text(fee, WITHDRAW_PAYOUT_ASSET)}\n"
-                f"К выплате: {money_text(net_amount, WITHDRAW_PAYOUT_ASSET)}\n"
+                f"Сумма: {money_text(amount, payout_asset)}\n"
+                f"Комиссия: {money_text(fee, payout_asset)}\n"
+                f"К выплате: {money_text(net_amount, payout_asset)}\n"
                 f"Ссылка: {link or check_id or 'не получена'}"
             )
         except Exception as exc:
@@ -451,17 +477,17 @@ async def create_withdrawal_request(supplier_id: int, raw: str) -> str:
                     await session.commit()
             return (
                 f"✅ Заявка на вывод #{withdrawal_id} создана и отправлена на модерацию.\n"
-                f"Сумма: {money_text(amount, WITHDRAW_PAYOUT_ASSET)}\n"
-                f"Комиссия: {money_text(fee, WITHDRAW_PAYOUT_ASSET)}\n"
-                f"К выплате: {money_text(net_amount, WITHDRAW_PAYOUT_ASSET)}\n\n"
+                f"Сумма: {money_text(amount, payout_asset)}\n"
+                f"Комиссия: {money_text(fee, payout_asset)}\n"
+                f"К выплате: {money_text(net_amount, payout_asset)}\n\n"
                 "Авточек CryptoBot создать не удалось. Администратор отправит монеты вручную."
             )
 
     return (
         f"✅ Заявка на вывод #{withdrawal_id} создана.\n"
-        f"Сумма: {money_text(amount, WITHDRAW_PAYOUT_ASSET)}\n"
-        f"Комиссия: {money_text(fee, WITHDRAW_PAYOUT_ASSET)}\n"
-        f"К выплате: {money_text(net_amount, WITHDRAW_PAYOUT_ASSET)}\n\n"
+        f"Сумма: {money_text(amount, payout_asset)}\n"
+        f"Комиссия: {money_text(fee, payout_asset)}\n"
+        f"К выплате: {money_text(net_amount, payout_asset)}\n\n"
         "Администратор отправит выплату через CryptoBot и прикрепит ссылку."
     )
 
@@ -474,7 +500,7 @@ async def admin_withdrawals_text() -> str:
     lines = ["↗️ Заявки на вывод", ""]
     for r in rows:
         lines.append(f"#{r.id} — supplier {r.supplier_id} — {money(r.amount)} {r.currency} — {r.status} — {r.payout_address or 'адрес не указан'}")
-    lines.append("\nПодтвердить: /withdraw_done ID ССЫЛКА_ИЛИ_TX")
+    lines.append("\nНажмите кнопку «✅ Одобрено» после ручной выплаты или используйте панель вывода.")
     return "\n".join(lines)
 
 

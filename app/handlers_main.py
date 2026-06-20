@@ -499,6 +499,7 @@ ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 ADMIN_KEYBOARD_SENT: set[int] = set()
 SUPPLIER_PRICE_WAIT: dict[int, bool] = {}
 SUPPLIER_WITHDRAW_WAIT: set[int] = set()
+SUPPLIER_WITHDRAW_ASSET: dict[int, str] = {}
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
 ADMIN_SUPPLIER_WAIT: dict[int, dict] = {}
 ADMIN_PROXY_PRICE_WAIT: dict[int, str] = {}
@@ -4814,7 +4815,8 @@ async def handle_supplier_message(
 
     if supplier_id in SUPPLIER_WITHDRAW_WAIT:
         SUPPLIER_WITHDRAW_WAIT.discard(supplier_id)
-        result = await create_withdrawal_request(supplier_id, text)
+        payout_asset = SUPPLIER_WITHDRAW_ASSET.pop(supplier_id, None)
+        result = await create_withdrawal_request(supplier_id, text, asset=payout_asset)
         await answer_message(bot, message, result, business_connection_id, reply_markup=wallet_keyboard(is_supplier=True))
         if "Автовыплата не прошла" in result or "Заявка на вывод" in result:
             await notify_admins(
@@ -5148,7 +5150,8 @@ async def handle_supplier_message(
     # сбросилось после рестарта/обновления, не воспринимаем это как номер/код.
     # Пример: 10 UQ...
     if re.match(r"^\s*\d+(?:[,.]\d+)?\s+\S+", text):
-        result = await create_withdrawal_request(supplier_id, text)
+        payout_asset = SUPPLIER_WITHDRAW_ASSET.pop(supplier_id, None)
+        result = await create_withdrawal_request(supplier_id, text, asset=payout_asset)
         await answer_message(
             bot,
             message,
@@ -7495,8 +7498,29 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data == "admin:withdrawals":
-        await update_or_send(callback, await admin_withdrawals_text(), reply_markup=admin_hidden_keyboard())
+        from aiogram.utils.keyboard import InlineKeyboardBuilder as _IKB
+        kb = _IKB()
+        async with SessionLocal() as session:
+            from app.models import SupplierWithdrawal as _SW
+            rows = list((await session.scalars(select(_SW).where(_SW.status.in_(["pending", "manual_review"])) .order_by(_SW.id.desc()).limit(10))).all())
+        for wd in rows:
+            kb.button(text=f"✅ Одобрено {wd.id}", callback_data=f"admin:withdraw_approve:{wd.id}")
+        kb.button(text="🔄 Обновить", callback_data="admin:withdrawals")
+        kb.button(text="🔙 Назад", callback_data="admin:hidden")
+        kb.adjust(2, 1, 1)
+        await update_or_send(callback, await admin_withdrawals_text(), reply_markup=kb.as_markup())
         await callback.answer()
+        return True
+
+    if data.startswith("admin:withdraw_approve:"):
+        try:
+            wid = int(data.rsplit(":", 1)[1])
+        except Exception:
+            await callback.answer("Некорректный ID", show_alert=True)
+            return True
+        result = await mark_withdrawal_done(bot, callback.from_user.id, f"{wid} approved")
+        await update_or_send(callback, result + "\n\n" + await admin_withdrawals_text(), reply_markup=admin_hidden_keyboard())
+        await callback.answer("Одобрено")
         return True
 
     if data == "admin:hidden":
@@ -7961,17 +7985,34 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data == "supplier:withdraw_help":
-        SUPPLIER_WITHDRAW_WAIT.add(callback.from_user.id)
         ADMIN_BROADCAST_V28.pop(callback.from_user.id, None)
+        from aiogram.utils.keyboard import InlineKeyboardBuilder as _IKB
+        kb = _IKB()
+        for asset in ["USDT", "TON", "BTC", "ETH", "LTC", "TRX"]:
+            kb.button(text=f"💸 {asset}", callback_data=f"supplier:withdraw_asset:{asset}")
+        kb.button(text="🏠 Главное меню", callback_data="supplier:panel")
+        kb.adjust(3, 3, 1)
         withdraw_text = (
             "↗️ Вывод средств\n\n"
-            "Комиссия вывода: 2.5 USDT.\n"
-            "Отправьте сумму и адрес одним сообщением.\n\n"
-            "Пример: 10 UQ...\n\n"
-            "Если авточек CryptoBot создать не получится, заявка уйдёт администратору на ручную модерацию."
+            "Выберите монету для вывода.\n"
+            "Комиссия: 2.5 в выбранной монете.\n\n"
+            "Если авточек CryptoBot не создастся, заявка уйдёт администратору на модерацию."
         )
-        await update_or_send(callback, withdraw_text, reply_markup=supplier_inline_menu_keyboard())
-        await callback.answer("Жду сумму и адрес")
+        await update_or_send(callback, withdraw_text, reply_markup=kb.as_markup())
+        await callback.answer()
+        return True
+
+    if data.startswith("supplier:withdraw_asset:"):
+        asset = data.rsplit(":", 1)[1].upper()
+        SUPPLIER_WITHDRAW_WAIT.add(callback.from_user.id)
+        SUPPLIER_WITHDRAW_ASSET[callback.from_user.id] = asset
+        ADMIN_BROADCAST_V28.pop(callback.from_user.id, None)
+        await update_or_send(
+            callback,
+            f"↗️ Вывод {asset}\n\nОтправьте сумму и адрес одним сообщением.\nПример: 10 UQ...",
+            reply_markup=supplier_inline_menu_keyboard(),
+        )
+        await callback.answer(f"Выбран {asset}")
         return True
 
     if data == "supplier:requests":

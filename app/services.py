@@ -399,14 +399,42 @@ async def unbind_supplier_from_product(
     return f"✅ Доступ удалён: {telegram_id} → {product_key}"
 
 
+async def get_order_shop_product(session: AsyncSession, order: Order) -> ShopProduct | None:
+    """Return ShopProduct for an Order safely.
+
+    Old patches sometimes stored ShopProduct.internal_key in orders.product_id.
+    PostgreSQL shop_products.id is INTEGER, so calling session.get(ShopProduct,
+    a 16-digit internal_key raises asyncpg DataError. This helper supports both
+    formats and never queries INTEGER id with an out-of-range value.
+    """
+    value = getattr(order, "product_id", None)
+    if value is None:
+        return None
+    try:
+        value_int = int(value)
+    except Exception:
+        value_int = None
+    if value_int is not None and -2147483648 <= value_int <= 2147483647:
+        product = await session.get(ShopProduct, value_int)
+        if product:
+            return product
+    if value_int is not None:
+        return await session.scalar(select(ShopProduct).where(ShopProduct.internal_key == value_int))
+    return None
+
+
 async def find_supplier_for_order(
     session: AsyncSession, order: Order
 ) -> Supplier | None:
     keys: list[str] = []
 
+    product = None
     if order.product_id is not None:
         keys.append(normalize_key(order.product_id))
-        product = await session.get(ShopProduct, order.product_id)
+        product = await get_order_shop_product(session, order)
+        if product:
+            keys.append(normalize_key(product.id))
+            keys.append(normalize_key(product.internal_key))
         if product and product.category_id:
             keys.append(normalize_key(f"cat:{product.category_id}"))
 

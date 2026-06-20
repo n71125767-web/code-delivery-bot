@@ -337,7 +337,7 @@ async def fulfill_supplier(
             customer_telegram_id=purchase.buyer_id,
             buyer_chat_id=purchase.buyer_id,
             customer_username=purchase.buyer_username,
-            product_id=product.internal_key,
+            product_id=product.id,
             product_name=product.name,
             amount=purchase.amount,
             currency=purchase.currency,
