@@ -104,26 +104,7 @@ async def buyer_orders_page(user_id: int, username: str | None, page: int = 0):
     if not rows:
         text = "🧾 Мои заказы\n\nПока заказов нет."
     else:
-        lines = [f"🧾 Мои заказы", f"Страница {page + 1}/{max_page + 1}", ""]
-        for row in rows:
-            p = products.get(row.product_id)
-            created = row.created_at.strftime("%d.%m.%Y %H:%M") if row.created_at else "—"
-            paid = row.paid_at.strftime("%d.%m.%Y %H:%M") if row.paid_at else "—"
-            qty = int(getattr(row, "quantity", 1) or 1)
-            payment = payment_map.get(row.id)
-            lines.extend([
-                f"#{row.id} · {labels.get(row.status, row.status)}",
-                f"📦 {_safe_name(p.name if p else None)}",
-                f"🔢 {qty} шт. · 💵 {_money(row.amount, row.currency)}",
-                f"🕐 Создан: {created}",
-                f"✅ Оплачен: {paid}",
-            ])
-            if payment and payment.invoice_url and row.status in {"creating_invoice", "pending_payment"}:
-                lines.append("💳 Счёт ещё можно открыть кнопкой заказа.")
-            lines.append("— — —")
-        if lines[-1] == "— — —":
-            lines.pop()
-        text = "\n".join(lines)
+        text = f"🧾 Мои заказы\n\nСтраница {page + 1}/{max_page + 1}. Выберите заказ кнопкой ниже."
 
     kb = InlineKeyboardBuilder()
     for row in rows:

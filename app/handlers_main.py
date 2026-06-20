@@ -475,9 +475,7 @@ def validate_runtime_ui() -> None:
 
     required_proxy_callbacks = {
         "buyer:proxycat:mtproxy",
-        "buyer:proxycat:premium",
         "buyer:proxycat:standard",
-        "buyer:proxycat:residential",
     }
 
     missing_proxy = required_proxy_callbacks - proxy_callbacks
@@ -1792,7 +1790,7 @@ async def process_buyer_catalog_search(
             text=f"📦 {product.name} — {product.price} {product.currency}",
             callback_data=f"buyer:shopproduct:{product.id}",
         )
-    kb.button(text="⬅️ К магазину", callback_data="buyer:shop", style="danger")
+    kb.button(text="⬅️ К магазину", callback_data="buyer:shop")
     kb.adjust(max(1, min(int(settings.columns_count or 1), 3)))
 
     await answer_message(
@@ -2210,13 +2208,20 @@ async def process_catalog_v25_input(
                     count = await v25_stock_count(session, product.id)
 
                 CATALOG_V25_STATE.pop(admin_id, None)
-                await answer_message(
-                    bot,
-                    message,
-                    v25_product_card_text(product, count),
-                    business_connection_id,
-                    reply_markup=v25_product_card_keyboard(product),
-                )
+                if data["product_type"] == "quantity":
+                    kb = InlineKeyboardBuilder()
+                    kb.button(text="Следующий", callback_data=f"v25:stock:{product.id}")
+                    kb.button(text="Отмена", callback_data=f"v25:product:{product.id}")
+                    kb.adjust(2)
+                    await answer_message(bot, message, "Добавил", business_connection_id, reply_markup=kb.as_markup())
+                else:
+                    await answer_message(
+                        bot,
+                        message,
+                        v25_product_card_text(product, count),
+                        business_connection_id,
+                        reply_markup=v25_product_card_keyboard(product),
+                    )
                 return True
 
         if action == "category_create":
@@ -2393,13 +2398,20 @@ async def process_catalog_v25_input(
                 await session.refresh(product)
                 count = await v25_stock_count(session, product.id)
                 CATALOG_V25_STATE.pop(admin_id, None)
-                await answer_message(
-                    bot,
-                    message,
-                    v25_product_card_text(product, count),
-                    business_connection_id,
-                    reply_markup=v25_product_card_keyboard(product),
-                )
+                if data["product_type"] == "quantity":
+                    kb = InlineKeyboardBuilder()
+                    kb.button(text="Следующий", callback_data=f"v25:stock:{product.id}")
+                    kb.button(text="Отмена", callback_data=f"v25:product:{product.id}")
+                    kb.adjust(2)
+                    await answer_message(bot, message, "Добавил", business_connection_id, reply_markup=kb.as_markup())
+                else:
+                    await answer_message(
+                        bot,
+                        message,
+                        v25_product_card_text(product, count),
+                        business_connection_id,
+                        reply_markup=v25_product_card_keyboard(product),
+                    )
                 return True
             if category:
                 await session.refresh(category)
@@ -2590,16 +2602,9 @@ async def process_admin_command(
         await answer_message(
             bot,
             message,
-            "🛠 Админ-панель открыта.",
-            business_connection_id,
-            reply_markup=admin_main_reply_keyboard(),
-        )
-        await answer_message(
-            bot,
-            message,
             admin_panel_text(),
             business_connection_id,
-            reply_markup=admin_panel_keyboard(),
+            reply_markup=admin_main_reply_keyboard(),
         )
         return True
 
@@ -3520,18 +3525,18 @@ async def process_main_reply_button(
         await answer_message(bot, message, text_value, business_connection_id, reply_markup=payments_keyboard())
         return True
 
-    if admin_access and text in {"⚙️ Настройки", "Настройки", "⚙️ Админ меню"}:
+    if admin_access and text in {"⚙️ Настройки", "Настройки"}:
         await answer_message(bot, message, await admin_settings_visual_text(), business_connection_id, reply_markup=admin_settings_visual_keyboard())
         return True
 
     if admin_access and text in {"📊 Статистика", "Статистика"}:
         async with SessionLocal() as session:
             text_value = await admin_statistics_visual_text(session)
-        await answer_message(bot, message, text_value, business_connection_id, reply_markup=admin_hidden_keyboard())
+        await answer_message(bot, message, text_value, business_connection_id, reply_markup=simple_back_keyboard("admin:panel"))
         return True
 
     if admin_access and text in {"👁 Скрытые", "Скрытые"}:
-        await answer_message(bot, message, "👁 Скрытые действия\n\nСлужебные настройки, заявки, выводы и права.", business_connection_id, reply_markup=admin_hidden_keyboard())
+        await answer_message(bot, message, "👁 Скрытые разделы\n\nВыберите действие кнопкой ниже.", business_connection_id, reply_markup=admin_hidden_keyboard())
         return True
 
     if admin_access and text in {"🧩 Прокси", "Прокси"}:
@@ -5265,6 +5270,21 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         await update_or_send(callback, await admin_settings_visual_text(), reply_markup=admin_settings_visual_keyboard())
         await callback.answer()
         return True
+    if data == "admin:cleanup:deleted_products":
+        async with SessionLocal() as session:
+            rows = list((await session.scalars(select(ShopProduct).where(ShopProduct.is_deleted.is_(True)))).all())
+            count = 0
+            for row in rows:
+                try:
+                    await hard_delete_product(session, row.id)
+                    count += 1
+                except Exception:
+                    await session.rollback()
+                    logger.exception("Cleanup failed for deleted product %s", row.id)
+        await update_or_send(callback, f"🧹 Очистка завершена. Удалено: {count}", reply_markup=admin_hidden_keyboard())
+        await callback.answer()
+        return True
+
 
     if data == "admin:edit_faq":
         ADMIN_TEXT_EDIT_WAIT[callback.from_user.id] = "faq_text"
@@ -5281,7 +5301,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
     if data == "admin:status":
         async with SessionLocal() as session:
             text_value = await admin_statistics_visual_text(session)
-        await update_or_send(callback, text_value, reply_markup=admin_hidden_keyboard())
+        await update_or_send(callback, text_value, reply_markup=simple_back_keyboard("admin:panel"))
         await callback.answer()
         return True
 
@@ -5731,7 +5751,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             text="📁 Без категории", callback_data=f"v25:set_category:{product_id}:0"
         )
         kb.button(
-            text="⬅️ Назад", callback_data=f"v25:product:{product_id}", style="danger"
+            text="⬅️ Назад", callback_data=f"v25:product:{product_id}"
         )
         kb.adjust(1)
         await update_or_send(
@@ -5877,9 +5897,15 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
     if data.startswith("v25:advanced:"):
         product_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            product = await session.get(ShopProduct, product_id)
+            if not product:
+                await callback.answer("Товар не найден.", show_alert=True)
+                return True
+            count = await v25_stock_count(session, product.id)
         await update_or_send(
             callback,
-            "⚙️ Расширенные настройки",
+            v25_product_card_text(product, count),
             reply_markup=advanced_keyboard(product_id),
         )
         await callback.answer()
@@ -6062,12 +6088,10 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         kb.button(
             text="✅ Удалить",
             callback_data=f"v25:category_delete_confirm:{category_id}",
-            style="danger",
         )
         kb.button(
             text="⬅️ Отмена",
             callback_data=f"v25:category:{category_id}",
-            style="danger",
         )
         kb.adjust(1)
         await update_or_send(
@@ -7175,7 +7199,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
                 text=f"{'🟢' if product.is_active else '⚪'} {product.name}",
                 callback_data=f"v25:product:{product.id}",
             )
-        kb.button(text="⬅️ Назад", callback_data="v25:catalog", style="danger")
+        kb.button(text="⬅️ Назад", callback_data="v25:catalog")
         kb.adjust(1)
         await update_or_send(
             callback,
@@ -8260,8 +8284,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         await update_or_send(
             callback,
             proxy_category_title(category_key)
-            + "\n\n🌍 <b>Шаг 1 из 3 — страна</b>\n"
-            "Выберите страну прокси или нажмите 🔎 поиск.",
+            + "\n\n🌍 Шаг 1 из 3 — страна",
             reply_markup=countries_keyboard(category_key, countries, page=0),
         )
         await callback.answer()
@@ -8273,8 +8296,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         await update_or_send(
             callback,
             proxy_category_title(category_key)
-            + "\n\n🔎 <b>Поиск страны</b>\n"
-            "Напишите страну сообщением: например <b>Россия</b>, <b>США</b>, <b>Германия</b>, <b>NL</b> или <b>TR</b>.",
+            + "\n\n🔎 Поиск страны\nНапишите страну сообщением: Россия, США, Германия, NL или TR.",
             reply_markup=buyer_back_keyboard(),
         )
         await callback.answer("Введите название страны")
@@ -8286,8 +8308,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         await update_or_send(
             callback,
             proxy_category_title(category_key)
-            + "\n\n🌍 <b>Шаг 1 из 3 — страна</b>\n"
-            "Выберите страну прокси или нажмите 🔎 поиск.",
+            + "\n\n🌍 Шаг 1 из 3 — страна",
             reply_markup=countries_keyboard(
                 category_key,
                 countries,
@@ -8323,7 +8344,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         await update_or_send(
             callback,
             f"{proxy_category_title(category_key)}\n\n"
-            "📅 <b>Шаг 2 из 3 — срок</b>\n"
+            "📅 Шаг 2 из 3 — срок\n"
             f"Страна: {country_name}\n"
             "Выберите срок аренды:",
             reply_markup=periods_keyboard(
@@ -8608,29 +8629,24 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
 
         async with SessionLocal() as session:
             categories = await list_categories(session)
-            category = next(
-                (row for row in categories if row.id == category_id),
-                None,
-            )
-            products = await list_general_products(session, category_id)
             display_settings = await get_display_settings(session)
+            if category_id == 0:
+                category = None
+                products = [row for row in await list_general_products(session, None) if not row.category_id]
+            else:
+                category = next((row for row in categories if row.id == category_id), None)
+                products = await list_general_products(session, category_id)
 
-        if not category:
+        if category_id != 0 and not category:
             await callback.answer("Категория не найдена", show_alert=True)
             return
 
         products = sort_products(products, display_settings.sort_mode)
-        category_photo = category.photo_file_id or category_asset(category.name)
-        preview_lines = []
-        for row in products[:10]:
-            price = f" — {row.price} {row.currency}" if row.price is not None else ""
-            preview_lines.append(f"• {row.name}{price}")
-        category_text = category_caption(category)
-        if preview_lines:
-            category_text += "\n\nТовары в категории:\n" + "\n".join(preview_lines)
+        category_photo = None if category_id == 0 else (category.photo_file_id or category_asset(category.name))
+        category_text_value = "📂 Без категории\n\nВыберите товар кнопкой ниже." if category_id == 0 else category_caption(category)
         await show_visual_card(
             callback,
-            category_text,
+            category_text_value,
             reply_markup=products_keyboard(
                 products,
                 category_id,

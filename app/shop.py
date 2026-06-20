@@ -232,28 +232,15 @@ async def list_proxy_products_by_category(session, category_key: str):
 
 def proxy_categories_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="🔐 MTProxy", callback_data="buyer:proxycat:mtproxy")
-    kb.button(text="🏆 PREMIUM", callback_data="buyer:proxycat:premium")
-    kb.button(text="💯 STANDART", callback_data="buyer:proxycat:standard")
-    kb.button(text="🎲 Прокси", callback_data="buyer:proxycat:residential")
-    kb.button(text="🏠 Главное меню", callback_data="buyer:panel", style="danger")
-    kb.adjust(2, 2, 1)
+    kb.button(text="🔐 MTProxy Premium", callback_data="buyer:proxycat:mtproxy")
+    kb.button(text="💯 Стандарт", callback_data="buyer:proxycat:standard")
+    kb.button(text="🏠 Главное меню", callback_data="buyer:panel")
+    kb.adjust(1)
     return kb.as_markup()
 
 
 def proxy_categories_text() -> str:
-    return (
-        "🌐 Прокси\n"
-        "Автовыдача после оплаты.\n\n"
-        "1. Выберите тип.\n"
-        "2. Найдите страну или выберите из списка.\n"
-        "3. Выберите срок и оплатите.\n\n"
-        "Разделы\n"
-        "🔐 MTProxy\n"
-        "🏆 PREMIUM\n"
-        "💯 STANDART\n"
-        "🎲 Прокси"
-    )
+    return "🌐 Прокси"
 
 def special_catalog_text(title: str, count: int = 0) -> str:
     return title
@@ -326,7 +313,7 @@ def proxy_main_keyboard() -> InlineKeyboardMarkup:
     for key in ("mtproxy", "premium", "standard", "rotation"):
         group = PROXY_PACKAGE_CATEGORIES[key]
         kb.button(text=group["title"], callback_data=f"buyer:proxygroup:{key}")
-    kb.button(text="⬅️ Назад", callback_data="buyer:panel", style="danger")
+    kb.button(text="⬅️ Назад", callback_data="buyer:panel")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -345,7 +332,7 @@ def proxy_group_keyboard(group_key: str) -> InlineKeyboardMarkup:
                 text=label,
                 callback_data=f"buyer:proxypackage:{group_key}:{package_key}",
             )
-    kb.button(text="⬅️ Назад", callback_data="buyer:proxy_catalog", style="danger")
+    kb.button(text="⬅️ Назад", callback_data="buyer:proxy_catalog")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -372,7 +359,7 @@ def proxy_package_keyboard(
     kb.button(
         text="Откройте актуальный каталог прокси", callback_data="buyer:proxy_catalog"
     )
-    kb.button(text="⬅️ Назад", callback_data="buyer:proxy_catalog", style="danger")
+    kb.button(text="⬅️ Назад", callback_data="buyer:proxy_catalog")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -469,17 +456,15 @@ def products_keyboard(
             kb.button(
                 text="⬅️ Назад",
                 callback_data=f"buyer:shopcat:{category_id}:{page - 1}",
-                style="danger",
             )
         kb.button(text=f"{page + 1}/{pages}", callback_data="buyer:noop")
         if page + 1 < pages:
             kb.button(
                 text="Вперёд ➡️",
                 callback_data=f"buyer:shopcat:{category_id}:{page + 1}",
-                style="success",
             )
 
-    kb.button(text="⬅️ К категориям", callback_data="buyer:shop", style="danger")
+    kb.button(text="⬅️ К категориям", callback_data="buyer:shop")
     return kb.as_markup()
 
 
@@ -493,20 +478,17 @@ def product_keyboard(product: ShopProduct, shop_username: str) -> InlineKeyboard
         kb.button(
             text="🤖 Купить сразу • CryptoBot",
             callback_data=f"buyer:buy:{product.id}",
-            style="success",
         )
         if WALLET_PAYMENT_ENABLED:
             kb.button(
                 text="💼 Оплатить на кошелёк",
                 callback_data=f"buyer:walletbuy:{product.id}",
-                style="success",
             )
     else:
         kb.button(text="⏸ Покупка недоступна", callback_data="buyer:noop")
     kb.button(
         text="⬅️ Назад",
-        callback_data=f"buyer:shopcat:{product.category_id or 0}",
-        style="danger",
+        callback_data=(f"buyer:shopcat:{product.category_id}" if product.category_id else "buyer:shop"),
     )
     kb.adjust(1)
     return kb.as_markup()

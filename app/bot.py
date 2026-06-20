@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import hashlib
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher
@@ -19,7 +20,7 @@ from app.cryptopay_service import (
 )
 from app.wallet_service import process_wallet_webhook
 from sqlalchemy import text
-from app.database import SessionLocal, init_db
+from app.database import SessionLocal, init_db, engine
 from app.handlers_main import (
     on_message,
     on_business_message,
@@ -35,6 +36,48 @@ logger = logging.getLogger(__name__)
 _health_runner = None
 _health_start_lock = asyncio.Lock()
 _web_bot: Bot | None = None
+
+_single_instance_conn = None
+
+
+async def acquire_single_instance_lock() -> bool:
+    """Prevent two Render/local processes from polling the same Telegram bot.
+
+    Telegram allows only one long-polling getUpdates consumer per BOT_TOKEN.
+    On PostgreSQL deployments this uses an advisory lock bound to the DB session.
+    If a second service starts with the same DATABASE_URL, it keeps HTTP health
+    alive but does not call start_polling, so logs stay clean.
+    """
+    global _single_instance_conn
+    if os.getenv("BOT_SINGLE_INSTANCE_LOCK", "1").strip().lower() in {"0", "false", "no"}:
+        return True
+    try:
+        if engine.dialect.name != "postgresql":
+            return True
+        # Stable signed 32-bit lock id, unique enough for this project/token.
+        key = int(hashlib.sha256((BOT_TOKEN or "mcs-bot").encode()).hexdigest()[:8], 16) % 2147483647
+        conn = await engine.connect()
+        got = await conn.scalar(text("SELECT pg_try_advisory_lock(:key)"), {"key": key})
+        if not got:
+            await conn.close()
+            logger.error("Another bot instance already owns the polling lock. This process will not call getUpdates.")
+            return False
+        _single_instance_conn = conn
+        logger.info("Single-instance polling lock acquired: %s", key)
+        return True
+    except Exception:
+        logger.exception("Could not acquire single-instance lock; continuing to avoid false downtime")
+        return True
+
+
+async def release_single_instance_lock() -> None:
+    global _single_instance_conn
+    if _single_instance_conn is not None:
+        try:
+            await _single_instance_conn.close()
+        finally:
+            _single_instance_conn = None
+
 
 
 async def health(_request):
@@ -150,6 +193,13 @@ async def main():
     try:
         me = await bot.me()
         logger.info("Bot started: @%s id=%s", me.username, me.id)
+        if not await acquire_single_instance_lock():
+            while True:
+                await asyncio.sleep(3600)
+        try:
+            await bot.delete_webhook(drop_pending_updates=False)
+        except Exception:
+            logger.info("No webhook to delete or webhook deletion failed", exc_info=True)
         logger.info("FIX_MARKER_CRYPTOPAY_STABLE=v26 loaded")
         logger.info("FIX_MARKER_MCS_HARDENED=v31 loaded")
         logger.info("FIX_MARKER_MCS_CLEAN=v33 loaded")
@@ -173,6 +223,7 @@ async def main():
         recovery_task.cancel()
         await asyncio.gather(recovery_task, return_exceptions=True)
         await close_crypto_client()
+        await release_single_instance_lock()
         await bot.session.close()
 
 

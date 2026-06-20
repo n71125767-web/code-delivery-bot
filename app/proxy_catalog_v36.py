@@ -195,7 +195,6 @@ def periods_keyboard(
     kb.button(
         text="⬅️ К странам",
         callback_data=f"buyer:pxcountries:{category_key}:0",
-        style="danger",
     )
     kb.adjust(1)
     return kb.as_markup()

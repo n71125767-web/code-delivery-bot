@@ -111,7 +111,7 @@ def admin_catalog_keyboard(categories, products) -> InlineKeyboardMarkup:
     kb.button(text="➕ Товар", callback_data="v25:add_product")
     kb.button(text="➕ Категория", callback_data="v25:add_category")
     kb.button(text="⚙️ Вид товаров", callback_data="v25:view_settings")
-    kb.button(text="⬅️ Назад", callback_data="admin:panel", style="danger")
+    kb.button(text="⬅️ Назад", callback_data="admin:panel")
     kb.adjust(*([1] * (len(categories) + (1 if uncategorized else 0))), 2, 1, 1)
     return kb.as_markup()
 
@@ -120,7 +120,7 @@ def product_type_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="♾️ Статический товар", callback_data="v25:type:static")
     kb.button(text="📦 Количественный товар", callback_data="v25:type:quantity")
-    kb.button(text="⬅️ Назад", callback_data="v25:wizard:back_name", style="danger")
+    kb.button(text="⬅️ Назад", callback_data="v25:wizard:back_name")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -129,14 +129,14 @@ def currency_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for code in CURRENCIES:
         kb.button(text=code, callback_data=f"v25:currency:{code}")
-    kb.button(text="⬅️ Назад", callback_data="v25:wizard:back_type", style="danger")
+    kb.button(text="⬅️ Назад", callback_data="v25:wizard:back_type")
     kb.adjust(3)
     return kb.as_markup()
 
 
 def price_back_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ Назад", callback_data="v25:wizard:back_currency", style="danger")
+    kb.button(text="⬅️ Назад", callback_data="v25:wizard:back_currency")
     return kb.as_markup()
 
 
@@ -233,7 +233,7 @@ def product_card_keyboard(product: ShopProduct) -> InlineKeyboardMarkup:
     )
     kb.button(text="📊 Статистика товара", callback_data=f"v25:stats:{product.id}")
     kb.button(text="🗑 Удалить товар", callback_data=f"v25:delete_prompt:{product.id}")
-    kb.button(text="⬅️ Назад", callback_data="v25:catalog", style="danger")
+    kb.button(text="⬅️ Назад", callback_data="v25:catalog")
     kb.adjust(2, 2, 2, 2, 2, 1, 1, 1, 1)
     return kb.as_markup()
 
@@ -245,29 +245,24 @@ def fulfillment_keyboard(product_id: int) -> InlineKeyboardMarkup:
     kb.button(text="🌐 Proxyline", callback_data=f"v34:fulfillment:{product_id}:proxyline")
     kb.button(text="🚚 Поставщик", callback_data=f"v34:fulfillment:{product_id}:supplier")
     kb.button(text="📱 Номер", callback_data=f"v34:fulfillment:{product_id}:number")
-    kb.button(text="⬅️ Назад", callback_data=f"v25:advanced:{product_id}", style="danger")
+    kb.button(text="⬅️ Назад", callback_data=f"v25:advanced:{product_id}")
     kb.adjust(1)
     return kb.as_markup()
 
 
 def advanced_keyboard(product_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(
-        text="⚙️ Способ выдачи", callback_data=f"v34:fulfillment_menu:{product_id}"
-    )
-    kb.button(
-        text="💳 Платежные системы", callback_data=f"v25:payment_systems:{product_id}"
-    )
-    kb.button(
-        text="🧾 Описание платежа",
-        callback_data=f"v25:payment_description:{product_id}",
-    )
+    kb.button(text="🎁 Выдать товар", callback_data=f"v25:give:{product_id}")
+    kb.button(text="👁 Показать покупателю", callback_data=f"v25:preview:{product_id}")
+    kb.button(text="📝 Платёжные системы", callback_data=f"v25:payment_systems:{product_id}")
+    kb.button(text="📝 Описание платежа", callback_data=f"v25:payment_description:{product_id}")
     kb.button(text="🏷 Старая цена", callback_data=f"v25:old_price:{product_id}")
     kb.button(text="↕️ Позиция в списке", callback_data=f"v25:position:{product_id}")
-    kb.button(
-        text="⬅️ Назад", callback_data=f"v25:product:{product_id}", style="danger"
-    )
-    kb.adjust(1)
+    kb.button(text="📊 Статистика товара", callback_data=f"v25:stats:{product_id}")
+    kb.button(text="⚙️ Способ выдачи", callback_data=f"v34:fulfillment_menu:{product_id}")
+    kb.button(text="⬆️ Свернуть", callback_data=f"v25:product:{product_id}")
+    kb.button(text="🔙 Назад", callback_data="v25:catalog")
+    kb.adjust(2, 1, 2, 2, 1, 1)
     return kb.as_markup()
 
 
@@ -276,10 +271,9 @@ def delete_confirm_keyboard(product_id: int) -> InlineKeyboardMarkup:
     kb.button(
         text="✅ Удалить",
         callback_data=f"v25:delete_confirm:{product_id}",
-        style="danger",
     )
     kb.button(
-        text="⬅️ Отмена", callback_data=f"v25:product:{product_id}", style="danger"
+        text="⬅️ Отмена", callback_data=f"v25:product:{product_id}"
     )
     kb.adjust(1)
     return kb.as_markup()
@@ -313,7 +307,7 @@ def category_card_keyboard(category_id: int, active: bool) -> InlineKeyboardMark
     kb.button(
         text="🗑 Удалить", callback_data=f"v25:category_delete_prompt:{category_id}"
     )
-    kb.button(text="⬅️ Назад", callback_data="v25:catalog", style="danger")
+    kb.button(text="⬅️ Назад", callback_data="v25:catalog")
     kb.adjust(2, 2, 1, 1)
     return kb.as_markup()
 
@@ -342,7 +336,7 @@ def view_settings_keyboard(settings: CatalogDisplaySettings) -> InlineKeyboardMa
         text="🔍 Выключить поиск" if settings.search_enabled else "🔍 Включить поиск",
         callback_data="v25:search_toggle",
     )
-    kb.button(text="⬅️ Назад", callback_data="v25:catalog", style="danger")
+    kb.button(text="⬅️ Назад", callback_data="v25:catalog")
     kb.adjust(3, 2, 1)
     return kb.as_markup()
 
@@ -353,7 +347,7 @@ def sort_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="🔤 По названию", callback_data="v25:sort_set:name")
     kb.button(text="💰 По цене", callback_data="v25:sort_set:price")
     kb.button(text="🆕 Сначала новые", callback_data="v25:sort_set:newest")
-    kb.button(text="⬅️ Назад", callback_data="v25:view_settings", style="danger")
+    kb.button(text="⬅️ Назад", callback_data="v25:view_settings")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -621,6 +615,8 @@ def product_card_keyboard(product: ShopProduct) -> InlineKeyboardMarkup:
 
 def advanced_keyboard(product_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    kb.button(text="🎁 Выдать товар", callback_data=f"v25:give:{product_id}")
+    kb.button(text="👁 Показать покупателю", callback_data=f"v25:preview:{product_id}")
     kb.button(text="📝 Платёжные системы", callback_data=f"v25:payment_systems:{product_id}")
     kb.button(text="📝 Описание платежа", callback_data=f"v25:payment_description:{product_id}")
     kb.button(text="🏷 Старая цена", callback_data=f"v25:old_price:{product_id}")
@@ -628,7 +624,8 @@ def advanced_keyboard(product_id: int) -> InlineKeyboardMarkup:
     kb.button(text="📊 Статистика товара", callback_data=f"v25:stats:{product_id}")
     kb.button(text="⚙️ Способ выдачи", callback_data=f"v34:fulfillment_menu:{product_id}")
     kb.button(text="⬆️ Свернуть", callback_data=f"v25:product:{product_id}")
-    kb.adjust(1)
+    kb.button(text="🔙 Назад", callback_data="v25:catalog")
+    kb.adjust(2, 1, 2, 2, 1, 1)
     return kb.as_markup()
 
 

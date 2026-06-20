@@ -69,8 +69,13 @@ def customer_home_keyboard(
             callback_data=f"buyer:shopcat:{row.id}:0",
         )
 
+    # Товары без категории доступны отдельной кнопкой, чтобы добавленный
+    # «на главную» товар не пропадал из витрины.
+    kb.button(text="📂 Без категории", callback_data="buyer:shopcat:0:0")
+
     if not visible:
-        kb.button(text="Товары временно отсутствуют", callback_data="buyer:noop")
+        # Оставляем кнопку «Без категории», даже если категорий ещё нет.
+        pass
 
     columns = max(1, min(int(columns_count or 1), 3))
     kb.adjust(columns)
@@ -103,7 +108,7 @@ def admin_shop_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="📋 Все товары", callback_data="admin:shop:products")
     kb.button(text="➕ Товар", callback_data="admin:shop:add_product")
     kb.button(text="➕ Категория", callback_data="admin:shop:add_category")
-    kb.button(text="⬅️ Назад", callback_data="admin:panel", style="danger")
+    kb.button(text="⬅️ Назад", callback_data="admin:panel")
     kb.adjust(2, 2, 1, 1)
     return kb.as_markup()
 
@@ -247,7 +252,6 @@ def admin_product_keyboard(product) -> InlineKeyboardMarkup:
     kb.button(
         text="⬅️ Назад",
         callback_data=f"admin:shop:category:{product.category_id or 0}",
-        style="danger",
     )
     kb.adjust(2, 2, 2, 2, 1)
     return kb.as_markup()

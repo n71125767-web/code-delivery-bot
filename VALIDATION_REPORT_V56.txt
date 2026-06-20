@@ -1,0 +1,12 @@
+V56 validation report
+
+Static checks performed:
+- python -m compileall -q app: OK
+- removed __pycache__ and .pyc files: OK
+- removed unused app/handlers.py duplicate: OK
+- removed old PATCH_NOTES_V37-V55 and legacy setup files: OK
+- removed invalid InlineKeyboardBuilder style= arguments: OK
+
+Runtime limitations:
+- Full Telegram/Render runtime was not executed in this environment because required production env vars and services are not available.
+- TelegramConflictError can only be prevented between processes that run this V56 code and share the same PostgreSQL DATABASE_URL. If a different old service uses the same BOT_TOKEN, it must be stopped manually.
