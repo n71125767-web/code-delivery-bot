@@ -3559,7 +3559,7 @@ async def process_main_reply_button(
         ADMIN_BROADCAST_V28.pop(user_id, None)
         return await process_supplier_command(bot, message, business_connection_id)
 
-    if text in {"🏠 Главное меню", "Главное меню", "🏠 Режим покупателя", "Режим покупателя", "🏠 Покупатель", "Покупатель"}:
+    if text in {"🏠 Главное меню", "🔙 Главное меню", "Главное меню", "🏠 Режим покупателя", "Режим покупателя", "🏠 Покупатель", "Покупатель"}:
         ADMIN_KEYBOARD_SENT.discard(user_id)
         await answer_message(
             bot,
@@ -3901,8 +3901,8 @@ async def proxy_settings_text(session) -> tuple[str, object]:
     proxy_type = "Выделенные" if settings.proxy_type == "dedicated" else "Общие"
     text = (
         "🌐 Прокси\n\n"
-        "Управление автовыдачей, странами, сроками и ценой.\n"
-        "Покупателю показывается финальная цена: база × наценка.\n\n"
+        "Автовыдача, страны, сроки и цена.\n"
+        "Все действия доступны кнопками ниже.\n\n"
         f"Автовыдача: {'🟢 включена' if settings.enabled else '🔴 выключена'}\n"
         f"├ Страны — {countries}\n"
         f"├ Сроки — {periods}\n"
@@ -3910,7 +3910,7 @@ async def proxy_settings_text(session) -> tuple[str, object]:
         f"├ Количество — {settings.count}\n"
         f"├ IP — IPv{settings.ip_version}\n"
         f"└ Наценка — {multiplier_label(markup)}\n\n"
-        "Базовую цену меняйте через /proxy_price, коэффициент — через /proxy_markup."
+        "Настройки открываются кнопками ниже."
     )
     return text, settings
 
@@ -5561,6 +5561,36 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         await callback.answer()
         return True
 
+    if data.startswith("v25:preview:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            product = await session.get(ShopProduct, product_id)
+            if not product:
+                await callback.answer("Товар не найден.", show_alert=True)
+                return True
+            provider = await get_product_provider(session, product.internal_key)
+            provider_type = provider.provider_type if provider else None
+            text = product_text(product, provider_type)
+        await update_or_send(callback, "👁 Так товар видит покупатель:\n\n" + text, reply_markup=content_back_keyboard())
+        await callback.answer()
+        return True
+
+    if data.startswith("v25:photo_delete:"):
+        product_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            product = await session.get(ShopProduct, product_id)
+            if not product:
+                await callback.answer("Товар не найден.", show_alert=True)
+                return True
+            product.photo_file_id = None
+            product.updated_at = datetime.utcnow()
+            await session.commit()
+            await session.refresh(product)
+            count = await v25_stock_count(session, product.id)
+        await update_or_send(callback, v25_product_card_text(product, count), reply_markup=v25_product_card_keyboard(product))
+        await callback.answer("Фото удалено")
+        return True
+
     if data.startswith("v25:give:"):
         product_id = int(data.rsplit(":", 1)[1])
         CATALOG_V25_STATE[callback.from_user.id] = {
@@ -5839,10 +5869,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         )
         await update_or_send(
             callback,
-            "✅ Способ выдачи сохранён.\n\n"
-            "Для автопрокси задайте provider_key JSON через команду:\n"
-            f"/set_provider_key {product_id} {{JSON}}\n\n"
-            "Для поставщика или номера provider_key должен содержать Telegram ID поставщика.",
+            "✅ Способ выдачи сохранён.\n\nДальше настройте выдачу через кнопки карточки товара.",
             reply_markup=advanced_keyboard(product_id),
         )
         await callback.answer("Сохранено")
@@ -5924,7 +5951,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             f"📊 Статистика товара\n\n"
             f"Просмотров: {product.views_count}\n"
             f"Продаж: {product.sales_count}\n"
-            f"Выручка: {product.revenue_total} {product.currency}\n"
+            f"Выручка: {str(product.revenue_total or 0).rstrip('0').rstrip('.')} {product.currency}\n"
             f"Остаток: {count}",
             reply_markup=advanced_keyboard(product_id),
         )
@@ -6584,7 +6611,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             "Финальная цена для покупателя считается так:\n"
             "базовая цена товара × коэффициент наценки.\n\n"
             f"Сейчас: {multiplier_label(markup)}\n\n"
-            "Изменение через кнопки будет добавлено в следующем шаге. Сейчас товары и базовые цены меняются через «Управление товарами»."
+            "Измените базовую цену в карточке товара, коэффициент — через настройку наценки."
         )
         await update_or_send(callback, text, reply_markup=admin_proxy_settings_keyboard(settings))
         await callback.answer()
@@ -7003,34 +7030,13 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data == "admin:hidden":
-        text = (
-            "👁 Скрытые разделы\n\n"
-            "Здесь собраны служебные действия, которые не нужны на главной панели:\n"
-            "• заявки партнёров;\n"
-            "• выводы поставщиков;\n"
-            "• прокси-настройки;\n"
-            "• номера и права админов;\n"
-            "• зеркала бота.\n\n"
-            "Все действия открываются кнопками ниже."
-        )
+        text = "👁 Скрытые разделы\n\nСлужебные действия открываются кнопками ниже."
         await update_or_send(callback, text, reply_markup=admin_hidden_keyboard())
         await callback.answer()
         return True
 
     if data == "admin:mirrors":
-        await update_or_send(
-            callback,
-            "🤖 Зеркала бота\n\n"
-            "Telegram не разрешает боту самому создавать нового бота — токен выдаётся только через BotFather.\n\n"
-            "Как сделать зеркало:\n"
-            "1. Создайте нового бота в BotFather.\n"
-            "2. Создайте второй Render-сервис из этого же GitHub-репозитория.\n"
-            "3. Укажите новый BOT_TOKEN и ту же DATABASE_URL.\n"
-            "4. Запустите только один инстанс на каждый токен.\n\n"
-            "Так зеркало будет работать с тем же магазином и базой.",
-            reply_markup=admin_hidden_keyboard(),
-        )
-        await callback.answer()
+        await callback.answer("Раздел зеркал убран.", show_alert=True)
         return True
 
     if data == "admin:payment_methods":
@@ -7818,7 +7824,7 @@ async def handle_buyer_callback(bot: Bot, callback: CallbackQuery) -> bool:
         ADMIN_KEYBOARD_SENT.discard(callback.from_user.id)
         BUYER_CATALOG_SEARCH_WAIT.discard(callback.from_user.id)
         try:
-            await bot.send_message(callback.message.chat.id, "🏠 Режим покупателя", reply_markup=await buyer_reply_keyboard_for_user(callback.from_user.id))
+            await bot.send_message(callback.message.chat.id, "🏠 Главное меню", reply_markup=await buyer_reply_keyboard_for_user(callback.from_user.id))
         except Exception:
             pass
         await update_or_send(
@@ -8307,7 +8313,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         )
         if product is None:
             await callback.answer(
-                "Нет активного прокси-товара. Админу: выполните /proxy_autofix 100 RUB, затем /proxy_markup 1.77.",
+                "Нет активного прокси-товара. Админу нужно открыть раздел прокси и создать/обновить товары.",
                 show_alert=True,
             )
             return
@@ -9310,7 +9316,7 @@ def format_buyer_active_order_text(order) -> str:
 
 # ---------------- V53 clean role panel text overrides ----------------
 def admin_panel_text() -> str:
-    return "🛠 Админ-панель\n\nВыберите раздел кнопкой ниже."
+    return "⚙️ Админ меню\n\nВыберите раздел кнопкой ниже."
 
 
 def supplier_main_panel_text() -> str:

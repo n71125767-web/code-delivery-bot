@@ -12,7 +12,7 @@ from typing import Any
 
 from aiocryptopay import AioCryptoPay, Networks
 from aiogram import Bot
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 from sqlalchemy.exc import IntegrityError
 
 from app.config import (
@@ -759,17 +759,24 @@ async def deliver_purchase(bot: Bot, purchase_id: int) -> bool:
                     db_stock.delivered_at = datetime.utcnow()
                     db_stock.reserved_at = None
                     db_stock.reserved_purchase_id = None
-                    remaining = await session.scalar(
-                        select(ProductStockItem.id)
-                        .where(
+                    remaining_count = int(await session.scalar(
+                        select(func.count(ProductStockItem.id)).where(
                             ProductStockItem.product_id == db_product.id,
                             ProductStockItem.status == "available",
                         )
-                        .limit(1)
-                    )
-                    if remaining is None:
+                    ) or 0)
+                    if remaining_count == 0:
                         db_product.payment_enabled = False
                         db_product.is_active = False
+                    elif remaining_count <= 3:
+                        try:
+                            from app.fulfillment_service import notify_admins_simple
+                            await notify_admins_simple(
+                                bot,
+                                f"⚠️ Мало товара\n\n📦 {db_product.name}\n🆔 ID: {db_product.id}\n📊 Остаток: {remaining_count} шт."
+                            )
+                        except Exception:
+                            logger.exception("LOW_STOCK_NOTIFY_FAILED product_id=%s", db_product.id)
                 await session.commit()
             return True
     finally:

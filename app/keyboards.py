@@ -1306,3 +1306,116 @@ def payments_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="⬅️ Назад", callback_data="admin:panel")
     kb.adjust(1)
     return kb.as_markup()
+
+
+# ---------------- V54 clean visual/button overrides ----------------
+def admin_main_reply_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text="💰 Управление товарами")],
+        [KeyboardButton(text="💵 Способы оплаты"), KeyboardButton(text="📊 Статистика")],
+        [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="📢 Рассылка")],
+        [KeyboardButton(text="🤝 Партнёры"), KeyboardButton(text="🌐 Прокси")],
+        [KeyboardButton(text="👥 Админы"), KeyboardButton(text="👁 Скрытые")],
+        [KeyboardButton(text="🔙 Главное меню")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=False, input_field_placeholder="⚙️ Админ меню", selective=True)
+
+
+def admin_panel_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="💰 Управление товарами", callback_data="v25:catalog")
+    kb.button(text="💵 Способы оплаты", callback_data="admin:payments")
+    kb.button(text="📊 Статистика", callback_data="admin:status")
+    kb.button(text="⚙️ Настройки", callback_data="admin:main_settings")
+    kb.button(text="📢 Рассылка", callback_data="admin:broadcast")
+    kb.button(text="🤝 Партнёры", callback_data="admin:partners")
+    kb.button(text="👥 Админы", callback_data="admin:admins")
+    kb.button(text="🌐 Прокси", callback_data="admin:proxy")
+    kb.button(text="👁 Скрытые", callback_data="admin:hidden")
+    kb.button(text="🔙 Главное меню", callback_data="buyer:panel")
+    kb.adjust(1, 2, 2, 2, 2, 1)
+    return kb.as_markup()
+
+
+def admin_hidden_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🤝 Заявки партнёров", callback_data="market:admin:list")
+    kb.button(text="↗️ Выводы поставщиков", callback_data="admin:withdrawals")
+    kb.button(text="👥 Права админов", callback_data="admin:caps")
+    kb.button(text="📱 Настройка номеров", callback_data="admin:number_settings")
+    kb.button(text="🔙 Назад", callback_data="admin:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_proxy_settings_keyboard(settings) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text=("✅ Автовыдача" if settings.enabled else "⛔ Автовыдача"), callback_data="admin:proxy:toggle")
+    kb.button(text="📈 Наценка", callback_data="admin:proxy:markup_help")
+    kb.button(text="🌍 Страны", callback_data="admin:proxy:countries:0")
+    kb.button(text="📅 Сроки", callback_data="admin:proxy:periods")
+    kb.button(text=f"📦 Количество: {settings.count}", callback_data="admin:proxy:count")
+    kb.button(text=f"🌐 IPv{settings.ip_version}", callback_data="admin:proxy:ip_version")
+    kb.button(text="🔙 Назад", callback_data="admin:panel")
+    kb.adjust(2, 2, 2, 1)
+    return kb.as_markup()
+
+
+def admin_proxy_countries_keyboard(settings, country_labels: dict[str, str], page: int = 0, per_page: int = 10) -> InlineKeyboardMarkup:
+    rows = list(country_labels.items())
+    pages = max(1, (len(rows) + per_page - 1) // per_page)
+    page = max(0, min(int(page or 0), pages - 1))
+    chunk = rows[page * per_page: page * per_page + per_page]
+    kb = InlineKeyboardBuilder()
+    for code, label in chunk:
+        selected = code in settings.countries
+        kb.button(text=f"{'✅' if selected else '▫️'} {label}", callback_data=f"admin:proxy:country:{code}:{page}")
+    kb.adjust(2)
+    kb.button(text="⬅️ Назад", callback_data=f"admin:proxy:countries:{max(page - 1, 0)}")
+    kb.button(text=f"{page + 1}/{pages}", callback_data="admin:noop")
+    kb.button(text="Вперёд ➡️", callback_data=f"admin:proxy:countries:{min(page + 1, pages - 1)}")
+    kb.button(text="🔙 К прокси", callback_data="admin:proxy")
+    kb.adjust(2, 2, 2, 2, 2, 3, 1)
+    return kb.as_markup()
+
+
+def buyer_inline_menu_keyboard(is_admin: bool = False, is_supplier: bool = False) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🛒 Товары", callback_data="buyer:shop")
+    kb.button(text="🛍 Корзина", callback_data="buyer:cart")
+    kb.button(text="📱 Номера", callback_data="buyer:number_catalog")
+    kb.button(text="🌐 Прокси", callback_data="buyer:proxy_catalog")
+    kb.button(text="💼 Кошелёк", callback_data="buyer:wallet")
+    kb.button(text="🧾 Мои заказы", callback_data="buyer:orders")
+    kb.button(text="🤝 Стать партнёром", callback_data="buyer:partner")
+    kb.button(text="📕 FAQ", callback_data="buyer:faq")
+    if is_supplier:
+        kb.button(text="🚚 Поставщик", callback_data="supplier:panel")
+    if is_admin:
+        kb.button(text="⚙️ Админ меню", callback_data="admin:panel")
+    kb.adjust(2, 2, 2, 2, 1, 1)
+    return kb.as_markup()
+
+
+def buyer_main_reply_keyboard(is_admin: bool = False, is_supplier: bool = False) -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text="🛒 Товары"), KeyboardButton(text="🛍 Корзина")],
+        [KeyboardButton(text="📱 Номера"), KeyboardButton(text="🌐 Прокси")],
+        [KeyboardButton(text="💼 Кошелёк"), KeyboardButton(text="🧾 Мои заказы")],
+        [KeyboardButton(text="🤝 Стать партнёром"), KeyboardButton(text="📕 FAQ")],
+    ]
+    if is_supplier:
+        rows.append([KeyboardButton(text="🚚 Поставщик")])
+    if is_admin:
+        rows.append([KeyboardButton(text="⚙️ Админ меню")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=False, input_field_placeholder="Главное меню", selective=True)
+
+
+def payments_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="💎 CryptoBot", callback_data="admin:payments:cryptobot")
+    kb.button(text="💼 Баланс магазина", callback_data="admin:payments:wallet")
+    kb.button(text="🔄 Обновить", callback_data="admin:payments")
+    kb.button(text="🔙 Назад", callback_data="admin:panel")
+    kb.adjust(1)
+    return kb.as_markup()

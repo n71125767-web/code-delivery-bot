@@ -5,7 +5,7 @@ from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select, func
 
-from app.models import ShopCategory, ShopProduct
+from app.models import ShopCategory, ShopProduct, ProductStockItem
 from app.repositories.product_providers import (
     get_product_provider,
     unbind_product_provider,
@@ -399,4 +399,101 @@ def admin_category_keyboard(category, products) -> InlineKeyboardMarkup:
     kb.button(text="🗑 Удалить", callback_data=f"admin:shop:category_delete_prompt:{category.id}")
     kb.button(text="⬅️ Назад", callback_data="admin:shop:categories")
     kb.adjust(1)
+    return kb.as_markup()
+
+
+# ---------------- V54 legacy shop-admin visual overrides ----------------
+def _fmt_money_v54(value, currency: str | None = None) -> str:
+    from decimal import Decimal, InvalidOperation
+    if value is None:
+        rendered = "0"
+    else:
+        try:
+            rendered = f"{Decimal(str(value)).quantize(Decimal('0.01')):.2f}".rstrip('0').rstrip('.')
+        except (InvalidOperation, ValueError):
+            rendered = str(value)
+    return f"{rendered} {currency}" if currency else rendered
+
+
+def admin_products_text(rows) -> str:
+    return "💰 Управление товарами\n\nВыберите товар кнопкой ниже." if rows else "💰 Управление товарами\n\nТоваров пока нет."
+
+
+def admin_products_keyboard(rows) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for row in rows:
+        icon = "🟢" if row.is_active else "🙈"
+        kb.button(text=f"{icon} #{row.id} {row.name} · {_fmt_money_v54(row.price, row.currency)}", callback_data=f"admin:shop:product:{row.id}")
+    kb.button(text="➕ Товар", callback_data="admin:shop:add_product")
+    kb.button(text="🔙 Назад", callback_data="admin:shop")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_category_text(category, product_count: int) -> str:
+    return (
+        f"📁 КАТЕГОРИЯ {category.name}\n\n"
+        f"Название: {category.name}\n"
+        f"Описание: {getattr(category, 'description', None) or 'не задано'}\n"
+        f"Товаров: {product_count}\n"
+        f"Статус: {'показывается' if category.is_active else 'скрыта'}\n\n"
+        "Товары открываются кнопками ниже."
+    )
+
+
+def admin_category_keyboard(category, products) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for row in products:
+        icon = "🟢" if row.is_active else "🙈"
+        kb.button(text=f"{icon} #{row.id} {row.name} · {_fmt_money_v54(row.price, row.currency)}", callback_data=f"admin:shop:product:{row.id}")
+    kb.button(text="➕ Товар", callback_data=f"admin:shop:add_product_to:{category.id}")
+    kb.button(text="📝 Название", callback_data=f"admin:shop:category_name:{category.id}")
+    kb.button(text="📝 Описание", callback_data=f"admin:shop:category_desc:{category.id}")
+    kb.button(text="🙈 Скрыть" if category.is_active else "👁 Показать", callback_data=f"admin:shop:category_toggle:{category.id}")
+    kb.button(text="⬆️ Выше", callback_data=f"admin:shop:category_up:{category.id}")
+    kb.button(text="⬇️ Ниже", callback_data=f"admin:shop:category_down:{category.id}")
+    kb.button(text="🗑 Удалить", callback_data=f"admin:shop:category_delete_prompt:{category.id}")
+    kb.button(text="🔙 Назад", callback_data="admin:shop:categories")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+async def product_admin_text(session, product) -> str:
+    stock_count = 0
+    if getattr(product, 'product_type', None) == 'quantity':
+        stock_count = int(await session.scalar(select(func.count(ProductStockItem.id)).where(ProductStockItem.product_id == product.id, ProductStockItem.status == 'available')) or 0)
+    type_label = "Статический" if product.product_type == "static" else "Количественный"
+    photo_line = "🖼 Фото: установлено" if getattr(product, 'photo_file_id', None) else "🖼 Фото: не установлено"
+    desc_line = "📝 Описание: установлено" if product.description else "📝 Описание: не установлено"
+    category_line = "📂 Категория установлена" if product.category_id else "📂 Без категории"
+    bot_username = __import__('os').getenv('BOT_USERNAME', '').strip().lstrip('@')
+    direct = f"https://t.me/{bot_username}?start=admproduct_{product.internal_key}" if bot_username else f"/start admproduct_{product.internal_key}"
+    lines = [
+        f"📦 КАРТОЧКА ТОВАРА #{product.id}", "", "➖➖➖➖➖➖➖➖➖➖", "",
+        f"📝 Название: {product.name}",
+        f"{'♾️' if product.product_type == 'static' else '📦'} Тип: {type_label}",
+        "🟢 Покупка включена" if product.payment_enabled else "🔴 Покупка приостановлена",
+        "", f"💰 Цена: {_fmt_money_v54(product.price, product.currency)}",
+    ]
+    if product.product_type == 'quantity':
+        lines.extend(["", f"📊 Остаток позиций: {stock_count} шт."])
+        if stock_count <= 3:
+            lines.append("⚠️ Мало позиций — рекомендуем пополнить")
+    lines.extend(["➖➖➖➖➖➖➖➖➖➖", "", photo_line, "", desc_line, "➖➖➖➖➖➖➖➖➖➖", "", category_line, "➖➖➖➖➖➖➖➖➖➖", "", "🔗 Прямая ссылка:", direct])
+    return "\n".join(lines)
+
+
+def admin_product_keyboard(product) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🎁 Выдать товар", callback_data=f"v25:give:{product.id}")
+    kb.button(text="✏️ Изменить товар", callback_data=f"v25:advanced:{product.id}")
+    kb.button(text="👁 Показать товар", callback_data=f"v25:preview:{product.id}")
+    kb.button(text="📝 Название", callback_data=f"admin:shop:product_name:{product.id}")
+    kb.button(text="📝 Цена", callback_data=f"admin:shop:product_price:{product.id}")
+    kb.button(text="📝 Описание", callback_data=f"admin:shop:product_desc:{product.id}")
+    kb.button(text=("⏸ Приостановить оплату" if product.payment_enabled else "▶️ Включить оплату"), callback_data=f"v25:toggle_payment:{product.id}")
+    kb.button(text="🙈 Скрыть товар" if product.is_active else "👁 Показать товар", callback_data=f"admin:shop:product_toggle:{product.id}")
+    kb.button(text="🗑 Удалить", callback_data=f"admin:shop:product_delete_prompt:{product.id}")
+    kb.button(text="🔙 Назад", callback_data=f"admin:shop:category:{product.category_id or 0}")
+    kb.adjust(3, 2, 2, 1, 1)
     return kb.as_markup()

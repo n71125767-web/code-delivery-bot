@@ -178,19 +178,19 @@ async def list_number_products(session):
 
 PROXY_CATEGORY_DEFINITIONS = {
     "mtproxy": {
-        "title": "🧩 MTProxy",
+        "title": "🔐 MTProxy",
         "keywords": ("mtproxy", "mt proxy", "telegram proxy"),
     },
     "premium": {
-        "title": "💎 Премиум прокси",
+        "title": "🏆 PREMIUM",
         "keywords": ("premium", "премиум"),
     },
     "standard": {
-        "title": "📦 Стандарт",
+        "title": "💯 STANDART",
         "keywords": ("standard", "стандарт"),
     },
     "residential": {
-        "title": "🏠 Резидентские",
+        "title": "🎲 Прокси",
         "keywords": ("residential", "резидент", "резидентские"),
     },
 }
@@ -232,10 +232,10 @@ async def list_proxy_products_by_category(session, category_key: str):
 
 def proxy_categories_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="🧩 MTProxy", callback_data="buyer:proxycat:mtproxy")
-    kb.button(text="💎 Премиум", callback_data="buyer:proxycat:premium")
-    kb.button(text="📦 Стандарт", callback_data="buyer:proxycat:standard")
-    kb.button(text="🏠 Резидентские", callback_data="buyer:proxycat:residential")
+    kb.button(text="🔐 MTProxy", callback_data="buyer:proxycat:mtproxy")
+    kb.button(text="🏆 PREMIUM", callback_data="buyer:proxycat:premium")
+    kb.button(text="💯 STANDART", callback_data="buyer:proxycat:standard")
+    kb.button(text="🎲 Прокси", callback_data="buyer:proxycat:residential")
     kb.button(text="🏠 Главное меню", callback_data="buyer:panel", style="danger")
     kb.adjust(2, 2, 1)
     return kb.as_markup()
@@ -249,10 +249,10 @@ def proxy_categories_text() -> str:
         "2. Найдите страну или выберите из списка.\n"
         "3. Выберите срок и оплатите.\n\n"
         "Разделы\n"
-        "🧩 MTProxy — Telegram\n"
-        "💎 Premium — приватные\n"
-        "📦 Standard — базовый вариант\n"
-        "🏠 Residential — прокси под гео-задачи"
+        "🔐 MTProxy\n"
+        "🏆 PREMIUM\n"
+        "💯 STANDART\n"
+        "🎲 Прокси"
     )
 
 def special_catalog_text(title: str, count: int = 0) -> str:
@@ -278,7 +278,7 @@ PROXY_PACKAGE_CATEGORIES = {
         "title": "🔐 MTProxy",
         "provider": "proxyline",
         "items": [
-            ("mt_1m", "🔑 MTProxy [1 мес.] - 3.1 USD"),
+            ("mt_1m", "🔑 MTProxy • [1 мес.] - 3.1 USD"),
             ("mt_3m", "🔑 MTProxy [3 мес.] - 9.3 USD"),
             ("mt_6m", "🔑 MTProxy [6 мес.] - 18.6 USD"),
             ("mt_9m", "🔑 MTProxy [9 мес.] - 27.90 USD"),

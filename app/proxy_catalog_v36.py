@@ -130,7 +130,7 @@ def countries_keyboard(
     category_key: str,
     countries: list[tuple[str, str]],
     page: int = 0,
-    page_size: int = 12,
+    page_size: int = 10,
 ) -> InlineKeyboardMarkup:
     pages = max(1, (len(countries) + page_size - 1) // page_size)
     page = max(0, min(page, pages - 1))
@@ -146,28 +146,24 @@ def countries_keyboard(
     kb.adjust(2)
 
     kb.button(
-        text="🔎 Найти страну",
+        text="🔎 Поиск страны",
         callback_data=f"buyer:pxsearch:{category_key}",
     )
 
-    if page > 0:
-        kb.button(
-            text="⬅️ Назад",
-            callback_data=f"buyer:pxcountries:{category_key}:{page - 1}",
-            style="danger",
-        )
-    kb.button(text=f"{page + 1}/{pages}", callback_data="buyer:noop")
-    if page + 1 < pages:
-        kb.button(
-            text="Вперёд ➡️",
-            callback_data=f"buyer:pxcountries:{category_key}:{page + 1}",
-            style="success",
-        )
     kb.button(
-        text="⬅️ К типам прокси",
-        callback_data="buyer:proxy_catalog",
-        style="danger",
+        text="⬅️ Назад",
+        callback_data=f"buyer:pxcountries:{category_key}:{max(page - 1, 0)}",
     )
+    kb.button(text=f"{page + 1}/{pages}", callback_data="buyer:noop")
+    kb.button(
+        text="Вперёд ➡️",
+        callback_data=f"buyer:pxcountries:{category_key}:{min(page + 1, pages - 1)}",
+    )
+    kb.button(
+        text="↩️ К категориям",
+        callback_data="buyer:proxy_catalog",
+    )
+    kb.adjust(2, 2, 2, 2, 2, 1, 3, 1)
     return kb.as_markup()
 
 

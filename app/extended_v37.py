@@ -361,10 +361,10 @@ async def _create_stock_items(session: AsyncSession, product_id: int, text: str,
 
 
 PROXY_AUTOFIX_PRODUCTS = [
-    ("mtproxy", "Telegram-прокси", "Telegram-совместимый прокси с автовыдачей", "proxyline", PROXYLINE_MTPROXY_API_TYPE),
-    ("premium", "Премиум прокси", "Премиум-прокси с автовыдачей", "proxyline", "dedicated"),
-    ("standard", "Стандартные прокси", "Стандартные прокси с автовыдачей", "proxys", "shared"),
-    ("residential", "Резидентские прокси", "Резидентские прокси с автовыдачей", "proxys", "residential"),
+    ("mtproxy", "🔑 MTProxy • [1 мес.]", "Автоматическая выдача Telegram-прокси", "proxyline", PROXYLINE_MTPROXY_API_TYPE),
+    ("premium", "🪐 Прокси [1 мес.]", "Премиум-прокси с автовыдачей", "proxyline", "dedicated"),
+    ("standard", "🎲 Прокси [1 мес.]", "Стандартные прокси с автовыдачей", "proxys", "shared"),
+    ("residential", "🎲 Прокси [1 мес.]", "Резидентские прокси с автовыдачей", "proxys", "residential"),
 ]
 
 
