@@ -603,3 +603,14 @@ async def process_admin_shop_command(session, text: str) -> str | None:
         await session.commit()
         return f"✅ Товар {'включён' if row.is_active else 'выключен'}."
     return None
+
+# ---------------- V77 money visual fix ----------------
+def money(value, currency: str = "RUB") -> str:
+    if value is None:
+        return "Цена уточняется"
+    try:
+        number = Decimal(str(value)).quantize(Decimal("0.01"))
+        rendered = f"{number:.2f}"
+    except (InvalidOperation, ValueError):
+        rendered = str(value)
+    return f"{rendered} {currency}"

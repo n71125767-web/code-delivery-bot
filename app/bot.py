@@ -24,11 +24,7 @@ from sqlalchemy import text
 from app.database import SessionLocal, init_db, engine
 from app.handlers_main import (
     on_message,
-    on_business_message,
     on_callback_query,
-    on_business_connection,
-    on_edited_business_message,
-    on_deleted_business_messages,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -162,10 +158,6 @@ def build_dispatcher() -> Dispatcher:
     dp = Dispatcher()
     dp.message.register(on_message)
     dp.callback_query.register(on_callback_query)
-    dp.business_message.register(on_business_message)
-    dp.business_connection.register(on_business_connection)
-    dp.edited_business_message.register(on_edited_business_message)
-    dp.deleted_business_messages.register(on_deleted_business_messages)
     return dp
 
 
@@ -215,10 +207,6 @@ async def main():
             allowed_updates=[
                 "message",
                 "callback_query",
-                "business_connection",
-                "business_message",
-                "edited_business_message",
-                "deleted_business_messages",
             ],
         )
     finally:

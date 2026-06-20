@@ -743,3 +743,28 @@ def advanced_keyboard(product_id: int) -> InlineKeyboardMarkup:
     kb.button(text="⬇️ Свернуть", callback_data=f"v25:product:{product_id}")
     kb.adjust(2)
     return kb.as_markup()
+
+
+# ---------------- V77 money visual fix ----------------
+def _fmt_money_v53(value, currency: str | None = None) -> str:
+    from decimal import Decimal, InvalidOperation
+    if value is None:
+        rendered = "0.00"
+    else:
+        try:
+            rendered = f"{Decimal(str(value)).quantize(Decimal('0.01')):.2f}"
+        except (InvalidOperation, ValueError):
+            rendered = str(value)
+    return f"{rendered} {currency}" if currency else rendered
+
+
+def _fmt_money_v54(value, currency: str | None = None) -> str:
+    from decimal import Decimal, InvalidOperation
+    if value is None:
+        rendered = "0.00"
+    else:
+        try:
+            rendered = f"{Decimal(str(value)).quantize(Decimal('0.01')):.2f}"
+        except (InvalidOperation, ValueError):
+            rendered = str(value)
+    return f"{rendered} {currency}" if currency else rendered

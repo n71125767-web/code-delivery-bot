@@ -23,7 +23,6 @@ from app.config import (
     ADMIN_ALERT_CHAT_ID,
     ADMIN_ALERT_CHAT_IDS,
     IGNORE_OTHER_BOTS,
-    ADMIN_BUSINESS_CONNECTION_ID,
     SERVICE_PAGE_SIZE,
     SUPPLIER_PAGE_SIZE,
     PROBLEM_COOLDOWN_SECONDS,
@@ -302,6 +301,8 @@ from app.market_wallet_v49 import (
     create_withdrawal_request,
     admin_withdrawals_text,
     mark_withdrawal_done,
+    reject_withdrawal_request,
+    add_wallet_balance,
 )
 from app.services import (
     create_or_update_order_from_purchase,
@@ -502,6 +503,7 @@ SUPPLIER_WITHDRAW_WAIT: set[int] = set()
 SUPPLIER_WITHDRAW_ASSET: dict[int, str] = {}
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
 ADMIN_SUPPLIER_WAIT: dict[int, dict] = {}
+ADMIN_BALANCE_WAIT: dict[int, dict] = {}
 ADMIN_PROXY_PRICE_WAIT: dict[int, str] = {}
 ADMIN_PROXY_MARKUP_WAIT: dict[int, str] = {}
 ADMIN_PROXY_TEXT_WAIT: dict[int, str] = {}
@@ -713,6 +715,8 @@ async def send_or_edit_role_panel(
     4) нижняя reply-клавиатура убирается, чтобы не было дублей кнопок.
     """
     text = plain_text(text)
+    # V78: Telegram Business отключён полностью. Все панели идут только в обычный чат.
+    business_connection_id = None
     # ReplyKeyboardRemove нужен только при текстовой команде.
     # При callback не отправляем лишнее сообщение, иначе получится спам.
     if callback is None:
@@ -991,36 +995,20 @@ async def guard_order_owner(callback: CallbackQuery, order) -> bool:
 
 
 def get_business_id(message: Message | None, fallback: str | None = None) -> str | None:
-    if message is None:
-        return fallback or ADMIN_BUSINESS_CONNECTION_ID
-
-    return (
-        getattr(message, "business_connection_id", None)
-        or fallback
-        or ADMIN_BUSINESS_CONNECTION_ID
-    )
+    # V78: Telegram Business отключён. Не используем business_connection_id.
+    return None
 
 
 def remember_business_context(
     chat_id: int | None, business_connection_id: str | None
 ) -> None:
-    if chat_id and business_connection_id:
-        BUSINESS_CONTEXT_BY_CHAT[chat_id] = business_connection_id
+    # V78: no-op, Business context больше не хранится.
+    return None
 
 
 def get_callback_business_id(callback: CallbackQuery | None) -> str | None:
-    if callback is None:
-        return None
-
-    message = getattr(callback, "message", None)
-    chat = getattr(message, "chat", None)
-    chat_id = getattr(chat, "id", None)
-
-    return (
-        getattr(callback, "business_connection_id", None)
-        or getattr(message, "business_connection_id", None)
-        or BUSINESS_CONTEXT_BY_CHAT.get(chat_id)
-    )
+    # V78: Telegram Business отключён. Callback-и работают только в обычном чате.
+    return None
 
 
 def contains_forbidden_contact(text: str) -> bool:
@@ -1380,7 +1368,6 @@ async def process_bug_report_command(
         f"ID отчёта: {report.id}\n"
         f"Роль: {role}\n"
         f"От: {message.from_user.id} | @{message.from_user.username or 'нет'}\n"
-        f"Business: {business_connection_id or 'нет'}\n"
         f"Chat ID: {message.chat.id}\n\n"
         f"Текст:\n{payload}"
     )
@@ -4337,7 +4324,6 @@ async def process_proxyline_order(
         f"Заказ: #{order_operation_id}\n"
         f"Товар: {order_product_name}\n"
         f"Покупатель: {target_chat_id}\n"
-        f"Business ID: {target_business_id}\n\n"
         f"Прокси:\n{proxy_text}",
     )
     return False
@@ -4356,11 +4342,11 @@ async def process_legacy_external_shop_message_disabled(
         )
         return
 
-    current_business_id = get_business_id(message)
+    current_business_id = None  # V78: Telegram Business отключён
 
     async with SessionLocal() as session:
         order = await create_or_update_order_from_purchase(session, data)
-        if current_business_id and not order.business_connection_id:
+        if False:  # V78: Telegram Business отключён
             order.business_connection_id = current_business_id
             await session.commit()
             await session.refresh(order)
@@ -4559,7 +4545,7 @@ async def accept_service_for_order(
     # Иначе SQLAlchemy может дать DetachedInstanceError.
     order_id_value = order_id
     actual_business_id = business_connection_id
-    service_accepted_text = "OK. Сервис принят. Ожидайте номер."
+    service_accepted_text = "✅ Сервис принят. Заявка отправлена поставщику.\n\nОжидайте номер — после выдачи появится кнопка «🔑 Запросить код»."
 
     async with SessionLocal() as session:
         order = await get_order_by_id(session, order_id)
@@ -4601,7 +4587,7 @@ async def accept_service_for_order(
         order_id_value = order.id
         actual_business_id = business_connection_id or order.business_connection_id
         service_accepted_text = await get_text(
-            session, "service_accepted", "OK. Сервис принят. Ожидайте номер."
+            session, "service_accepted", "✅ Сервис принят. Заявка отправлена поставщику.\n\nОжидайте номер — после выдачи появится кнопка «🔑 Запросить код»."
         )
 
         try:
@@ -4869,31 +4855,33 @@ async def handle_supplier_message(
             await session.refresh(order)
 
             target_chat_id = order.buyer_chat_id or order.customer_telegram_id
-            target_business_id = order.business_connection_id
+            target_business_id = None  # V78: Telegram Business отключён
 
+            # V77: сначала шлём в обычный чат покупателя. Business-соединение часто
+            # принадлежит не тому контексту и Telegram отклоняет доставку.
             ok = False
-            if target_chat_id and target_business_id:
-                ok = bool(
-                    await safe_send_message(
-                        bot,
-                        target_chat_id,
-                        phone,
-                        business_connection_id=target_business_id,
-                        reply_markup=number_keyboard(order.id),
-                        allow_normal_fallback=False,
-                    )
-                )
-
-            if not ok and order.customer_telegram_id:
+            if order.customer_telegram_id:
                 normal_sent = await safe_send_message(
                     bot,
                     order.customer_telegram_id,
-                    phone,
+                    f"📞 Номер по заказу #{order.operation_id}:\n\n{phone}\n\nЕсли нужен код, нажмите кнопку ниже.",
                     business_connection_id=None,
                     reply_markup=number_keyboard(order.id),
                     allow_normal_fallback=True,
                 )
                 ok = bool(normal_sent)
+
+            if not ok and target_chat_id and target_business_id:
+                ok = bool(
+                    await safe_send_message(
+                        bot,
+                        target_chat_id,
+                        f"📞 Номер по заказу #{order.operation_id}:\n\n{phone}\n\nЕсли нужен код, нажмите кнопку ниже.",
+                        business_connection_id=target_business_id,
+                        reply_markup=number_keyboard(order.id),
+                        allow_normal_fallback=False,
+                    )
+                )
 
             if not ok:
                 order.status = "waiting_supplier_number"
@@ -4912,7 +4900,6 @@ async def handle_supplier_message(
                     f"Заказ: #{order.operation_id}\n"
                     f"buyer_chat_id: {order.buyer_chat_id}\n"
                     f"customer_telegram_id: {order.customer_telegram_id}\n"
-                    f"buyer_business_connection_id: {target_business_id or 'нет'}",
                 )
                 logger.error(
                     "BUYER_NUMBER_DELIVERY_FAILED order_id=%s buyer_chat_id=%s customer_id=%s business_id=%s",
@@ -4995,7 +4982,7 @@ async def handle_supplier_message(
             target_chat_id = order.buyer_chat_id or order.customer_telegram_id
             # Используем только Business-соединение покупателя. Нельзя подставлять
             # соединение текущего поставщика — это может направить сообщение не туда.
-            target_business_id = order.business_connection_id
+            target_business_id = None  # V78: Telegram Business отключён
 
             delivery_text = (
                 f"🔑 Код по заказу #{order.operation_id}:\n\n"
@@ -5004,20 +4991,7 @@ async def handle_supplier_message(
             )
 
             ok = False
-            if target_chat_id and target_business_id:
-                ok = bool(
-                    await send_buyer_role_panel(
-                        bot,
-                        target_chat_id,
-                        delivery_text,
-                        business_connection_id=target_business_id,
-                        reply_markup=confirm_keyboard(order.id),
-                    )
-                )
-
-            # Резервная доставка в обычный чат с ботом. Она сработает только если
-            # покупатель ранее нажал /start. Это безопаснее, чем терять код.
-            if not ok and order.customer_telegram_id:
+            if order.customer_telegram_id:
                 normal_sent = await safe_send_message(
                     bot,
                     order.customer_telegram_id,
@@ -5027,6 +5001,17 @@ async def handle_supplier_message(
                     allow_normal_fallback=True,
                 )
                 ok = bool(normal_sent)
+
+            if not ok and target_chat_id and target_business_id:
+                ok = bool(
+                    await send_buyer_role_panel(
+                        bot,
+                        target_chat_id,
+                        delivery_text,
+                        business_connection_id=target_business_id,
+                        reply_markup=confirm_keyboard(order.id),
+                    )
+                )
 
             if not ok:
                 # Оставляем статус waiting_supplier_code и активный запрос.
@@ -5047,7 +5032,6 @@ async def handle_supplier_message(
                     f"Заказ: #{order.operation_id}\n"
                     f"buyer_chat_id: {order.buyer_chat_id}\n"
                     f"customer_telegram_id: {order.customer_telegram_id}\n"
-                    f"buyer_business_connection_id: {target_business_id or 'нет'}",
                 )
                 logger.error(
                     "BUYER_CODE_DELIVERY_FAILED order_id=%s buyer_chat_id=%s customer_id=%s business_id=%s",
@@ -5120,17 +5104,18 @@ async def handle_supplier_message(
                 "Проверьте товар и подтвердите получение кнопкой ниже."
             )
             ok = False
-            if target_chat_id and order.business_connection_id:
+            if order.customer_telegram_id:
+                ok = bool(await safe_send_message(
+                    bot, order.customer_telegram_id, delivery_text,
+                    business_connection_id=None,
+                    reply_markup=confirm_keyboard(order.id),
+                    allow_normal_fallback=True,
+                ))
+            if not ok and target_chat_id and order.business_connection_id:
                 ok = bool(await send_buyer_role_panel(
                     bot, target_chat_id, delivery_text,
                     business_connection_id=order.business_connection_id,
                     reply_markup=confirm_keyboard(order.id),
-                ))
-            if not ok and order.customer_telegram_id:
-                ok = bool(await safe_send_message(
-                    bot, order.customer_telegram_id, delivery_text,
-                    reply_markup=confirm_keyboard(order.id),
-                    allow_normal_fallback=True,
                 ))
             if not ok:
                 order.status = "waiting_supplier_account"
@@ -5198,7 +5183,7 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
     user_id = sender.id
     username = (sender.username or "").replace("@", "").lower()
     text = (message.text or "").strip()
-    business_connection_id = get_business_id(message) if is_business else None
+    business_connection_id = None  # V78: Telegram Business отключён
 
     is_new_user = await touch_user(user_id, username or None)
     if is_new_user:
@@ -5373,9 +5358,66 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         await answer_message(bot, message, result + "\n\n" + info, business_connection_id, reply_markup=v61_proxy_kind_keyboard(kind, product.id if product else None))
         return
 
+    if user_id in ADMIN_BALANCE_WAIT and not text.startswith("/"):
+        state = ADMIN_BALANCE_WAIT.pop(user_id, None) or {}
+        if not await is_admin_user(user_id):
+            await answer_message(bot, message, "Недоступно.", business_connection_id)
+            return
+        raw = text.strip()
+        if raw.lower() in {"отмена", "cancel", "❌ отмена"}:
+            await answer_message(bot, message, "✅ Управление балансом отменено.", business_connection_id, reply_markup=admin_main_reply_keyboard())
+            return
+        parts = raw.split(maxsplit=3)
+        if len(parts) < 3:
+            await answer_message(
+                bot,
+                message,
+                "Формат: TELEGRAM_ID СУММА ВАЛЮТА [комментарий]\nПример: 123456789 10 USDT бонус",
+                business_connection_id,
+                reply_markup=admin_panel_keyboard(),
+            )
+            return
+        try:
+            target_id = int(parts[0])
+            amount = Decimal(parts[1].replace(",", "."))
+            currency = parts[2].upper()[:10]
+            note = parts[3] if len(parts) > 3 else "admin balance adjust"
+            if amount <= 0:
+                raise ValueError
+        except Exception:
+            await answer_message(bot, message, "Проверьте ID, сумму и валюту. Пример: 123456789 10 USDT", business_connection_id, reply_markup=admin_panel_keyboard())
+            return
+        if state.get("mode") == "sub":
+            amount = -amount
+        async with SessionLocal() as session:
+            await add_wallet_balance(
+                session,
+                target_id,
+                amount,
+                currency,
+                "admin_balance_adjust",
+                source_type="admin",
+                source_id=user_id,
+                note=note,
+            )
+            await session.commit()
+        sign = "+" if amount > 0 else ""
+        await answer_message(
+            bot,
+            message,
+            f"✅ Баланс обновлён\n\nПользователь: {target_id}\nИзменение: {sign}{amount.quantize(Decimal('0.01'))} {currency}\nКомментарий: {note}",
+            business_connection_id,
+            reply_markup=admin_panel_keyboard(),
+        )
+        try:
+            await safe_send_message(bot, target_id, f"💼 Баланс обновлён администратором\n\nИзменение: {sign}{amount.quantize(Decimal('0.01'))} {currency}")
+        except Exception:
+            pass
+        return
+
     if text.lower() in {"отмена", "cancel", "❌ отмена"}:
         had_state = False
-        for store in (SHOP_ADMIN_WAIT, CATALOG_V25_STATE, ADMIN_BROADCAST_V28, ADMIN_TEXT_EDIT_WAIT, ADMIN_SUPPLIER_WAIT, CART_QUANTITY_WAIT, PROXY_COUNTRY_SEARCH_WAIT, ADMIN_PROXY_PRICE_WAIT, ADMIN_PROXY_MARKUP_WAIT, ADMIN_PROXY_TEXT_WAIT):
+        for store in (SHOP_ADMIN_WAIT, CATALOG_V25_STATE, ADMIN_BROADCAST_V28, ADMIN_TEXT_EDIT_WAIT, ADMIN_SUPPLIER_WAIT, ADMIN_BALANCE_WAIT, CART_QUANTITY_WAIT, PROXY_COUNTRY_SEARCH_WAIT, ADMIN_PROXY_PRICE_WAIT, ADMIN_PROXY_MARKUP_WAIT, ADMIN_PROXY_TEXT_WAIT):
             if user_id in store:
                 store.pop(user_id, None)
                 had_state = True
@@ -7497,6 +7539,41 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         await callback.answer()
         return True
 
+    if data == "admin:wallets":
+        from aiogram.utils.keyboard import InlineKeyboardBuilder as _IKB
+        kb = _IKB()
+        kb.button(text="➕ Начислить", callback_data="admin:wallet_add")
+        kb.button(text="➖ Списать", callback_data="admin:wallet_sub")
+        kb.button(text="↗️ Выводы поставщиков", callback_data="admin:withdrawals")
+        kb.button(text="🔙 Назад", callback_data="admin:panel")
+        kb.adjust(2, 1, 1)
+        await update_or_send(
+            callback,
+            "💼 Балансы пользователей и поставщиков\n\n"
+            "Здесь админ может начислить или списать баланс по Telegram ID.\n"
+            "Работает одинаково для покупателя и поставщика.\n\n"
+            "Формат после выбора действия:\n"
+            "TELEGRAM_ID СУММА ВАЛЮТА [комментарий]\n\n"
+            "Пример:\n123456789 10 USDT бонус",
+            reply_markup=kb.as_markup(),
+        )
+        await callback.answer()
+        return True
+
+    if data in {"admin:wallet_add", "admin:wallet_sub"}:
+        ADMIN_BALANCE_WAIT[callback.from_user.id] = {"mode": "add" if data.endswith("add") else "sub"}
+        await update_or_send(
+            callback,
+            ("➕ Начисление баланса" if data.endswith("add") else "➖ Списание баланса")
+            + "\n\nОтправьте одним сообщением:\n"
+            "TELEGRAM_ID СУММА ВАЛЮТА [комментарий]\n\n"
+            "Пример:\n123456789 10 USDT бонус\n\n"
+            "Для отмены: отмена",
+            reply_markup=admin_hidden_keyboard(),
+        )
+        await callback.answer("Жду данные")
+        return True
+
     if data == "admin:withdrawals":
         from aiogram.utils.keyboard import InlineKeyboardBuilder as _IKB
         kb = _IKB()
@@ -7504,7 +7581,8 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             from app.models import SupplierWithdrawal as _SW
             rows = list((await session.scalars(select(_SW).where(_SW.status.in_(["pending", "manual_review"])) .order_by(_SW.id.desc()).limit(10))).all())
         for wd in rows:
-            kb.button(text=f"✅ Одобрено {wd.id}", callback_data=f"admin:withdraw_approve:{wd.id}")
+            kb.button(text=f"✅ Одобрить #{wd.id}", callback_data=f"admin:withdraw_approve:{wd.id}")
+            kb.button(text=f"❌ Отклонить #{wd.id}", callback_data=f"admin:withdraw_reject:{wd.id}")
         kb.button(text="🔄 Обновить", callback_data="admin:withdrawals")
         kb.button(text="🔙 Назад", callback_data="admin:hidden")
         kb.adjust(2, 1, 1)
@@ -7521,6 +7599,17 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         result = await mark_withdrawal_done(bot, callback.from_user.id, f"{wid} approved")
         await update_or_send(callback, result + "\n\n" + await admin_withdrawals_text(), reply_markup=admin_hidden_keyboard())
         await callback.answer("Одобрено")
+        return True
+
+    if data.startswith("admin:withdraw_reject:"):
+        try:
+            wid = int(data.rsplit(":", 1)[1])
+        except Exception:
+            await callback.answer("Некорректный ID", show_alert=True)
+            return True
+        result = await reject_withdrawal_request(bot, callback.from_user.id, wid, "Отклонено администратором")
+        await update_or_send(callback, result + "\n\n" + await admin_withdrawals_text(), reply_markup=admin_hidden_keyboard())
+        await callback.answer("Отклонено")
         return True
 
     if data == "admin:hidden":
@@ -8007,12 +8096,38 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
         SUPPLIER_WITHDRAW_WAIT.add(callback.from_user.id)
         SUPPLIER_WITHDRAW_ASSET[callback.from_user.id] = asset
         ADMIN_BROADCAST_V28.pop(callback.from_user.id, None)
+        from aiogram.utils.keyboard import InlineKeyboardBuilder as _IKB
+        kb = _IKB()
+        kb.button(text="💰 Вывести всё", callback_data=f"supplier:withdraw_all:{asset}")
+        kb.button(text="🔙 Выбрать монету", callback_data="supplier:withdraw_help")
+        kb.button(text="🏠 Главное меню", callback_data="supplier:panel")
+        kb.adjust(1)
         await update_or_send(
             callback,
-            f"↗️ Вывод {asset}\n\nОтправьте сумму и адрес одним сообщением.\nПример: 10 UQ...",
-            reply_markup=supplier_inline_menu_keyboard(),
+            f"↗️ Вывод {asset}\n\n"
+            "Отправьте сумму одним сообщением.\n"
+            "Пример: 10\n\n"
+            "Адрес не нужен — бот создаст CryptoBot-чек.\n"
+            "Или нажмите «💰 Вывести всё».",
+            reply_markup=kb.as_markup(),
         )
         await callback.answer(f"Выбран {asset}")
+        return True
+
+    if data.startswith("supplier:withdraw_all:"):
+        asset = data.rsplit(":", 1)[1].upper()
+        SUPPLIER_WITHDRAW_WAIT.discard(callback.from_user.id)
+        SUPPLIER_WITHDRAW_ASSET.pop(callback.from_user.id, None)
+        result = await create_withdrawal_request(callback.from_user.id, "всё", asset=asset)
+        await update_or_send(callback, result, reply_markup=wallet_keyboard(is_supplier=True))
+        if "Заявка на вывод" in result or "модерац" in result.lower():
+            await notify_admins(
+                bot,
+                "↗️ Запрос поставщика на вывод\n\n"
+                f"Поставщик: {callback.from_user.id}\n"
+                f"Результат: {result}",
+            )
+        await callback.answer("Вывод создан")
         return True
 
     if data == "supplier:requests":
@@ -8104,9 +8219,7 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
             )
 
         target_chat_id = order.buyer_chat_id or order.customer_telegram_id
-        target_business_id = (
-            order.business_connection_id or ADMIN_BUSINESS_CONNECTION_ID
-        )
+        target_business_id = None  # V78: Telegram Business отключён
         if target_chat_id:
             await safe_send_message(
                 bot,
@@ -9610,9 +9723,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         await sync_purchase_from_order(order.id, True)
 
         target_chat_id = order.buyer_chat_id or order.customer_telegram_id
-        target_business_id = (
-            order.business_connection_id or ADMIN_BUSINESS_CONNECTION_ID
-        )
+        target_business_id = None  # V78: Telegram Business отключён
 
         thanks_sent = False
         if target_chat_id:
@@ -9620,8 +9731,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
                 bot,
                 target_chat_id,
                 thank_you_text,
-                business_connection_id=get_callback_business_id(callback)
-                or target_business_id,
+                business_connection_id=None,
                 reply_markup=await buyer_inline_keyboard_for_user(user_id),
                 callback=callback,
             )
@@ -9700,8 +9810,8 @@ async def on_message(message: Message, bot: Bot) -> None:
 
 
 async def on_business_message(message: Message, bot: Bot) -> None:
-    logger.info("DISPATCHER_BUSINESS_MESSAGE text=%s", message.text)
-    await route_message(bot, message, is_business=True)
+    logger.info("DISPATCHER_BUSINESS_MESSAGE ignored because Telegram Business is disabled text=%s", message.text)
+    return
 
 
 async def on_callback_query(callback: CallbackQuery, bot: Bot) -> None:

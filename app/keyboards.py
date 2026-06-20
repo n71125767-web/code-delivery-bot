@@ -1213,3 +1213,19 @@ def admin_main_reply_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🔙 Главное меню")],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=False, input_field_placeholder="Админ меню", selective=True)
+
+
+# ---------------- V77 admin panel balance button ----------------
+def admin_panel_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="💰 Управление товарами", callback_data="v25:catalog")
+    kb.button(text="🌐 Прокси", callback_data="admin:proxy")
+    kb.button(text="📱 Номера", callback_data="admin:number_settings")
+    kb.button(text="💼 Балансы", callback_data="admin:wallets")
+    kb.button(text="💵 Способы оплаты", callback_data="admin:payments")
+    kb.button(text="📊 Оплата", callback_data="admin:status")
+    kb.button(text="⚙️ Настройки", callback_data="admin:main_settings")
+    kb.button(text="📣 Рассылка", callback_data="admin:broadcast")
+    kb.button(text="🔙 Главное меню", callback_data="buyer:panel")
+    kb.adjust(1, 2, 2, 2, 1, 1)
+    return kb.as_markup()
