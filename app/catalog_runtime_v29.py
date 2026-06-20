@@ -37,6 +37,7 @@ async def search_visible_products(session, query: str, limit: int = 30):
                 .where(
                     ShopProduct.is_active.is_(True),
                     ShopProduct.payment_enabled.is_(True),
+                    ShopProduct.is_deleted.is_(False),
                     or_(
                         ShopProduct.name.ilike(pattern),
                         ShopProduct.description.ilike(pattern),

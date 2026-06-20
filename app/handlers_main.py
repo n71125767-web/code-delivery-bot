@@ -117,7 +117,16 @@ from app.repositories.product_providers import (
     list_recent_internal_products,
 )
 
-from app.models import ShopCategory, ShopProduct, BugReport, ProductStockItem, BroadcastJob, MarketplaceApplication
+from app.models import (
+    ShopCategory,
+    ShopProduct,
+    BugReport,
+    ProductStockItem,
+    BroadcastJob,
+    MarketplaceApplication,
+    BotUser,
+    ProductProvider,
+)
 
 from app.shop_admin_v20 import (
     customer_home_text,
@@ -236,6 +245,21 @@ from app.v50_features import (
     supplier_products_text,
     set_supplier_product_price,
     parse_money,
+)
+
+from app.v51_features import (
+    admin_capabilities_keyboard,
+    admin_capabilities_text,
+    admin_capability_user_keyboard,
+    admin_capability_user_text,
+    admin_settings_visual_keyboard,
+    admin_settings_visual_text,
+    admin_statistics_visual_text,
+    buyer_orders_page,
+    find_user_id_by_username_or_id,
+    hard_delete_product,
+    has_admin_capability,
+    simple_back_keyboard,
 )
 
 from app.admin_reference_v28 import (
@@ -357,6 +381,7 @@ logger.info("FIX_MARKER_MCS_STABLE=v29 loaded")
 logger.info("FIX_MARKER_MCS_HARDENED=v31 loaded")
 logger.info("FIX_MARKER_MCS_UI_ROUTING=v31.1 loaded")
 logger.info("FIX_MARKER_MCS_VISUAL=v32 loaded")
+logger.info("FIX_MARKER_V51_UI_PERMS_ORDERS loaded")
 
 
 def validate_runtime_ui() -> None:
@@ -837,6 +862,44 @@ async def get_user_role(user_id: int | None) -> str:
     return "buyer"
 
 
+async def buyer_inline_keyboard_for_user(user_id: int | None) -> object:
+    return buyer_inline_menu_keyboard(
+        is_admin=await is_admin_user(user_id),
+        is_supplier=bool(user_id and await is_supplier_user(user_id)),
+    )
+
+
+async def buyer_reply_keyboard_for_user(user_id: int | None) -> object:
+    return buyer_main_reply_keyboard(
+        is_admin=await is_admin_user(user_id),
+        is_supplier=bool(user_id and await is_supplier_user(user_id)),
+    )
+
+
+async def user_is_root_admin(user_id: int | None) -> bool:
+    return bool(user_id and (user_id in ADMIN_IDS or user_id in GA_IDS))
+
+
+def required_admin_capability(callback_data: str) -> str | None:
+    if callback_data.startswith(("v25:", "admin:shop:")):
+        return "catalog"
+    if callback_data.startswith("admin:payments"):
+        return "payments"
+    if callback_data.startswith(("admin:main_settings", "admin:edit_faq", "admin:edit_main_page", "admin:number_settings")):
+        return "settings"
+    if callback_data.startswith("admin:broadcast") or callback_data.startswith("v28:broadcast"):
+        return "broadcast"
+    if callback_data.startswith("admin:proxy"):
+        return "proxy"
+    if callback_data.startswith("admin:status"):
+        return "stats"
+    if callback_data.startswith(("admin:admins", "admin:caps", "admin:add_admin", "admin:remove_admin")):
+        return "admins"
+    if callback_data.startswith("admin:hidden"):
+        return "hidden"
+    return None
+
+
 def callback_user_owns_order(order, callback: CallbackQuery) -> bool:
     if not order or not callback.from_user:
         return False
@@ -1124,7 +1187,7 @@ async def send_buyer_menu(
         bot,
         chat_id,
         text,
-        reply_markup=buyer_inline_menu_keyboard(is_admin=admin_access),
+        reply_markup=await buyer_inline_keyboard_for_user(user_id),
         business_connection_id=business_connection_id,
     )
 
@@ -2243,13 +2306,12 @@ async def process_catalog_v25_input(
             elif action == "category_photo" and category and message.photo:
                 category.photo_file_id = message.photo[-1].file_id
             elif action == "give_product" and product:
-                target = text.replace("@", "").strip()
-                target_id = int(target) if target.isdigit() else None
+                target_id, target_error = await find_user_id_by_username_or_id(session, text)
                 if target_id is None:
                     await answer_message(
                         bot,
                         message,
-                        "Для надежной выдачи отправьте числовой Telegram ID пользователя.",
+                        target_error or "Пользователь не найден.",
                         business_connection_id,
                     )
                     return True
@@ -3418,25 +3480,20 @@ async def process_main_reply_button(
     message: Message,
     business_connection_id: str | None,
 ) -> bool:
-    """Главные кнопки магазина под полем ввода."""
+    """Главные кнопки магазина, администратора и поставщика."""
     if not message.from_user:
         return False
 
     text = (message.text or "").strip()
     user_id = message.from_user.id
     admin_access = await is_admin_user(user_id)
+    supplier_access = await is_supplier_user(user_id)
     is_business_context = bool(business_connection_id)
 
     if admin_access and text in {"📦 Управление товарами", "💰 Управление товарами", "Управление товарами"}:
         async with SessionLocal() as session:
             categories, products = await admin_catalog_overview(session)
-        await answer_message(
-            bot,
-            message,
-            admin_catalog_text(categories, products),
-            business_connection_id,
-            reply_markup=admin_catalog_keyboard(categories, products),
-        )
+        await answer_message(bot, message, admin_catalog_text(categories, products), business_connection_id, reply_markup=admin_catalog_keyboard(categories, products))
         return True
 
     if admin_access and text in {"💳 Способы оплаты", "💳 Оплата", "Способы оплаты", "Оплата"}:
@@ -3446,12 +3503,43 @@ async def process_main_reply_button(
         return True
 
     if admin_access and text in {"⚙️ Настройки", "Настройки", "⚙️ Админ меню"}:
-        await answer_message(bot, message, await main_settings_text(), business_connection_id, reply_markup=admin_hidden_keyboard())
+        await answer_message(bot, message, await admin_settings_visual_text(), business_connection_id, reply_markup=admin_settings_visual_keyboard())
+        return True
+
+    if admin_access and text in {"📊 Статистика", "Статистика"}:
+        async with SessionLocal() as session:
+            text_value = await admin_statistics_visual_text(session)
+        await answer_message(bot, message, text_value, business_connection_id, reply_markup=admin_hidden_keyboard())
         return True
 
     if admin_access and text in {"👁 Скрытые", "Скрытые"}:
-        await answer_message(bot, message, "👁 Скрытые действия администратора", business_connection_id, reply_markup=admin_hidden_keyboard())
+        await answer_message(bot, message, "👁 Скрытые действия\n\nСлужебные настройки, заявки, выводы и права.", business_connection_id, reply_markup=admin_hidden_keyboard())
         return True
+
+    if admin_access and text in {"🧩 Прокси", "Прокси"}:
+        async with SessionLocal() as session:
+            text_value, settings = await proxy_settings_text(session)
+        await answer_message(bot, message, text_value, business_connection_id, reply_markup=admin_proxy_settings_keyboard(settings))
+        return True
+
+    if text in {"🚚 Я поставщик", "🚚 Панель поставщика"}:
+        ADMIN_BROADCAST_V28.pop(user_id, None)
+        if not supplier_access:
+            await answer_message(
+                bot,
+                message,
+                "Панель поставщика доступна только одобренным поставщикам. Чтобы подать заявку, нажмите «Стать партнёром».",
+                business_connection_id,
+                reply_markup=(await buyer_reply_keyboard_for_user(user_id) if not is_business_context else await buyer_inline_keyboard_for_user(user_id)),
+            )
+            return True
+        await answer_message(bot, message, supplier_main_panel_text(), business_connection_id, reply_markup=supplier_reply_keyboard())
+        await answer_message(bot, message, supplier_main_panel_text(), business_connection_id, reply_markup=supplier_inline_menu_keyboard())
+        return True
+
+    if text in {"📦 Мои заказы", "🛍 Мои товары", "💼 Баланс", "↗️ Вывод", "💵 Изменить цену", "📖 Помощь"} and supplier_access:
+        ADMIN_BROADCAST_V28.pop(user_id, None)
+        return await process_supplier_command(bot, message, business_connection_id)
 
     if text in {"🏠 Главное меню", "Главное меню", "🏠 Режим покупателя", "Режим покупателя"}:
         await answer_message(
@@ -3459,7 +3547,7 @@ async def process_main_reply_button(
             message,
             await get_main_page_text(),
             business_connection_id,
-            reply_markup=(buyer_inline_menu_keyboard(is_admin=admin_access) if is_business_context else buyer_main_reply_keyboard(is_admin=admin_access)),
+            reply_markup=(await buyer_inline_keyboard_for_user(user_id) if is_business_context else await buyer_reply_keyboard_for_user(user_id)),
         )
         return True
 
@@ -3467,198 +3555,53 @@ async def process_main_reply_button(
         async with SessionLocal() as session:
             categories = await list_categories(session)
             display_settings = await get_display_settings(session)
-
-        await answer_message(
-            bot,
-            message,
-            customer_home_text(),
-            business_connection_id,
-            reply_markup=customer_home_keyboard(
-                categories,
-                is_admin=admin_access,
-                columns_count=display_settings.columns_count,
-                search_enabled=display_settings.search_enabled,
-            ),
-        )
-        return True
-
-    if text == "🌐 Прокси":
-        await answer_message(
-            bot,
-            message,
-            proxy_categories_text(),
-            business_connection_id,
-            reply_markup=proxy_categories_keyboard(),
-        )
+        await answer_message(bot, message, customer_home_text(), business_connection_id, reply_markup=customer_home_keyboard(categories, is_admin=admin_access, columns_count=display_settings.columns_count, search_enabled=display_settings.search_enabled))
         return True
 
     if text == "📱 Номера":
         async with SessionLocal() as session:
             products = await list_number_products(session)
-
-        text_value = "📱 Номера"
-
-        await answer_message(
-            bot,
-            message,
-            text_value,
-            business_connection_id,
-            reply_markup=special_products_keyboard(
-                products,
-                back_callback="buyer:panel",
-            ),
-        )
+        await answer_message(bot, message, "📱 Номера", business_connection_id, reply_markup=special_products_keyboard(products, back_callback="buyer:panel"))
         return True
 
     if text == "🛒 Корзина":
         async with SessionLocal() as session:
             rows = await get_cart_rows(session, user_id)
-        await answer_message(
-            bot,
-            message,
-            cart_text(rows),
-            business_connection_id,
-            reply_markup=cart_keyboard(rows),
-        )
+        await answer_message(bot, message, cart_text(rows), business_connection_id, reply_markup=cart_keyboard(rows))
         return True
 
     if text == "🧾 Мои заказы":
-        orders_text = await standalone_buyer_orders_text(user_id)
-        await answer_message(
-            bot,
-            message,
-            orders_text,
-            business_connection_id,
-            reply_markup=(
-                buyer_inline_menu_keyboard(is_admin=admin_access)
-                if is_business_context
-                else buyer_main_reply_keyboard(is_admin=admin_access)
-            ),
-        )
+        orders_text, orders_markup = await buyer_orders_page(user_id, message.from_user.username, 0)
+        await answer_message(bot, message, orders_text, business_connection_id, reply_markup=orders_markup)
         return True
 
     if text == "🤝 Стать партнёром":
         PARTNER_APPLICATION_WAIT.add(user_id)
-        await answer_message(
-            bot,
-            message,
-            "🤝 <b>Стать партнёром</b>\n\nОпишите, какие услуги хотите разместить в маркете.\nУкажите: название, цену, формат выдачи, сроки и условия.\n\nАдмины увидят заявку и смогут принять или отклонить её.\nДля отмены: отмена",
-            business_connection_id,
-            reply_markup=buyer_back_to_panel_keyboard(),
-        )
+        await answer_message(bot, message, "🤝 Стать партнёром\n\nОпишите, какие услуги хотите разместить в маркете.\nУкажите: название, цену, формат выдачи, сроки и условия.\n\nАдмины увидят заявку и смогут принять или отклонить её.\nДля отмены: отмена", business_connection_id, reply_markup=buyer_back_to_panel_keyboard())
         return True
 
     if text == "✉️ Обратная связь":
         BUYER_FEEDBACK_WAIT.add(user_id)
-        await answer_message(
-            bot,
-            message,
-            "✉️ Обратная связь\n\n"
-            "Отправьте следующим сообщением ваш вопрос или описание проблемы.\n"
-            "Команду /bug писать не нужно.",
-            business_connection_id,
-            reply_markup=(
-                buyer_inline_menu_keyboard(is_admin=admin_access)
-                if is_business_context
-                else buyer_main_reply_keyboard(is_admin=admin_access)
-            ),
-        )
+        await answer_message(bot, message, "✉️ Обратная связь\n\nОтправьте следующим сообщением ваш вопрос или описание проблемы.", business_connection_id, reply_markup=(await buyer_inline_keyboard_for_user(user_id) if is_business_context else await buyer_reply_keyboard_for_user(user_id)))
         return True
 
     if text == "📕 FAQ":
-        await answer_message(
-            bot,
-            message,
-            await get_faq_page_text(),
-            business_connection_id,
-            reply_markup=(
-                buyer_inline_menu_keyboard(is_admin=admin_access)
-                if is_business_context
-                else buyer_main_reply_keyboard(is_admin=admin_access)
-            ),
-        )
-        return True
-
-    if text == "💳 Оплата":
-        if not admin_access:
-            await answer_message(
-                bot, message, "У вас нет доступа.", business_connection_id
-            )
-            return True
-        async with SessionLocal() as session:
-            text_value = await payments_text(session)
-        await answer_message(
-            bot,
-            message,
-            text_value,
-            business_connection_id,
-            reply_markup=payments_keyboard(),
-        )
+        await answer_message(bot, message, await get_faq_page_text(), business_connection_id, reply_markup=(await buyer_inline_keyboard_for_user(user_id) if is_business_context else await buyer_reply_keyboard_for_user(user_id)))
         return True
 
     if text == "📢 Рассылка":
         if not admin_access:
-            await answer_message(
-                bot, message, "У вас нет доступа.", business_connection_id
-            )
+            await answer_message(bot, message, "У вас нет доступа.", business_connection_id)
             return True
         ADMIN_BROADCAST_V28[user_id] = {"step": "content"}
-        await answer_message(
-            bot,
-            message,
-            "📢 Создание рассылки\n\n"
-            "Отправьте текст сообщения для рассылки.\n"
-            "После этого откроется предварительный просмотр.",
-            business_connection_id,
-        )
-        return True
-
-    if text == "💰 Управление товарами":
-        if not admin_access:
-            await answer_message(
-                bot, message, "У вас нет доступа.", business_connection_id
-            )
-            return True
-        async with SessionLocal() as session:
-            categories, products = await admin_catalog_overview(session)
-        await answer_message(
-            bot,
-            message,
-            admin_catalog_text(categories, products),
-            business_connection_id,
-            reply_markup=admin_catalog_keyboard(categories, products),
-        )
+        await answer_message(bot, message, "📢 Создание рассылки\n\nОтправьте текст, фото, видео или документ. После этого откроется предпросмотр.", business_connection_id)
         return True
 
     if text in {"⚙️ Админ меню", "🛠 Админ"}:
         if not admin_access:
-            await answer_message(
-                bot,
-                message,
-                "У вас нет доступа к админ-панели.",
-                business_connection_id,
-                reply_markup=(
-                    buyer_inline_menu_keyboard()
-                    if is_business_context
-                    else buyer_main_reply_keyboard(is_admin=False)
-                ),
-            )
+            await answer_message(bot, message, "У вас нет доступа к админ-панели.", business_connection_id, reply_markup=(await buyer_inline_keyboard_for_user(user_id) if is_business_context else await buyer_reply_keyboard_for_user(user_id)))
             return True
-
-        await answer_message(
-            bot,
-            message,
-            "🛠 Админ-панель открыта.",
-            business_connection_id,
-            reply_markup=admin_main_reply_keyboard(),
-        )
-        await answer_message(
-            bot,
-            message,
-            admin_panel_text(),
-            business_connection_id,
-            reply_markup=admin_panel_keyboard(),
-        )
+        await answer_message(bot, message, admin_panel_text(), business_connection_id, reply_markup=admin_main_reply_keyboard() if not is_business_context else admin_panel_keyboard())
         return True
 
     return False
@@ -3794,7 +3737,7 @@ async def process_command_message(
                 bot,
                 message.chat.id,
                 await get_main_page_text(),
-                reply_markup=buyer_inline_menu_keyboard(is_admin=admin_access),
+                reply_markup=await buyer_inline_keyboard_for_user(user_id),
                 business_connection_id=business_connection_id,
             )
         else:
@@ -3803,7 +3746,7 @@ async def process_command_message(
                 message,
                 await get_main_page_text(),
                 business_connection_id=None,
-                reply_markup=buyer_main_reply_keyboard(is_admin=admin_access),
+                reply_markup=await buyer_reply_keyboard_for_user(user_id),
             )
         return
 
@@ -3838,21 +3781,18 @@ async def process_command_message(
             bot,
             message.chat.id,
             profile_text,
-            reply_markup=buyer_inline_menu_keyboard(),
+            reply_markup=await buyer_inline_keyboard_for_user(user_id),
             business_connection_id=business_connection_id,
         )
         return
 
     if text == "📦 Мои заказы" or text == "/orders":
-        async with SessionLocal() as session:
-            orders_text = await buyer_orders_text(
-                session, user_id, username, BUYER_ORDERS_LIMIT
-            )
+        orders_text, orders_markup = await buyer_orders_page(user_id, username, 0)
         await send_buyer_role_panel(
             bot,
             message.chat.id,
             orders_text,
-            reply_markup=buyer_back_keyboard(),
+            reply_markup=orders_markup,
             business_connection_id=business_connection_id,
         )
         return
@@ -5079,9 +5019,9 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
             f"✅ Обращение #{report.id} отправлено. Администратор увидит его.",
             business_connection_id,
             reply_markup=(
-                buyer_main_reply_keyboard(is_admin=await is_admin_user(user_id))
+                await buyer_reply_keyboard_for_user(user_id)
                 if not business_connection_id
-                else buyer_inline_menu_keyboard(is_admin=await is_admin_user(user_id))
+                else await buyer_inline_keyboard_for_user(user_id)
             ),
         )
         return
@@ -5106,6 +5046,15 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         "🏠 Главное меню",
         "⚙️ Админ меню",
         "🛠 Админ",
+        "🚚 Я поставщик",
+        "🚚 Панель поставщика",
+        "🛍 Мои товары",
+        "💼 Баланс",
+        "↗️ Вывод",
+        "💵 Изменить цену",
+        "📖 Помощь",
+        "📊 Статистика",
+        "🧩 Прокси",
     }
     if text in main_reply_buttons:
         # Нажатие главной кнопки отменяет незавершённый ввод старого мастера.
@@ -5118,6 +5067,7 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         PROXY_COUNTRY_SEARCH_WAIT.pop(user_id, None)
         CART_QUANTITY_WAIT.pop(user_id, None)
         PARTNER_APPLICATION_WAIT.discard(user_id)
+        ADMIN_BROADCAST_V28.pop(user_id, None)
         if await process_main_reply_button(bot, message, business_connection_id):
             return
 
@@ -5237,6 +5187,118 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return False
 
     data = callback.data or ""
+
+    required_cap = required_admin_capability(data)
+    if required_cap and not await has_admin_capability(callback.from_user.id, required_cap, is_owner=await user_is_root_admin(callback.from_user.id)):
+        await callback.answer("У вас нет доступа к этому разделу. Попросите ГА выдать право.", show_alert=True)
+        return True
+
+    if data == "admin:panel":
+        await update_or_send(callback, admin_panel_text(), reply_markup=admin_panel_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "admin:main_settings":
+        await update_or_send(callback, await admin_settings_visual_text(), reply_markup=admin_settings_visual_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "admin:edit_faq":
+        ADMIN_TEXT_EDIT_WAIT[callback.from_user.id] = "faq_text"
+        await update_or_send(callback, "📕 Изменение FAQ\n\nОтправьте новый текст FAQ одним сообщением.\nДля отмены напишите: отмена", reply_markup=simple_back_keyboard("admin:main_settings"))
+        await callback.answer("Жду новый FAQ")
+        return True
+
+    if data == "admin:edit_main_page":
+        ADMIN_TEXT_EDIT_WAIT[callback.from_user.id] = "main_page_text"
+        await update_or_send(callback, "🏠 Изменение главной страницы\n\nОтправьте новый текст главной одним сообщением.\nДля отмены напишите: отмена", reply_markup=simple_back_keyboard("admin:main_settings"))
+        await callback.answer("Жду текст главной")
+        return True
+
+    if data == "admin:status":
+        async with SessionLocal() as session:
+            text_value = await admin_statistics_visual_text(session)
+        await update_or_send(callback, text_value, reply_markup=admin_hidden_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "admin:caps":
+        if not await user_is_root_admin(callback.from_user.id):
+            await callback.answer("Права админов может менять только ГА.", show_alert=True)
+            return True
+        async with SessionLocal() as session:
+            from app.models import AdminUser
+            admins = list((await session.scalars(select(AdminUser).where(AdminUser.is_active.is_(True)).order_by(AdminUser.created_at.desc()))).all())
+            text_value = await admin_capabilities_text(session)
+        await update_or_send(callback, text_value, reply_markup=admin_capabilities_keyboard(admins))
+        await callback.answer()
+        return True
+
+    if data.startswith("admin:caps:user:"):
+        if not await user_is_root_admin(callback.from_user.id):
+            await callback.answer("Только ГА.", show_alert=True)
+            return True
+        admin_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            text_value = await admin_capability_user_text(session, admin_id)
+            markup = await admin_capability_user_keyboard(session, admin_id)
+        await update_or_send(callback, text_value, reply_markup=markup)
+        await callback.answer()
+        return True
+
+    if data.startswith("admin:caps:toggle:"):
+        if not await user_is_root_admin(callback.from_user.id):
+            await callback.answer("Только ГА.", show_alert=True)
+            return True
+        _, _, _, admin_id_raw, cap = data.split(":", 4)
+        admin_id = int(admin_id_raw)
+        async with SessionLocal() as session:
+            from app.v51_features import get_admin_caps, set_admin_caps
+            caps = await get_admin_caps(session, admin_id)
+            if cap in caps:
+                caps.remove(cap)
+            else:
+                caps.add(cap)
+            await set_admin_caps(session, admin_id, caps)
+            text_value = await admin_capability_user_text(session, admin_id)
+            markup = await admin_capability_user_keyboard(session, admin_id)
+        await update_or_send(callback, text_value, reply_markup=markup)
+        await callback.answer("Права обновлены")
+        return True
+
+    if data.startswith("admin:proxy:countries"):
+        try:
+            page = int(data.rsplit(":", 1)[1]) if data.count(":") >= 3 else 0
+        except Exception:
+            page = 0
+        async with SessionLocal() as session:
+            settings = await get_proxy_shop_settings(session)
+        await update_or_send(callback, "🌍 Страны прокси\n\nВыберите страны, которые будут доступны покупателям.", reply_markup=admin_proxy_countries_keyboard(settings, SUPPORTED_COUNTRIES, page=page))
+        await callback.answer()
+        return True
+
+    if data.startswith("admin:proxy:country:"):
+        parts = data.split(":")
+        code = parts[3] if len(parts) > 3 else ""
+        page = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0
+        if code not in SUPPORTED_COUNTRIES:
+            await callback.answer("Неизвестная страна", show_alert=True)
+            return True
+        async with SessionLocal() as session:
+            settings = await get_proxy_shop_settings(session)
+            countries = list(settings.countries)
+            if code in countries:
+                if len(countries) == 1:
+                    await callback.answer("Нужно оставить хотя бы одну страну", show_alert=True)
+                    return True
+                countries.remove(code)
+            else:
+                countries.append(code)
+            await save_proxy_setting(session, "proxy_shop_countries", ",".join(countries))
+            settings = await get_proxy_shop_settings(session)
+        await update_or_send(callback, "🌍 Страны прокси\n\nВыберите страны, которые будут доступны покупателям.", reply_markup=admin_proxy_countries_keyboard(settings, SUPPORTED_COUNTRIES, page=page))
+        await callback.answer("Сохранено")
+        return True
 
     if data == "admin:noop":
         await callback.answer()
@@ -5820,29 +5882,12 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
     if data.startswith("v25:delete_confirm:"):
         product_id = int(data.rsplit(":", 1)[1])
         async with SessionLocal() as session:
-            product = await session.get(ShopProduct, product_id)
-            if product:
-                product.is_deleted = True
-                product.is_active = False
-                product.payment_enabled = False
-                product.deleted_at = datetime.utcnow()
-                product.deleted_by = callback.from_user.id
-                product.updated_at = datetime.utcnow()
-                await session.commit()
-        await write_audit(
-            callback.from_user.id,
-            "product_archived",
-            "product",
-            product_id,
-        )
+            ok = await hard_delete_product(session, product_id)
+        await write_audit(callback.from_user.id, "product_deleted", "product", product_id)
         async with SessionLocal() as session:
             categories, products = await admin_catalog_overview(session)
-        await update_or_send(
-            callback,
-            "✅ Товар перенесён в архив.",
-            reply_markup=admin_catalog_keyboard(categories, products),
-        )
-        await callback.answer("Товар архивирован")
+        await update_or_send(callback, "✅ Товар полностью удалён." if ok else "Товар не найден.", reply_markup=admin_catalog_keyboard(categories, products))
+        await callback.answer("Товар удалён" if ok else "Не найден")
         return True
 
     if data.startswith("v25:category:"):
@@ -6098,7 +6143,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             if row is None:
                 row = ShopProduct(
                     internal_key=values["internal_key"],
-                    category_id=category_id,
+                    category_id=(category_id or None),
                     name=values["name"],
                     price=Decimal(values["price"]),
                     currency=values["currency"],
@@ -6106,7 +6151,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
                 )
                 session.add(row)
             else:
-                row.category_id = category_id
+                row.category_id = category_id or None
                 row.name = values["name"]
                 row.price = Decimal(values["price"])
                 row.currency = values["currency"]
@@ -6323,8 +6368,6 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
                     missing.append("цена")
                 if not product.currency:
                     missing.append("валюта")
-                if not product.category_id:
-                    missing.append("категория")
                 if missing:
                     await callback.answer(
                         "Нельзя опубликовать. Не настроено: " + ", ".join(missing),
@@ -7692,15 +7735,14 @@ async def handle_buyer_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
     if data == "buyer:panel":
         BUYER_CATALOG_SEARCH_WAIT.discard(callback.from_user.id)
-        admin_access = await is_admin_user(callback.from_user.id)
         try:
-            await bot.send_message(callback.message.chat.id, "🏠 Режим покупателя", reply_markup=buyer_main_reply_keyboard(is_admin=admin_access))
+            await bot.send_message(callback.message.chat.id, "🏠 Режим покупателя", reply_markup=await buyer_reply_keyboard_for_user(callback.from_user.id))
         except Exception:
             pass
         await update_or_send(
             callback,
             await get_main_page_text(),
-            reply_markup=buyer_inline_menu_keyboard(is_admin=admin_access),
+            reply_markup=await buyer_inline_keyboard_for_user(user_id),
         )
         await callback.answer()
         return True
@@ -7730,14 +7772,18 @@ async def handle_buyer_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data == "buyer:orders":
-        text_value = await standalone_buyer_orders_text(callback.from_user.id)
-        await update_or_send(
-            callback,
-            text_value,
-            reply_markup=buyer_inline_menu_keyboard(
-                is_admin=await is_admin_user(callback.from_user.id)
-            ),
-        )
+        text_value, markup = await buyer_orders_page(callback.from_user.id, callback.from_user.username, 0)
+        await update_or_send(callback, text_value, reply_markup=markup)
+        await callback.answer()
+        return True
+
+    if data.startswith("buyer:orders_page:"):
+        try:
+            page = int(data.rsplit(":", 1)[1])
+        except Exception:
+            page = 0
+        text_value, markup = await buyer_orders_page(callback.from_user.id, callback.from_user.username, page)
+        await update_or_send(callback, text_value, reply_markup=markup)
         await callback.answer()
         return True
 
@@ -8006,8 +8052,9 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         "code_invalid",
     )
     if data and data.startswith(cooldown_prefixes):
-        if not await check_button_cooldown(callback, data.split(":")[0]):
-            return
+        if not (callback.from_user and (await is_admin_user(callback.from_user.id) or await is_supplier_user(callback.from_user.id))):
+            if not await check_button_cooldown(callback, data.split(":")[0]):
+                return
 
     logger.info(
         "HANDLED_CALLBACK from_id=%s data=%s",
@@ -8953,7 +9000,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
                 thank_you_text,
                 business_connection_id=get_callback_business_id(callback)
                 or target_business_id,
-                reply_markup=buyer_inline_menu_keyboard(),
+                reply_markup=await buyer_inline_keyboard_for_user(user_id),
                 callback=callback,
             )
 

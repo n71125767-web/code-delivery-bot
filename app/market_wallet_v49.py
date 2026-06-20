@@ -329,3 +329,35 @@ async def mark_withdrawal_done(bot: Bot, admin_id: int, raw: str) -> str:
         f"Ссылка/TX: {link or 'не указан'}"
     )
     return f"✅ Вывод #{wid} отмечен как выплаченный. Ссылка/TX: {link or 'не указан'}"
+
+# V51 wallet visual override.
+async def get_wallet_text(user_id: int) -> str:
+    async with SessionLocal() as session:
+        wallet = await session.get(UserWallet, user_id)
+        rows = list((await session.scalars(select(WalletLedger).where(WalletLedger.user_id == user_id).order_by(WalletLedger.id.desc()).limit(5))).all())
+    balance = money(wallet.balance if wallet else 0)
+    currency = (wallet.currency if wallet else "USD") or "USD"
+    lines = [
+        "💼 Кошелёк магазина",
+        "",
+        f"💰 Баланс: {balance} {currency}",
+        "",
+        "Баланс можно использовать для покупок и выплат поставщикам.",
+    ]
+    if rows:
+        lines += ["", "📋 Последние операции:"]
+        for r in rows:
+            sign = "+" if money(r.amount) >= 0 else ""
+            lines.append(f"{sign}{money(r.amount)} {r.currency} · {r.event_type}")
+    return "\n".join(lines)
+
+
+def wallet_keyboard(is_supplier: bool = False) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="➕ Пополнить", callback_data="wallet:topup_help")
+    kb.button(text="🔄 Обновить", callback_data="buyer:wallet")
+    if is_supplier:
+        kb.button(text="↗️ Вывести", callback_data="supplier:withdraw_help")
+    kb.button(text="🏠 Главная", callback_data="buyer:panel")
+    kb.adjust(2, 1, 1)
+    return kb.as_markup()

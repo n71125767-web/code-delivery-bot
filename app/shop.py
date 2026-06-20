@@ -84,9 +84,9 @@ async def list_categories(session):
 
 
 async def list_products(session, category_id: int | None = None):
-    stmt = select(ShopProduct).where(ShopProduct.is_active.is_(True))
+    stmt = select(ShopProduct).where(ShopProduct.is_active.is_(True), ShopProduct.is_deleted.is_(False))
     if category_id is not None:
-        stmt = stmt.where(ShopProduct.category_id == category_id, ShopProduct.is_deleted.is_(False))
+        stmt = stmt.where(ShopProduct.category_id == category_id)
     return list(
         (
             await session.scalars(stmt.order_by(ShopProduct.sort_order, ShopProduct.id))
@@ -95,7 +95,7 @@ async def list_products(session, category_id: int | None = None):
 
 
 async def get_product(session, product_id: int):
-    return await session.scalar(select(ShopProduct).where(ShopProduct.id == product_id))
+    return await session.scalar(select(ShopProduct).where(ShopProduct.id == product_id, ShopProduct.is_deleted.is_(False)))
 
 
 async def list_proxy_products(session):
@@ -107,7 +107,7 @@ async def list_proxy_products(session):
     """
     products = list((await session.scalars(
         select(ShopProduct)
-        .where(ShopProduct.is_active.is_(True))
+        .where(ShopProduct.is_active.is_(True), ShopProduct.is_deleted.is_(False))
         .order_by(ShopProduct.sort_order, ShopProduct.id)
     )).all())
 
