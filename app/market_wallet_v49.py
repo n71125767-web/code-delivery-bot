@@ -182,7 +182,7 @@ async def notify_purchase_and_credit_supplier(bot: Bot, purchase_id: int) -> Non
             "💰 Новая покупка через CryptoBot!\n\n"
             f"👤 Пользователь: {user_label(purchase.buyer_id, username)}\n"
             f"🆔 ID: {purchase.buyer_id}\n"
-            f"📦 Купил: {product_name}" + (f"\n🔗 {product_link}" if product_link else "") + "\n"
+            f"📦 Купил: {product_name}" + (f"\n{product_link}" if product_link else "") + "\n"
             f"💵 Сумма: {money(purchase.amount)} {purchase.currency}\n\n"
             f"📋 Техника: {tech}"
         )
@@ -194,10 +194,17 @@ async def notify_purchase_and_credit_supplier(bot: Bot, purchase_id: int) -> Non
             payout_amount = getattr(provider, "supplier_payout_amount", None)
             payout_currency = getattr(provider, "supplier_payout_currency", None) or purchase.currency
             if payout_amount is not None:
-                payout_line = f"\n\n✅ На ваш баланс начислено: {money(payout_amount)} {payout_currency}"
+                payout_line = f"\n✅ Начислено: {money(payout_amount)} {payout_currency}"
         except Exception:
             payout_line = ""
-        await safe_send_message(bot, supplier_id, "💰 Купили ваш товар!\n\n" + text + payout_line)
+        supplier_text = (
+            "💰 Продажа вашего товара!\n\n"
+            f"📦 Товар: {product_name}\n"
+            f"💵 Сумма продажи: {money(purchase.amount)} {purchase.currency}"
+            f"{payout_line}\n\n"
+            "Покупатель скрыт магазином."
+        )
+        await safe_send_message(bot, supplier_id, supplier_text)
 
 
 def _obj_to_dict(obj: Any) -> dict[str, Any]:

@@ -682,3 +682,60 @@ def product_card_keyboard(product: ShopProduct) -> InlineKeyboardMarkup:
     kb.button(text="🔙 Назад", callback_data=back)
     kb.adjust(2)
     return kb.as_markup()
+
+
+# ---------------- V71 product card controls ----------------
+def product_card_keyboard(product: ShopProduct) -> InlineKeyboardMarkup:
+    """Final V71 product card buttons: clear preview vs buyer visibility + direct number fulfillment."""
+    kb = InlineKeyboardBuilder()
+    note = (getattr(product, 'note', '') or '')
+    if note.startswith('proxy_autofix:'):
+        kind = note.split(':', 1)[1]
+        kb.button(text="💰 Цена", callback_data=f"admin:proxy:price:{kind}")
+        kb.button(text="📈 Наценка", callback_data=f"admin:proxy:markup:{kind}")
+        kb.button(text="📝 Текст", callback_data=f"admin:proxy:text:{kind}")
+        kb.button(text=("⏸ Оплату" if product.payment_enabled else "▶️ Оплату"), callback_data=f"v25:toggle_payment:{product.id}")
+        kb.button(text=("🙈 Скрыть покупателю" if product.is_active else "👁 Показать покупателю"), callback_data=f"v25:toggle_visible:{product.id}")
+        kb.button(text="🗑 Удалить", callback_data=f"v25:delete_prompt:{product.id}")
+        kb.button(text="🔙 Назад", callback_data="admin:proxy")
+        kb.adjust(2)
+        return kb.as_markup()
+
+    kb.button(text="👁 Предпросмотр", callback_data=f"v25:preview:{product.id}")
+    kb.button(text=("🙈 Скрыть покупателю" if product.is_active else "👁 Показать покупателю"), callback_data=f"v25:toggle_visible:{product.id}")
+    kb.button(text="🎁 Выдать товар", callback_data=f"v25:give:{product.id}")
+    kb.button(text="🚚 Поставщик", callback_data=f"admin:shop:product_supplier:{product.id}")
+    kb.button(text="📱 Номер", callback_data=f"v34:fulfillment:{product.id}:number")
+    kb.button(text="⚙️ Выдача", callback_data=f"v34:fulfillment_menu:{product.id}")
+    kb.button(text="📝 Название", callback_data=f"v25:edit_name:{product.id}")
+    kb.button(text="📝 Цена", callback_data=f"v25:edit_price:{product.id}")
+    kb.button(text="📝 Описание", callback_data=f"v25:edit_description:{product.id}")
+    kb.button(text="📝 Категория", callback_data=f"v25:edit_category:{product.id}")
+    kb.button(text="📝 Валюта", callback_data=f"v25:edit_currency:{product.id}")
+    kb.button(text="📝 Примечание", callback_data=f"v25:edit_note:{product.id}")
+    kb.button(text=("🖼 Удалить фото" if getattr(product, 'photo_file_id', None) else "🖼 Добавить фото"), callback_data=(f"v25:photo_delete:{product.id}" if getattr(product, 'photo_file_id', None) else f"v25:edit_photo:{product.id}"))
+    kb.button(text=("⏸ Оплату" if product.payment_enabled else "▶️ Оплату"), callback_data=f"v25:toggle_payment:{product.id}")
+    kb.button(text="⬆️ Расширенные", callback_data=f"v25:advanced:{product.id}")
+    if product.product_type == "quantity":
+        kb.button(text="📦 Позиции", callback_data=f"v25:stock:{product.id}")
+    kb.button(text="🗑 Удалить", callback_data=f"v25:delete_prompt:{product.id}")
+    back = f"v25:category:{product.category_id}" if product.category_id else "v28:uncategorized"
+    kb.button(text="🔙 Назад", callback_data=back)
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+def advanced_keyboard(product_id: int) -> InlineKeyboardMarkup:
+    """Final V71 advanced buttons appended below the normal product card when requested."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🎁 Выдать товар", callback_data=f"v25:give:{product_id}")
+    kb.button(text="📱 Номер", callback_data=f"v34:fulfillment:{product_id}:number")
+    kb.button(text="⚙️ Способ выдачи", callback_data=f"v34:fulfillment_menu:{product_id}")
+    kb.button(text="📝 Платёжные системы", callback_data=f"v25:payment_systems:{product_id}")
+    kb.button(text="📝 Описание платежа", callback_data=f"v25:payment_description:{product_id}")
+    kb.button(text="🏷 Старая цена", callback_data=f"v25:old_price:{product_id}")
+    kb.button(text="↕️ Позиция", callback_data=f"v25:position:{product_id}")
+    kb.button(text="📊 Статистика", callback_data=f"v25:stats:{product_id}")
+    kb.button(text="⬇️ Свернуть", callback_data=f"v25:product:{product_id}")
+    kb.adjust(2)
+    return kb.as_markup()

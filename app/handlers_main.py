@@ -754,28 +754,11 @@ async def send_or_edit_role_panel(
             callback.data,
         )
 
-    # Если команда текстом — пытаемся редактировать последнее сообщение панели.
-    old_message_id = ROLE_PANEL_MESSAGES.get(key)
-    if old_message_id:
-        ok = await _bot_edit_text_safe(
-            bot,
-            chat_id,
-            old_message_id,
-            text,
-            reply_markup=reply_markup,
-            business_connection_id=business_connection_id,
-        )
-        if ok:
-            logger.info(
-                "ROLE_PANEL_STORED_EDIT_OK role=%s chat_id=%s message_id=%s has_keyboard=%s",
-                role,
-                chat_id,
-                old_message_id,
-                reply_markup is not None,
-            )
-            return True
+    # Текстовые кнопки reply-клавиатуры НЕ редактируют старую панель.
+    # Иначе пользователь нажимает новую кнопку, а меняется старое сообщение выше в чате.
+    # Для callback-кнопок редактируется именно callback.message выше.
 
-    # Последний fallback: отправляем новое и запоминаем его id.
+    # Fallback: отправляем новое и запоминаем его id.
     msg = await safe_send_message(
         bot,
         chat_id,
@@ -3425,6 +3408,13 @@ async def process_supplier_command(
             reply_markup=supplier_inline_menu_keyboard(),
             business_connection_id=business_connection_id,
         )
+        if "Заявка на вывод" in result or "Автовыплата не прошла" in result:
+            await notify_admins(
+                bot,
+                "↗️ Заявка поставщика на вывод\n\n"
+                f"Поставщик: {message.from_user.id}\n"
+                f"Результат: {result}",
+            )
         return True
 
     if text in {"📖 Помощь", "/supplier_help"}:
@@ -3751,6 +3741,41 @@ async def process_command_message(
             message,
             result or "Неизвестная команда магазина.",
             business_connection_id,
+        )
+        return
+
+    if text.startswith("/start admproduct_"):
+        try:
+            internal_key = int(text.split("admproduct_", 1)[1].split()[0])
+        except (ValueError, IndexError):
+            await answer_message(
+                bot,
+                message,
+                "Некорректная ссылка на товар.",
+                business_connection_id,
+            )
+            return
+
+        async with SessionLocal() as session:
+            product = await session.scalar(
+                select(ShopProduct).where(ShopProduct.internal_key == internal_key)
+            )
+
+        if not product or not product.is_active or product.is_deleted:
+            await answer_message(
+                bot,
+                message,
+                "Товар не найден или скрыт.",
+                business_connection_id,
+            )
+            return
+
+        await answer_message(
+            bot,
+            message,
+            product_text(product, None),
+            business_connection_id,
+            reply_markup=product_keyboard(product, ""),
         )
         return
 
@@ -5983,7 +6008,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
                 await callback.answer("Товар не найден.", show_alert=True)
                 return True
             product.fulfillment_type = fulfillment_type
-            product.product_type = "quantity" if fulfillment_type == "stock" else "static"
+            product.product_type = "quantity" if fulfillment_type in {"stock", "number"} else "static"
             product.updated_at = datetime.utcnow()
             await session.commit()
             await session.refresh(product)
