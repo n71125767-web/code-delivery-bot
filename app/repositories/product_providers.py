@@ -20,6 +20,8 @@ async def bind_product_provider(
     provider_type: str,
     provider_key: str | None = None,
     product_name: str | None = None,
+    supplier_payout_amount=None,
+    supplier_payout_currency: str | None = None,
 ) -> ProductProvider:
     provider_type = provider_type.strip().lower()
     if provider_type not in {"proxyline", "proxys", "supplier"}:
@@ -33,6 +35,14 @@ async def bind_product_provider(
         provider_type if provider_type in {"proxyline", "proxys"} else None
     )
     row.product_name = product_name or row.product_name
+    if provider_type == "supplier":
+        if supplier_payout_amount is not None:
+            row.supplier_payout_amount = supplier_payout_amount
+        if supplier_payout_currency:
+            row.supplier_payout_currency = supplier_payout_currency.upper()[:10]
+    else:
+        row.supplier_payout_amount = None
+        row.supplier_payout_currency = None
     row.enabled = True
     await session.commit()
     await session.refresh(row)

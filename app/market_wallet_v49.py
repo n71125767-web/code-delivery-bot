@@ -142,9 +142,33 @@ async def notify_purchase_and_credit_supplier(bot: Bot, purchase_id: int) -> Non
                 except Exception:
                     supplier_id = None
                 if supplier_id:
-                    # Пока без комиссии: вся сумма зачисляется на внутренний баланс поставщика.
-                    await add_wallet_balance(session, supplier_id, purchase.amount, purchase.currency, "supplier_sale", source_type="purchase", source_id=purchase.id, note=f"Продажа товара {product.name}")
-                    await session.commit()
+                    # V70: поставщик получает не всю сумму продажи, а фиксированную сумму,
+                    # указанную админом при привязке поставщика к товару.
+                    payout_amount = getattr(provider, "supplier_payout_amount", None)
+                    payout_currency = getattr(provider, "supplier_payout_currency", None) or purchase.currency
+                    if payout_amount is None:
+                        # Legacy fallback for old bindings: keep previous behavior, but new bindings should always store payout.
+                        payout_amount = purchase.amount
+                    existing_ledger = await session.scalar(
+                        select(WalletLedger).where(
+                            WalletLedger.user_id == supplier_id,
+                            WalletLedger.event_type == "supplier_sale",
+                            WalletLedger.source_type == "purchase",
+                            WalletLedger.source_id == purchase.id,
+                        )
+                    )
+                    if existing_ledger is None:
+                        await add_wallet_balance(
+                            session,
+                            supplier_id,
+                            payout_amount,
+                            payout_currency,
+                            "supplier_sale",
+                            source_type="purchase",
+                            source_id=purchase.id,
+                            note=f"Продажа товара {product.name}",
+                        )
+                        await session.commit()
         username = purchase.buyer_username or ""
         product_name = product.name if product else f"Товар #{purchase.product_id}"
         bot_username = (await bot.me()).username or ""
@@ -165,7 +189,15 @@ async def notify_purchase_and_credit_supplier(bot: Bot, purchase_id: int) -> Non
     for admin_id in admin_recipients():
         await safe_send_message(bot, admin_id, text)
     if supplier_id:
-        await safe_send_message(bot, supplier_id, "💰 Купили ваш товар!\n\n" + text)
+        payout_line = ""
+        try:
+            payout_amount = getattr(provider, "supplier_payout_amount", None)
+            payout_currency = getattr(provider, "supplier_payout_currency", None) or purchase.currency
+            if payout_amount is not None:
+                payout_line = f"\n\n✅ На ваш баланс начислено: {money(payout_amount)} {payout_currency}"
+        except Exception:
+            payout_line = ""
+        await safe_send_message(bot, supplier_id, "💰 Купили ваш товар!\n\n" + text + payout_line)
 
 
 def _obj_to_dict(obj: Any) -> dict[str, Any]:

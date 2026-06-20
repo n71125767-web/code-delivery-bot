@@ -348,7 +348,14 @@ async def supplier_products_text(supplier_id: int) -> str:
     lines = ["📦 Мои товары", "", "Чтобы изменить цену, нажмите «💵 Изменить цену» и отправьте: ID цена валюта.", ""]
     for p in rows:
         status = "показывается" if p.is_active else "скрыт"
-        lines.append(f"#{p.id} — {p.name} — {money(p.price)} {p.currency} — {status}")
+        provider = None
+        # Provider was used in the query join; fetch small row to show supplier payout clearly.
+        async with SessionLocal() as session2:
+            provider = await session2.scalar(select(ProductProvider).where(ProductProvider.internal_key == p.internal_key, ProductProvider.enabled.is_(True)))
+        payout = ""
+        if provider and getattr(provider, "supplier_payout_amount", None) is not None:
+            payout = f" · ваша сумма: {money(provider.supplier_payout_amount)} {provider.supplier_payout_currency or p.currency}"
+        lines.append(f"#{p.id} — {p.name} — цена магазина: {money(p.price)} {p.currency}{payout} — {status}")
     return "\n".join(lines)
 
 

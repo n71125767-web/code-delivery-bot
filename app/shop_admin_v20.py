@@ -466,6 +466,12 @@ async def product_admin_text(session, product) -> str:
     if getattr(product, 'product_type', None) == 'quantity':
         stock_count = int(await session.scalar(select(func.count(ProductStockItem.id)).where(ProductStockItem.product_id == product.id, ProductStockItem.status == 'available')) or 0)
     type_label = "Статический" if product.product_type == "static" else "Количественный"
+    provider = await get_product_provider(session, product.internal_key)
+    supplier_line = None
+    if provider and provider.enabled and provider.provider_type == "supplier":
+        supplier_line = f"🚚 Поставщик: {provider.provider_key or 'не указан'}"
+        if getattr(provider, "supplier_payout_amount", None) is not None:
+            supplier_line += f" · получает { _fmt_money_v54(provider.supplier_payout_amount, provider.supplier_payout_currency or product.currency) }"
     photo_line = "🖼 Фото: установлено" if getattr(product, 'photo_file_id', None) else "🖼 Фото: не установлено"
     desc_line = "📝 Описание: установлено" if product.description else "📝 Описание: не установлено"
     category_line = "📂 Категория установлена" if product.category_id else "📂 Без категории"
@@ -476,8 +482,10 @@ async def product_admin_text(session, product) -> str:
         f"📝 Название: {product.name}",
         f"{'♾️' if product.product_type == 'static' else '📦'} Тип: {type_label}",
         "🟢 Покупка включена" if product.payment_enabled else "🔴 Покупка приостановлена",
-        "", f"💰 Цена: {_fmt_money_v54(product.price, product.currency)}",
+        "", f"💰 Цена магазина: {_fmt_money_v54(product.price, product.currency)}",
     ]
+    if supplier_line:
+        lines.append(supplier_line)
     if product.product_type == 'quantity':
         lines.extend(["", f"📊 Остаток позиций: {stock_count} шт."])
         if stock_count <= 3:

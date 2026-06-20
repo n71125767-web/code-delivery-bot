@@ -337,7 +337,11 @@ async def list_suppliers_text(session: AsyncSession) -> str:
 
 
 async def bind_supplier_to_product(
-    session: AsyncSession, telegram_id: int, product_key: str
+    session: AsyncSession,
+    telegram_id: int,
+    product_key: str,
+    payout_amount=None,
+    payout_currency: str | None = None,
 ) -> str:
     product_key = normalize_key(product_key)
 
@@ -363,13 +367,20 @@ async def bind_supplier_to_product(
     exists = result.scalars().first()
 
     if not exists:
-        session.add(
-            SupplierProduct(supplier_telegram_id=telegram_id, product_key=product_key)
-        )
-        await session.commit()
+        exists = SupplierProduct(supplier_telegram_id=telegram_id, product_key=product_key)
+        session.add(exists)
+
+    if payout_amount is not None:
+        exists.payout_amount = payout_amount
+        exists.payout_currency = (payout_currency or "USD").upper()[:10]
+
+    await session.commit()
 
     label = "категории" if product_key.startswith("cat:") else "товару"
-    return f"✅ Партнёр {telegram_id} получил доступ к {label}: {product_key}"
+    payout_note = ""
+    if payout_amount is not None:
+        payout_note = f"\nСумма поставщика: {payout_amount} {(payout_currency or 'USD').upper()}"
+    return f"✅ Партнёр {telegram_id} получил доступ к {label}: {product_key}{payout_note}"
 
 
 async def unbind_supplier_from_product(

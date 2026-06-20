@@ -96,6 +96,14 @@ async def _critical_schema_migrations(conn) -> None:
         "wallet_payments": {
             "provider_payload": "TEXT",
         },
+        "product_providers": {
+            "supplier_payout_amount": "NUMERIC(24,8)",
+            "supplier_payout_currency": "VARCHAR(10)",
+        },
+        "supplier_products": {
+            "payout_amount": "NUMERIC(24,8)",
+            "payout_currency": "VARCHAR(10)",
+        },
     }
     for table, table_additions in additions.items():
         existing = await conn.run_sync(columns, table)

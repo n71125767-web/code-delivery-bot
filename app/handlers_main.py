@@ -2552,15 +2552,28 @@ async def process_shop_admin_pending_input(
                 result = "✅ Цена обновлена."
             elif action == "product_supplier":
                 row = await session.get(ShopProduct, object_id)
-                supplier_id = int(text.replace("@", "").strip())
+                raw_parts = text.replace("@", "").split()
+                if len(raw_parts) < 2:
+                    raise ValueError("Формат: TELEGRAM_ID СУММА [ВАЛЮТА]. Пример: 123456789 4.50 USDT")
+                supplier_id = int(raw_parts[0])
+                supplier_amount = Decimal(raw_parts[1].replace(",", "."))
+                if supplier_amount <= 0:
+                    raise ValueError("Сумма поставщика должна быть больше 0.")
+                supplier_currency = (raw_parts[2] if len(raw_parts) > 2 else (row.currency or "USDT")).upper()[:10]
                 supplier = await add_supplier(session, supplier_id, f"supplier_{supplier_id}")
                 # 1) Поставщик становится активным поставщиком магазина.
                 # 2) Привязываем доступ к товару по ID и legacy internal_key.
-                # 3) ProductProvider нужен для уведомлений/зачислений по покупке.
-                await bind_supplier_to_product(session, supplier_id, row.id)
-                await bind_supplier_to_product(session, supplier_id, row.internal_key)
+                # 3) ProductProvider хранит, сколько именно поставщик получает за успешную продажу.
+                await bind_supplier_to_product(session, supplier_id, row.id, supplier_amount, supplier_currency)
+                await bind_supplier_to_product(session, supplier_id, row.internal_key, supplier_amount, supplier_currency)
                 await bind_product_provider(
-                    session, row.internal_key, "supplier", str(supplier_id), row.name
+                    session,
+                    row.internal_key,
+                    "supplier",
+                    str(supplier_id),
+                    row.name,
+                    supplier_amount,
+                    supplier_currency,
                 )
                 try:
                     await safe_send_message(
@@ -2568,12 +2581,18 @@ async def process_shop_admin_pending_input(
                         supplier_id,
                         "✅ Вы назначены поставщиком товара.\n\n"
                         f"Товар: {row.name}\n"
-                        "При покупке этого товара вам придёт заявка/уведомление.",
+                        f"Ваша сумма за успешную продажу: {supplier_amount} {supplier_currency}\n\n"
+                        "После оплаты покупателем эта сумма будет зачислена на ваш внутренний баланс магазина.",
                         reply_markup=supplier_inline_menu_keyboard(),
                     )
                 except Exception:
                     logger.exception("SUPPLIER_ASSIGN_NOTIFY_FAILED supplier_id=%s product_id=%s", supplier_id, row.id)
-                result = f"✅ Поставщик назначен.\nID: {supplier.telegram_id}\nТовар: {row.name}"
+                result = (
+                    "✅ Поставщик назначен.\n"
+                    f"ID: {supplier.telegram_id}\n"
+                    f"Товар: {row.name}\n"
+                    f"Сумма поставщика: {supplier_amount} {supplier_currency}"
+                )
             else:
                 return False
         SHOP_ADMIN_WAIT.pop(admin_id, None)
@@ -2831,16 +2850,18 @@ async def process_admin_command(
         return True
 
     if text.startswith("/bind_product_supplier"):
-        if len(parts) != 3:
+        if len(parts) < 3:
             await answer_message(
                 bot,
                 message,
-                "Формат: /bind_product_supplier PRODUCT_ID SUPPLIER_TELEGRAM_ID",
+                "Формат: /bind_product_supplier PRODUCT_ID SUPPLIER_TELEGRAM_ID СУММА [ВАЛЮТА]",
                 business_connection_id,
             )
             return True
         try:
             product_id, supplier_id = int(parts[1]), int(parts[2])
+            supplier_amount = Decimal(parts[3].replace(',', '.')) if len(parts) > 3 else None
+            supplier_currency = parts[4].upper()[:10] if len(parts) > 4 else None
         except ValueError:
             await answer_message(
                 bot, message, "ID должны быть числами.", business_connection_id
@@ -2854,6 +2875,8 @@ async def process_admin_command(
                 "supplier",
                 str(supplier_id),
                 recent.get(product_id),
+                supplier_amount,
+                supplier_currency,
             )
         await answer_message(
             bot,

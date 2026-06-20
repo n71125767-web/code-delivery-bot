@@ -95,6 +95,8 @@ class SupplierProduct(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     supplier_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
     product_key: Mapped[str] = mapped_column(String, index=True)
+    payout_amount: Mapped[float | None] = mapped_column(Numeric(24, 8), nullable=True)
+    payout_currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -199,6 +201,8 @@ class ProductProvider(Base):
         String(30), default="supplier", index=True
     )
     provider_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    supplier_payout_amount: Mapped[float | None] = mapped_column(Numeric(24, 8), nullable=True)
+    supplier_payout_currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
