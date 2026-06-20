@@ -245,7 +245,7 @@ async def fulfill_proxyline(
 
     if provider_name == "proxys":
         if not PROXYS_ENABLED or not PROXYS_API_KEY:
-            raise ProxylineError("Proxys API is not configured: set PROXYS_ENABLED=1, PROXYS_API_KEY and PROXYS_API_BASE_URL")
+            raise ProxylineError("Proxys API is not configured: set PROXYS_ENABLED=1 and PROXYS_API_KEY")
     elif not PROXYLINE_ENABLED or not PROXYLINE_API_KEY:
         raise ProxylineError("Proxyline API is not configured")
 
@@ -302,7 +302,8 @@ async def fulfill_proxyline(
             str(db_product.revenue_total or 0)
         ) + Decimal(str(row.amount))
         await session.commit()
-    await notify_admins_simple(bot, f"✅ Proxyline purchase #{purchase.id} delivered")
+    provider_label = "Proxys" if provider_name == "proxys" else "Proxyline"
+    await notify_admins_simple(bot, f"✅ {provider_label} purchase #{purchase.id} delivered")
     return True
 
 

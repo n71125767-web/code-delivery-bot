@@ -128,7 +128,15 @@ PROXYLINE_COUNTRIES_JSON = os.getenv("PROXYLINE_COUNTRIES_JSON", "").strip()
 # Configure only if you have a compatible Proxys API adapter/base URL.
 PROXYS_ENABLED = os.getenv("PROXYS_ENABLED", "0").strip() == "1"
 PROXYS_API_KEY = os.getenv("PROXYS_API_KEY", "").strip()
+# Modes:
+# - proxyline_adapter: legacy adapter with /ips-count/ and /new-order/ endpoints
+# - proxys_io: native PROXYS.IO v2 API. Only PROXYS_API_KEY is required by default.
+PROXYS_PROVIDER_MODE = os.getenv("PROXYS_PROVIDER_MODE", "proxys_io").strip().lower()
 PROXYS_API_BASE_URL = os.getenv("PROXYS_API_BASE_URL", "").strip()
+PROXYS_IO_BASE_URL = os.getenv("PROXYS_IO_BASE_URL", "https://proxys.io/ru/api/v2").strip()
+PROXYS_IO_SERVICE_ID = int(os.getenv("PROXYS_IO_SERVICE_ID", "1"))
+PROXYS_IO_PROXY_POOL_ID = os.getenv("PROXYS_IO_PROXY_POOL_ID", "S1").strip()
+PROXYS_IO_USE_NEW_USER = os.getenv("PROXYS_IO_USE_NEW_USER", "0").strip() == "1"
 
 
 # Crypto Pay / @CryptoBot
@@ -194,6 +202,10 @@ if PROXYLINE_DEFAULT_COUNT < 1:
     raise RuntimeError("PROXYLINE_DEFAULT_COUNT must be at least 1")
 if PROXYLINE_DEFAULT_IP_VERSION not in {4, 6}:
     raise RuntimeError("PROXYLINE_DEFAULT_IP_VERSION must be 4 or 6")
+if PROXYS_PROVIDER_MODE not in {"proxys_io", "proxyline_adapter"}:
+    raise RuntimeError("PROXYS_PROVIDER_MODE must be proxys_io or proxyline_adapter")
+if PROXYS_IO_SERVICE_ID < 1:
+    raise RuntimeError("PROXYS_IO_SERVICE_ID must be at least 1")
 
 # Production safety. Render should use PostgreSQL unless explicitly overridden.
 ALLOW_SQLITE_ON_RENDER = os.getenv("ALLOW_SQLITE_ON_RENDER", "0").strip() == "1"

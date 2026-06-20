@@ -1,0 +1,13 @@
+V57 validation
+==============
+
+Static validation completed:
+- python -m compileall -q app: OK
+- PROXYS_PROVIDER_MODE=proxys_io added for PROXYS.IO common API key
+- PROXYS_API_BASE_URL is not required in proxys_io mode
+- Premium/MTProxy stay on Proxyline
+- Standard/default proxies use ProxysService/PROXYS.IO native adapter
+
+Notes:
+- PROXYS_IO_SERVICE_ID defaults to 1. Change it if your PROXYS.IO dashboard/docs show another service_id for the tariff you need.
+- Separate Premium/Standard/MTProxy prices are product prices in the database/admin UI, not Render env.
