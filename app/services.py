@@ -16,6 +16,7 @@ from app.models import (
     AdminUser,
     BugReport,
     ActionEvent,
+    ShopProduct,
 )
 
 ACTIVE_CUSTOMER_STATUSES = [
@@ -350,7 +351,7 @@ async def bind_supplier_to_product(
 
     if not supplier or not supplier.is_active:
         return (
-            "Поставщик не найден или выключен. Сначала: /add_supplier TELEGRAM_ID Имя"
+            "Партнёр не найден или выключен. Сначала добавьте его кнопкой в админ-панели."
         )
 
     result = await session.execute(
@@ -367,7 +368,8 @@ async def bind_supplier_to_product(
         )
         await session.commit()
 
-    return f"OK. Поставщик {telegram_id} привязан к товару/ключу: {product_key}"
+    label = "категории" if product_key.startswith("cat:") else "товару"
+    return f"✅ Партнёр {telegram_id} получил доступ к {label}: {product_key}"
 
 
 async def unbind_supplier_from_product(
@@ -383,7 +385,7 @@ async def unbind_supplier_from_product(
     )
     await session.commit()
 
-    return f"OK. Привязка удалена: {telegram_id} -> {product_key}"
+    return f"✅ Доступ удалён: {telegram_id} → {product_key}"
 
 
 async def find_supplier_for_order(
@@ -393,6 +395,9 @@ async def find_supplier_for_order(
 
     if order.product_id is not None:
         keys.append(normalize_key(order.product_id))
+        product = await session.get(ShopProduct, order.product_id)
+        if product and product.category_id:
+            keys.append(normalize_key(f"cat:{product.category_id}"))
 
     if order.product_name:
         product_name = normalize_key(order.product_name)

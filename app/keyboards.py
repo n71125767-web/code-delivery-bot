@@ -142,13 +142,13 @@ def admin_back_keyboard() -> InlineKeyboardMarkup:
 
 def admin_suppliers_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="📋 › Список поставщиков", callback_data="admin:suppliers_list")
-    kb.button(text="➕ › Добавить поставщика", callback_data="admin:add_supplier")
-    kb.button(
-        text="🔗 › Привязать товар/лист", callback_data="admin:bind_supplier"
-    )
-    kb.button(text="🗑 › Удалить поставщика", callback_data="admin:remove_supplier")
-    kb.button(text="🏠 › Главное меню", callback_data="admin:panel")
+    kb.button(text="📋 Список партнёров", callback_data="admin:suppliers_list")
+    kb.button(text="➕ Добавить партнёра", callback_data="admin:add_supplier")
+    kb.button(text="🔗 Доступ к товару", callback_data="admin:bind_supplier")
+    kb.button(text="📁 Доступ к категории", callback_data="admin:bind_supplier_category")
+    kb.button(text="🔓 Забрать доступ", callback_data="admin:unbind_supplier")
+    kb.button(text="🗑 Удалить партнёра", callback_data="admin:remove_supplier")
+    kb.button(text="⬅️ Назад", callback_data="admin:panel")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -1031,9 +1031,10 @@ def admin_category_select_keyboard(categories) -> InlineKeyboardMarkup:
 def admin_main_reply_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text="📦 Управление товарами")],
-        [KeyboardButton(text="💳 Способы оплаты"), KeyboardButton(text="⚙️ Настройки")],
-        [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="📢 Рассылка")],
-        [KeyboardButton(text="👁 Скрытые"), KeyboardButton(text="🧩 Прокси")],
+        [KeyboardButton(text="🤝 Партнёры"), KeyboardButton(text="💳 Способы оплаты")],
+        [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="📊 Статистика")],
+        [KeyboardButton(text="📢 Рассылка"), KeyboardButton(text="🧩 Прокси")],
+        [KeyboardButton(text="👁 Скрытые"), KeyboardButton(text="👥 Админы")],
         [KeyboardButton(text="🏠 Главное меню")],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=False, input_field_placeholder="Панель администратора", selective=True)
@@ -1042,6 +1043,7 @@ def admin_main_reply_keyboard() -> ReplyKeyboardMarkup:
 def admin_panel_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="📦 Управление товарами", callback_data="v25:catalog")
+    kb.button(text="🤝 Партнёры", callback_data="admin:partners")
     kb.button(text="💳 Способы оплаты", callback_data="admin:payments")
     kb.button(text="⚙️ Настройки", callback_data="admin:main_settings")
     kb.button(text="📊 Статистика", callback_data="admin:status")
@@ -1050,20 +1052,20 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="🧩 Прокси", callback_data="admin:proxy")
     kb.button(text="👁 Скрытые", callback_data="admin:hidden")
     kb.button(text="🏠 Режим покупателя", callback_data="buyer:panel")
-    kb.adjust(1, 2, 2, 2, 1, 1)
+    kb.adjust(1, 2, 2, 2, 2, 1)
     return kb.as_markup()
 
 
 def admin_hidden_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="🔗 Привязки прокси", callback_data="admin:proxy:products")
-    kb.button(text="📈 Наценка", callback_data="admin:proxy:markup_help")
-    kb.button(text="🌍 Страны прокси", callback_data="admin:proxy:countries:0")
-    kb.button(text="📅 Сроки прокси", callback_data="admin:proxy:periods")
-    kb.button(text="📱 Номера", callback_data="admin:number_settings")
     kb.button(text="🤝 Заявки партнёров", callback_data="market:admin:list")
     kb.button(text="↗️ Выводы", callback_data="admin:withdrawals")
+    kb.button(text="🔗 Привязки прокси", callback_data="admin:proxy:products")
+    kb.button(text="📈 Наценка прокси", callback_data="admin:proxy:markup_help")
+    kb.button(text="🌍 Страны прокси", callback_data="admin:proxy:countries:0")
+    kb.button(text="📱 Номера", callback_data="admin:number_settings")
     kb.button(text="👥 Права админов", callback_data="admin:caps")
+    kb.button(text="🤖 Зеркала", callback_data="admin:mirrors")
     kb.button(text="⬅️ Назад", callback_data="admin:panel")
     kb.adjust(2, 2, 2, 2, 1)
     return kb.as_markup()
@@ -1098,7 +1100,7 @@ def buyer_inline_menu_keyboard(is_admin: bool = False, is_supplier: bool = False
     kb.button(text="🛍 Каталог", callback_data="buyer:shop")
     kb.button(text="🛒 Корзина", callback_data="buyer:cart")
     kb.button(text="📱 Номера", callback_data="buyer:number_catalog")
-    kb.button(text="🧾 Заказы", callback_data="buyer:orders_page:0")
+    kb.button(text="🧾 Заказы", callback_data="buyer:orders")
     kb.button(text="💼 Кошелёк", callback_data="buyer:wallet")
     kb.button(text="🤝 Стать партнёром", callback_data="buyer:partner")
     if is_supplier:

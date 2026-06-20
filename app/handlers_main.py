@@ -508,6 +508,8 @@ PARTNER_APPLICATION_WAIT: set[int] = set()
 BUYER_FEEDBACK_WAIT: set[int] = set()
 WALLET_TOPUP_WAIT: set[int] = set()
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
+ADMIN_KEYBOARD_SENT: set[int] = set()
+SUPPLIER_PRICE_WAIT: dict[int, bool] = {}
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
 ADMIN_SUPPLIER_WAIT: dict[int, dict] = {}
 
@@ -895,6 +897,8 @@ def required_admin_capability(callback_data: str) -> str | None:
         return "stats"
     if callback_data.startswith(("admin:admins", "admin:caps", "admin:add_admin", "admin:remove_admin")):
         return "admins"
+    if callback_data.startswith(("admin:partners", "admin:suppliers", "admin:add_supplier", "admin:remove_supplier", "admin:bind_supplier", "admin:unbind_supplier")):
+        return "suppliers"
     if callback_data.startswith("admin:hidden"):
         return "hidden"
     return None
@@ -1430,7 +1434,9 @@ async def process_admin_pending_input(
             reply_markup=admin_admins_keyboard(),
         )
         await safe_send_message(
-            bot, new_admin_id, "Вы назначены дополнительным админом. Откройте /admin"
+            bot,
+            new_admin_id,
+            "✅ Вы назначены администратором.\n\nОткройте бота и нажмите «🛠 Админ»."
         )
         return True
 
@@ -1479,8 +1485,8 @@ async def process_admin_pending_input(
             await safe_send_message(
                 bot,
                 supplier_id,
-                "✅ Вы добавлены как поставщик MCS Shop.\n\n"
-                "Нажмите /start, чтобы открыть панель поставщика.",
+                "✅ Вы назначены партнёром/поставщиком магазина.\n\n"
+                "Откройте бота и нажмите «🚚 Я поставщик».",
                 reply_markup=supplier_inline_menu_keyboard(),
             )
             await temp_answer(
@@ -1526,20 +1532,22 @@ async def process_admin_pending_input(
             )
             return True
 
-        if action == "bind":
+        if action in {"bind", "bind_category"}:
             parts = text.split(maxsplit=1)
             if len(parts) != 2 or not parts[0].isdigit():
                 await temp_answer(
                     bot,
                     message,
-                    "Пришлите Telegram ID поставщика и ID товара.\n\n"
-                    "Пример: 123456789 25",
+                    "Пришлите Telegram ID партнёра и ID товара/категории.\n\n"
+                    "Пример для товара: 123456789 25\n"
+                    "Пример для категории: 123456789 7",
                     business_connection_id,
                 )
                 return True
 
             supplier_id = int(parts[0])
-            product_key = parts[1].strip()
+            raw_key = parts[1].strip()
+            product_key = f"cat:{raw_key}" if action == "bind_category" and raw_key.isdigit() else raw_key
             async with SessionLocal() as session:
                 result = await bind_supplier_to_product(
                     session,
@@ -3490,6 +3498,16 @@ async def process_main_reply_button(
     supplier_access = await is_supplier_user(user_id)
     is_business_context = bool(business_connection_id)
 
+    if admin_access and text in {"🤝 Партнёры", "Партнёры", "🚚 Поставщики"}:
+        await answer_message(bot, message, "🤝 Партнёры и поставщики\n\nУправляйте доступом партнёров к товарам и категориям.", business_connection_id, reply_markup=admin_suppliers_keyboard())
+        return True
+
+    if admin_access and text in {"👥 Админы", "Админы", "👥 Админы и права"}:
+        async with SessionLocal() as session:
+            text_value = await list_admin_users_text(session, ADMIN_IDS)
+        await answer_message(bot, message, text_value, business_connection_id, reply_markup=admin_admins_keyboard())
+        return True
+
     if admin_access and text in {"📦 Управление товарами", "💰 Управление товарами", "Управление товарами"}:
         async with SessionLocal() as session:
             categories, products = await admin_catalog_overview(session)
@@ -3542,6 +3560,7 @@ async def process_main_reply_button(
         return await process_supplier_command(bot, message, business_connection_id)
 
     if text in {"🏠 Главное меню", "Главное меню", "🏠 Режим покупателя", "Режим покупателя"}:
+        ADMIN_KEYBOARD_SENT.discard(user_id)
         await answer_message(
             bot,
             message,
@@ -3601,6 +3620,7 @@ async def process_main_reply_button(
         if not admin_access:
             await answer_message(bot, message, "У вас нет доступа к админ-панели.", business_connection_id, reply_markup=(await buyer_inline_keyboard_for_user(user_id) if is_business_context else await buyer_reply_keyboard_for_user(user_id)))
             return True
+        ADMIN_KEYBOARD_SENT.add(user_id)
         await answer_message(bot, message, admin_panel_text(), business_connection_id, reply_markup=admin_main_reply_keyboard() if not is_business_context else admin_panel_keyboard())
         return True
 
@@ -5026,6 +5046,37 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         )
         return
 
+
+    if text.lower() in {"отмена", "cancel", "❌ отмена"}:
+        had_state = False
+        for store in (SHOP_ADMIN_WAIT, CATALOG_V25_STATE, ADMIN_BROADCAST_V28, ADMIN_TEXT_EDIT_WAIT, ADMIN_SUPPLIER_WAIT, CART_QUANTITY_WAIT, PROXY_COUNTRY_SEARCH_WAIT):
+            if user_id in store:
+                store.pop(user_id, None)
+                had_state = True
+        if user_id in PARTNER_APPLICATION_WAIT:
+            PARTNER_APPLICATION_WAIT.discard(user_id)
+            had_state = True
+        if user_id in BUYER_FEEDBACK_WAIT:
+            BUYER_FEEDBACK_WAIT.discard(user_id)
+            had_state = True
+        if user_id in WALLET_TOPUP_WAIT:
+            WALLET_TOPUP_WAIT.discard(user_id)
+            had_state = True
+        if user_id in SUPPLIER_PRICE_WAIT:
+            SUPPLIER_PRICE_WAIT.pop(user_id, None)
+            had_state = True
+        if had_state:
+            target_markup = admin_main_reply_keyboard() if await is_admin_user(user_id) else (supplier_reply_keyboard() if await is_supplier_user(user_id) else await buyer_reply_keyboard_for_user(user_id))
+            await answer_message(bot, message, "✅ Действие отменено.", business_connection_id, reply_markup=target_markup)
+            return
+
+    if user_id in SUPPLIER_PRICE_WAIT and not text.startswith("/"):
+        SUPPLIER_PRICE_WAIT.pop(user_id, None)
+        result = await set_supplier_product_price(user_id, text)
+        await answer_message(bot, message, result, business_connection_id, reply_markup=supplier_reply_keyboard())
+        await send_supplier_menu(bot, message.chat.id, supplier_main_panel_text(), business_connection_id)
+        return
+
     main_reply_buttons = {
         "🛒 Товар",
         "🛒 Товары",
@@ -5037,6 +5088,8 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         "✉️ Обратная связь",
         "📕 FAQ",
         "📦 Управление товарами",
+        "🤝 Партнёры",
+        "👥 Админы",
         "💰 Управление товарами",
         "💳 Оплата",
         "💳 Способы оплаты",
@@ -5507,8 +5560,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         await update_or_send(
             callback,
             "🎁 Выдача товара пользователю\n\n"
-            "Отправьте в чат с ботом:\n"
-            "• ID пользователя (числовой)\n\n"
+            "Отправьте в чат с ботом Telegram ID или @username пользователя.\n\n"
             "💡 Для количественного товара будет выдана одна позиция из списка.",
             reply_markup=content_back_keyboard(),
         )
@@ -6481,7 +6533,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
     if data.startswith("admin:shop:product_delete_confirm:"):
         product_id = int(data.rsplit(":", 1)[1])
         async with SessionLocal() as session:
-            await delete_product(session, product_id)
+            await hard_delete_product(session, product_id)
             rows = await all_products(session)
         await update_or_send(
             callback,
@@ -6944,10 +6996,12 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
     # Clean section navigation.
     if data == "admin:panel":
-        try:
-            await bot.send_message(callback.message.chat.id, "🛠 Админ-панель", reply_markup=admin_main_reply_keyboard())
-        except Exception:
-            pass
+        if callback.from_user and callback.from_user.id not in ADMIN_KEYBOARD_SENT:
+            try:
+                await bot.send_message(callback.message.chat.id, "🛠 Панель администратора", reply_markup=admin_main_reply_keyboard())
+                ADMIN_KEYBOARD_SENT.add(callback.from_user.id)
+            except Exception:
+                pass
         await update_or_send(
             callback, admin_panel_text(), reply_markup=admin_panel_keyboard()
         )
@@ -6961,17 +7015,32 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
     if data == "admin:hidden":
         text = (
-            "▫️ Скрытые действия администратора\n\n"
-            "Здесь только служебные разделы. Покупательские кнопки скрыты.\n\n"
-            "Команды:\n"
-            "• /proxy_autofix 100 RUB — создать/обновить прокси-товары\n"
-            "• /proxy_markup 1.77 — наценка прокси\n"
-            "• /proxy_price 100 RUB — базовая цена прокси\n"
-            "• /hide_proxy_category — убрать системную категорию из каталога\n"
-            "• /stats_full — полная статистика\n"
-            "• /top_buyers week|month|all — топ покупателей"
+            "👁 Скрытые разделы\n\n"
+            "Здесь собраны служебные действия, которые не нужны на главной панели:\n"
+            "• заявки партнёров;\n"
+            "• выводы поставщиков;\n"
+            "• прокси-настройки;\n"
+            "• номера и права админов;\n"
+            "• зеркала бота.\n\n"
+            "Все действия открываются кнопками ниже."
         )
         await update_or_send(callback, text, reply_markup=admin_hidden_keyboard())
+        await callback.answer()
+        return True
+
+    if data == "admin:mirrors":
+        await update_or_send(
+            callback,
+            "🤖 Зеркала бота\n\n"
+            "Telegram не разрешает боту самому создавать нового бота — токен выдаётся только через BotFather.\n\n"
+            "Как сделать зеркало:\n"
+            "1. Создайте нового бота в BotFather.\n"
+            "2. Создайте второй Render-сервис из этого же GitHub-репозитория.\n"
+            "3. Укажите новый BOT_TOKEN и ту же DATABASE_URL.\n"
+            "4. Запустите только один инстанс на каждый токен.\n\n"
+            "Так зеркало будет работать с тем же магазином и базой.",
+            reply_markup=admin_hidden_keyboard(),
+        )
         await callback.answer()
         return True
 
@@ -7121,10 +7190,11 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         await callback.answer()
         return True
 
-    if data == "admin:suppliers":
+    if data in {"admin:suppliers", "admin:partners"}:
         await update_or_send(
             callback,
-            "🚚 Поставщики\n\nВыберите действие:",
+            "🤝 Партнёры и поставщики\n\n"
+            "Здесь можно добавить/удалить партнёра, выдать доступ к товару или категории и управлять привязками.",
             reply_markup=admin_suppliers_keyboard(),
         )
         await callback.answer()
@@ -7195,13 +7265,26 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         ADMIN_SUPPLIER_WAIT[callback.from_user.id] = {"action": "bind"}
         await update_or_send(
             callback,
-            "🔗 Привязка товара к поставщику\n\n"
-            "Пришлите Telegram ID поставщика и ID товара.\n\n"
+            "🔗 Доступ партнёра к товару\n\n"
+            "Пришлите Telegram ID партнёра и ID товара.\n\n"
             "Пример:\n123456789 25\n\n"
             "Для отмены напишите: отмена",
             reply_markup=admin_suppliers_cancel_keyboard(),
         )
-        await callback.answer("Жду ID поставщика и товара")
+        await callback.answer("Жду ID партнёра и товара")
+        return True
+
+    if data == "admin:bind_supplier_category":
+        ADMIN_SUPPLIER_WAIT[callback.from_user.id] = {"action": "bind_category"}
+        await update_or_send(
+            callback,
+            "📁 Доступ партнёра к категории\n\n"
+            "Пришлите Telegram ID партнёра и ID категории.\n\n"
+            "Пример:\n123456789 7\n\n"
+            "Для отмены напишите: отмена",
+            reply_markup=admin_suppliers_cancel_keyboard(),
+        )
+        await callback.answer("Жду ID партнёра и категории")
         return True
 
     if data == "admin:unbind_supplier":
@@ -7256,10 +7339,12 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data == "admin:panel":
-        try:
-            await bot.send_message(callback.message.chat.id, "🛠 Админ-панель", reply_markup=admin_main_reply_keyboard())
-        except Exception:
-            pass
+        if callback.from_user and callback.from_user.id not in ADMIN_KEYBOARD_SENT:
+            try:
+                await bot.send_message(callback.message.chat.id, "🛠 Панель администратора", reply_markup=admin_main_reply_keyboard())
+                ADMIN_KEYBOARD_SENT.add(callback.from_user.id)
+            except Exception:
+                pass
         await update_or_send(
             callback, admin_panel_text(), reply_markup=admin_panel_keyboard()
         )
@@ -7364,6 +7449,9 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
     if not callback.from_user or not await is_supplier_user(callback.from_user.id):
         return False
 
+    ADMIN_BROADCAST_V28.pop(callback.from_user.id, None)
+    CATALOG_V25_STATE.pop(callback.from_user.id, None)
+    SHOP_ADMIN_WAIT.pop(callback.from_user.id, None)
     data = callback.data or ""
 
     if data == "supplier:panel":
@@ -7390,12 +7478,16 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data == "supplier:price_help":
+        SUPPLIER_PRICE_WAIT[callback.from_user.id] = True
         await update_or_send(
             callback,
-            "🛍 Товары поставщика\n\nЧтобы изменить цену своего товара:\n/supplier_price ID ЦЕНА [ВАЛЮТА]\n\nПример:\n/supplier_price 12 4.50 USD",
+            "💵 Изменение цены\n\n"
+            "Отправьте одним сообщением: ID товара, цена и валюта.\n\n"
+            "Пример: 12 4.50 USD\n"
+            "Для отмены напишите: отмена",
             reply_markup=supplier_inline_menu_keyboard(),
         )
-        await callback.answer()
+        await callback.answer("Жду цену")
         return True
 
     if data == "supplier:wallet":
@@ -7407,8 +7499,8 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
         withdraw_text = (
             "↗️ Вывод средств\n\n"
             "Комиссия вывода: 2.5 USDT.\n"
-            "Напишите командой:\n/withdraw СУММА АДРЕС\n\n"
-            "Пример:\n/withdraw 10 UQ...\n\n"
+            "Нажмите «Вывод» и отправьте сумму + адрес одним сообщением.\n\n"
+            "Пример: 10 UQ...\n\n"
             "Если автовыплата CryptoBot включена, бот создаст чек автоматически."
         )
         await update_or_send(callback, withdraw_text, reply_markup=supplier_inline_menu_keyboard())
@@ -7734,6 +7826,7 @@ async def handle_buyer_callback(bot: Bot, callback: CallbackQuery) -> bool:
     username = callback.from_user.username
 
     if data == "buyer:panel":
+        ADMIN_KEYBOARD_SENT.discard(callback.from_user.id)
         BUYER_CATALOG_SEARCH_WAIT.discard(callback.from_user.id)
         try:
             await bot.send_message(callback.message.chat.id, "🏠 Режим покупателя", reply_markup=await buyer_reply_keyboard_for_user(callback.from_user.id))

@@ -134,12 +134,9 @@ def cart_text(rows) -> str:
 def cart_keyboard(rows) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for item, product in rows:
-        label = product.name if product else "товар"
-        if len(label) > 22:
-            label = label[:21] + "…"
-        kb.button(text=f"➖ {label}", callback_data=f"buyer:cart_dec:{item.id}")
-        kb.button(text=f"{int(item.quantity or 1)} шт.", callback_data=f"buyer:cart_custom:{item.id}")
-        kb.button(text=f"➕ {label}", callback_data=f"buyer:cart_inc:{item.id}")
+        kb.button(text="−", callback_data=f"buyer:cart_dec:{item.id}")
+        kb.button(text=f"{int(item.quantity or 1)}", callback_data=f"buyer:cart_custom:{item.id}")
+        kb.button(text="+", callback_data=f"buyer:cart_inc:{item.id}")
     if rows:
         kb.button(text="✅ Оформить", callback_data="buyer:cart_checkout")
         kb.button(text="🧹 Очистить", callback_data="buyer:cart_clear")

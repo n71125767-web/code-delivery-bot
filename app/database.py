@@ -136,6 +136,19 @@ async def _critical_schema_migrations(conn) -> None:
             logger.exception("Legacy internal_key column migration failed")
             raise
 
+
+    # V52: allow product rows to be physically deleted while keeping purchase history.
+    # Historical purchases keep all delivery/payment data; product_id may become NULL.
+    if dialect == "postgresql":
+        try:
+            dp_columns = await conn.run_sync(columns, "digital_purchases")
+            if "product_id" in dp_columns:
+                await conn.execute(text("ALTER TABLE digital_purchases ALTER COLUMN product_id DROP NOT NULL"))
+                logger.info("Migration applied: digital_purchases.product_id DROP NOT NULL")
+        except Exception:
+            logger.exception("Failed to make digital_purchases.product_id nullable")
+            raise
+
     # Cross-process duplicate checkout protection.
     try:
         if dialect == "postgresql":

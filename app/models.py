@@ -266,7 +266,7 @@ class ProductStockItem(Base):
     __tablename__ = "product_stock_items"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    product_id: Mapped[int] = mapped_column(ForeignKey("shop_products.id"), index=True)
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("shop_products.id"), nullable=True, index=True)
     content_type: Mapped[str] = mapped_column(String(30), default="text")
     content_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_file_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -298,7 +298,7 @@ class DigitalPurchase(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     buyer_id: Mapped[int] = mapped_column(BigInteger, index=True)
     buyer_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    product_id: Mapped[int] = mapped_column(ForeignKey("shop_products.id"), index=True)
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("shop_products.id"), nullable=True, index=True)
     stock_item_id: Mapped[int | None] = mapped_column(
         ForeignKey("product_stock_items.id"),
         nullable=True,
@@ -426,7 +426,7 @@ class CartItem(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(BigInteger, index=True)
-    product_id: Mapped[int] = mapped_column(ForeignKey("shop_products.id"), index=True)
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("shop_products.id"), nullable=True, index=True)
     quantity: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -565,7 +565,7 @@ class WalletPayment(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     purchase_id: Mapped[int] = mapped_column(ForeignKey("digital_purchases.id"), index=True)
     buyer_id: Mapped[int] = mapped_column(BigInteger, index=True)
-    product_id: Mapped[int] = mapped_column(ForeignKey("shop_products.id"), index=True)
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("shop_products.id"), nullable=True, index=True)
     address: Mapped[str] = mapped_column(String(500))
     memo: Mapped[str] = mapped_column(String(120), unique=True, index=True)
     amount: Mapped[float] = mapped_column(Numeric(24, 8))

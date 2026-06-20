@@ -345,7 +345,7 @@ async def supplier_products_text(supplier_id: int) -> str:
         )).all())
     if not rows:
         return "📦 Мои товары\n\nУ вас пока нет привязанных товаров. После одобрения заявки товар появится здесь."
-    lines = ["📦 Мои товары", "", "Чтобы изменить цену: /supplier_price ID ЦЕНА ВАЛЮТА", ""]
+    lines = ["📦 Мои товары", "", "Чтобы изменить цену, нажмите «💵 Изменить цену» и отправьте: ID цена валюта.", ""]
     for p in rows:
         status = "показывается" if p.is_active else "скрыт"
         lines.append(f"#{p.id} — {p.name} — {money(p.price)} {p.currency} — {status}")

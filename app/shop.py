@@ -19,8 +19,8 @@ def money(value, currency: str = "RUB") -> str:
     if value is None:
         return "Цена уточняется"
     try:
-        number = Decimal(str(value))
-        rendered = f"{number:,.2f}".replace(",", " ").rstrip("0").rstrip(".")
+        number = Decimal(str(value)).quantize(Decimal("0.01"))
+        rendered = f"{number:,.2f}".replace(",", " ")
     except (InvalidOperation, ValueError):
         rendered = str(value)
     return f"{rendered} {currency}"

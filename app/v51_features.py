@@ -19,6 +19,7 @@ from app.models import (
     ShopProduct,
     TextTemplate,
     UserWallet,
+    CartItem,
 )
 from app.database import SessionLocal
 
@@ -42,7 +43,7 @@ def _money(value, currency: str | None = None) -> str:
         amount = Decimal(str(value or 0)).quantize(Decimal("0.01"))
     except Exception:
         amount = Decimal("0.00")
-    text = f"{amount.normalize() if amount == amount.to_integral() else amount}"
+    text = f"{amount:.2f}"
     return f"{text} {currency}" if currency else text
 
 
@@ -141,31 +142,30 @@ async def hard_delete_product(session: AsyncSession, product_id: int) -> bool:
     product = await session.get(ShopProduct, product_id)
     if not product:
         return False
+
     providers = list((await session.scalars(select(ProductProvider).where(ProductProvider.internal_key == product.internal_key))).all())
     for row in providers:
         await session.delete(row)
+
+    carts = list((await session.scalars(select(CartItem).where(CartItem.product_id == product_id))).all())
+    for row in carts:
+        await session.delete(row)
+
+    # Сохраняем историю покупок, но отвязываем её от удаляемого товара и складской позиции.
+    # В V52 product_id у digital_purchases переводится в nullable миграцией.
+    purchases = list((await session.scalars(select(DigitalPurchase).where(DigitalPurchase.product_id == product_id))).all())
+    for row in purchases:
+        row.product_id = None
+        row.stock_item_id = None
+
     stock = list((await session.scalars(select(ProductStockItem).where(ProductStockItem.product_id == product_id))).all())
     for row in stock:
         await session.delete(row)
-    try:
-        await session.delete(product)
-        await session.commit()
-        return True
-    except Exception:
-        # Если товар уже участвовал в покупках, FK может не позволить физически удалить строку.
-        # Тогда полностью убираем его из витрины и админских списков.
-        await session.rollback()
-        product = await session.get(ShopProduct, product_id)
-        if not product:
-            return True
-        providers = list((await session.scalars(select(ProductProvider).where(ProductProvider.internal_key == product.internal_key))).all())
-        for row in providers:
-            await session.delete(row)
-        product.is_deleted = True
-        product.is_active = False
-        product.payment_enabled = False
-        await session.commit()
-        return True
+
+    await session.flush()
+    await session.delete(product)
+    await session.commit()
+    return True
 
 
 async def get_admin_caps(session: AsyncSession, telegram_id: int) -> set[str]:
