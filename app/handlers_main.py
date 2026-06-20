@@ -226,9 +226,21 @@ from app.proxy_catalog_v36 import (
 from app.proxy_pricing_v39 import (
     apply_proxy_markup,
     get_proxy_markup_multiplier,
+    get_proxy_markup_multiplier_for_category,
     multiplier_label,
 )
 from app.country_ru import country_display
+from app.proxy_admin_v61 import (
+    proxy_admin_text as v61_proxy_admin_text,
+    proxy_admin_keyboard as v61_proxy_admin_keyboard,
+    provider_keyboard as v61_proxy_provider_keyboard,
+    proxy_kind_text as v61_proxy_kind_text,
+    proxy_kind_keyboard as v61_proxy_kind_keyboard,
+    find_proxy_product as v61_find_proxy_product,
+    set_proxy_kind_price as v61_set_proxy_kind_price,
+    set_proxy_kind_markup as v61_set_proxy_kind_markup,
+    balances_text as v61_proxy_balances_text,
+)
 from app.v50_features import (
     get_main_page_text,
     get_faq_page_text,
@@ -384,6 +396,7 @@ logger.info("FIX_MARKER_MCS_VISUAL=v32 loaded")
 logger.info("FIX_MARKER_V51_UI_PERMS_ORDERS loaded")
 logger.info("FIX_MARKER_V55_UI_SELFCHECK_FEEDBACK_FIX loaded")
 logger.info("FIX_MARKER_V58_OLD_BUTTONS_PROXY_SPLIT loaded")
+logger.info("FIX_MARKER_V61_PROXY_ADMIN_SPLIT_BALANCES loaded")
 
 
 def validate_runtime_ui() -> None:
@@ -512,6 +525,9 @@ ADMIN_KEYBOARD_SENT: set[int] = set()
 SUPPLIER_PRICE_WAIT: dict[int, bool] = {}
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
 ADMIN_SUPPLIER_WAIT: dict[int, dict] = {}
+ADMIN_PROXY_PRICE_WAIT: dict[int, str] = {}
+ADMIN_PROXY_MARKUP_WAIT: dict[int, str] = {}
+ADMIN_PROXY_TEXT_WAIT: dict[int, str] = {}
 
 # Динамические панели ролей: храним последнее inline-сообщение панели,
 # чтобы команды и callback-кнопки редактировали его, а не спамили новым сообщением.
@@ -3327,7 +3343,9 @@ async def process_supplier_command(
         )
         return True
 
-    if text in {"/start", "/supplier"} or text == "🚚 Панель поставщика":
+    # /start всегда открывает покупательское главное меню.
+    # Панель поставщика открывается только отдельной командой/кнопкой.
+    if text == "/supplier" or text in {"🚚 Панель поставщика", "🚚 Поставщик", "🚚 Я поставщик"}:
         await send_supplier_role_panel(
             bot,
             message.chat.id,
@@ -3540,10 +3558,10 @@ async def process_main_reply_button(
         await answer_message(bot, message, "👁 Скрытые разделы\n\nВыберите действие кнопкой ниже.", business_connection_id, reply_markup=admin_hidden_keyboard())
         return True
 
-    if admin_access and text in {"🧩 Прокси", "Прокси"}:
+    if admin_access and text in {"🧩 Прокси", "🌐 Прокси", "Прокси"}:
         async with SessionLocal() as session:
-            text_value, settings = await proxy_settings_text(session)
-        await answer_message(bot, message, text_value, business_connection_id, reply_markup=admin_proxy_settings_keyboard(settings))
+            text_value = await v61_proxy_admin_text(session)
+        await answer_message(bot, message, text_value, business_connection_id, reply_markup=v61_proxy_admin_keyboard())
         return True
 
     if text in {"🚚 Я поставщик", "🚚 Панель поставщика", "🚚 Поставщик"}:
@@ -3753,10 +3771,8 @@ async def process_command_message(
             )
             return
 
-        if await is_supplier_user(user_id):
-            await send_supplier_pending_panel(bot, message, business_connection_id)
-            return
-
+        # /start не должен автоматически открывать панель поставщика.
+        # Даже поставщик сначала попадает в обычное главное меню, где есть отдельная кнопка «🚚 Поставщик».
         admin_access = await is_admin_user(user_id)
 
         # ReplyKeyboardMarkup не поддерживается для сообщений от имени
@@ -3901,23 +3917,7 @@ async def process_command_message(
 
 async def proxy_settings_text(session) -> tuple[str, object]:
     settings = await get_proxy_shop_settings(session)
-    markup = await get_proxy_markup_multiplier(session)
-    countries = ", ".join(country_label(x) for x in settings.countries)
-    periods = ", ".join(f"{x} дней" for x in settings.periods)
-    proxy_type = "Выделенные" if settings.proxy_type == "dedicated" else "Общие"
-    text = (
-        "🌐 Прокси\n\n"
-        "Автовыдача, страны, сроки и цена.\n"
-        "Все действия доступны кнопками ниже.\n\n"
-        f"Автовыдача: {'🟢 включена' if settings.enabled else '🔴 выключена'}\n"
-        f"├ Страны — {countries}\n"
-        f"├ Сроки — {periods}\n"
-        f"├ Тип — {proxy_type}\n"
-        f"├ Количество — {settings.count}\n"
-        f"├ IP — IPv{settings.ip_version}\n"
-        f"└ Наценка — {multiplier_label(markup)}\n\n"
-        "Настройки открываются кнопками ниже."
-    )
+    text = await v61_proxy_admin_text(session)
     return text, settings
 
 
@@ -5057,9 +5057,45 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         return
 
 
+
+
+    if user_id in ADMIN_PROXY_TEXT_WAIT and not text.startswith("/"):
+        kind = ADMIN_PROXY_TEXT_WAIT.pop(user_id, None)
+        async with SessionLocal() as session:
+            product = await v61_find_proxy_product(session, kind)
+            if product:
+                product.description = text.strip()
+                product.payment_description = text.strip()
+                await session.commit()
+                result = "✅ Текст прокси сохранён."
+            else:
+                result = "Товар не найден. Сначала нажмите «Создать/обновить»."
+            product = await v61_find_proxy_product(session, kind)
+            info = await v61_proxy_kind_text(session, kind)
+        await answer_message(bot, message, result + "\n\n" + info, business_connection_id, reply_markup=v61_proxy_kind_keyboard(kind, product.id if product else None))
+        return
+
+    if user_id in ADMIN_PROXY_PRICE_WAIT and not text.startswith("/"):
+        kind = ADMIN_PROXY_PRICE_WAIT.pop(user_id, None)
+        async with SessionLocal() as session:
+            result = await v61_set_proxy_kind_price(session, kind, text)
+            product = await v61_find_proxy_product(session, kind)
+            info = await v61_proxy_kind_text(session, kind)
+        await answer_message(bot, message, result + "\n\n" + info, business_connection_id, reply_markup=v61_proxy_kind_keyboard(kind, product.id if product else None))
+        return
+
+    if user_id in ADMIN_PROXY_MARKUP_WAIT and not text.startswith("/"):
+        kind = ADMIN_PROXY_MARKUP_WAIT.pop(user_id, None)
+        async with SessionLocal() as session:
+            result = await v61_set_proxy_kind_markup(session, kind, text)
+            product = await v61_find_proxy_product(session, kind)
+            info = await v61_proxy_kind_text(session, kind)
+        await answer_message(bot, message, result + "\n\n" + info, business_connection_id, reply_markup=v61_proxy_kind_keyboard(kind, product.id if product else None))
+        return
+
     if text.lower() in {"отмена", "cancel", "❌ отмена"}:
         had_state = False
-        for store in (SHOP_ADMIN_WAIT, CATALOG_V25_STATE, ADMIN_BROADCAST_V28, ADMIN_TEXT_EDIT_WAIT, ADMIN_SUPPLIER_WAIT, CART_QUANTITY_WAIT, PROXY_COUNTRY_SEARCH_WAIT):
+        for store in (SHOP_ADMIN_WAIT, CATALOG_V25_STATE, ADMIN_BROADCAST_V28, ADMIN_TEXT_EDIT_WAIT, ADMIN_SUPPLIER_WAIT, CART_QUANTITY_WAIT, PROXY_COUNTRY_SEARCH_WAIT, ADMIN_PROXY_PRICE_WAIT, ADMIN_PROXY_MARKUP_WAIT, ADMIN_PROXY_TEXT_WAIT):
             if user_id in store:
                 store.pop(user_id, None)
                 had_state = True
@@ -5754,7 +5790,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         kb.button(
             text="⬅️ Назад", callback_data=f"v25:product:{product_id}"
         )
-        kb.adjust(1)
+        kb.adjust(2)
         await update_or_send(
             callback, "Выберите категорию товара.", reply_markup=kb.as_markup()
         )
@@ -6094,7 +6130,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             text="⬅️ Отмена",
             callback_data=f"v25:category:{category_id}",
         )
-        kb.adjust(1)
+        kb.adjust(2)
         await update_or_send(
             callback,
             "Удалить категорию?\n\nТовары будут перемещены в «Без категории».",
@@ -6605,11 +6641,63 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
     if data == "admin:proxy":
         async with SessionLocal() as session:
-            text, settings = await proxy_settings_text(session)
-        await update_or_send(
-            callback, text, reply_markup=admin_proxy_settings_keyboard(settings)
-        )
+            text = await v61_proxy_admin_text(session)
+        await update_or_send(callback, text, reply_markup=v61_proxy_admin_keyboard())
         await callback.answer()
+        return True
+
+    if data == "admin:proxy:balances":
+        async with SessionLocal() as session:
+            text = "🌐 Балансы прокси-провайдеров\n\n" + await v61_proxy_balances_text()
+        await update_or_send(callback, text, reply_markup=v61_proxy_admin_keyboard())
+        await callback.answer("Обновлено")
+        return True
+
+    if data.startswith("admin:proxy:provider:"):
+        provider = data.rsplit(":", 1)[1]
+        title = "🔵 Proxyline" if provider == "proxyline" else "🟣 Proxys"
+        text = title + "\n\n" + await v61_proxy_balances_text() + "\n\nВыберите тариф для настройки."
+        await update_or_send(callback, text, reply_markup=v61_proxy_provider_keyboard(provider))
+        await callback.answer()
+        return True
+
+    if data.startswith("admin:proxy:kind:"):
+        kind = data.rsplit(":", 1)[1]
+        async with SessionLocal() as session:
+            product = await v61_find_proxy_product(session, kind)
+            text = await v61_proxy_kind_text(session, kind)
+        await update_or_send(callback, text, reply_markup=v61_proxy_kind_keyboard(kind, product.id if product else None))
+        await callback.answer()
+        return True
+
+    if data == "admin:proxy:autofix":
+        async with SessionLocal() as session:
+            from app.extended_v37 import ensure_proxy_autofix_products
+            await ensure_proxy_autofix_products(session, Decimal("100"), "RUB")
+            text = await v61_proxy_admin_text(session)
+        await update_or_send(callback, "✅ Прокси-товары созданы/обновлены.\n\n" + text, reply_markup=v61_proxy_admin_keyboard())
+        await callback.answer("Готово")
+        return True
+
+    if data.startswith("admin:proxy:price:"):
+        kind = data.rsplit(":", 1)[1]
+        ADMIN_PROXY_PRICE_WAIT[callback.from_user.id] = kind
+        await update_or_send(callback, "💰 Цена прокси\n\nВведите новую базовую цену и валюту.\nПример: 120 RUB\n\nДля отмены: отмена", reply_markup=simple_back_keyboard(f"admin:proxy:kind:{kind}"))
+        await callback.answer("Жду цену")
+        return True
+
+    if data.startswith("admin:proxy:markup:"):
+        kind = data.rsplit(":", 1)[1]
+        ADMIN_PROXY_MARKUP_WAIT[callback.from_user.id] = kind
+        await update_or_send(callback, "📈 Наценка прокси\n\nВведите коэффициент.\nПример: 1.77\n\nДля отмены: отмена", reply_markup=simple_back_keyboard(f"admin:proxy:kind:{kind}"))
+        await callback.answer("Жду наценку")
+        return True
+
+    if data.startswith("admin:proxy:text:"):
+        kind = data.rsplit(":", 1)[1]
+        ADMIN_PROXY_TEXT_WAIT[callback.from_user.id] = kind
+        await update_or_send(callback, "📝 Текст прокси\n\nОтправьте новый текст/описание для этого прокси. Он будет сохранён в карточке товара и описании платежа.\n\nДля отмены: отмена", reply_markup=simple_back_keyboard(f"admin:proxy:kind:{kind}"))
+        await callback.answer("Жду текст")
         return True
 
     if data == "admin:proxy:products":
@@ -6655,19 +6743,28 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         await callback.answer("Настройка обновлена")
         return True
 
-    if data == "admin:proxy:countries":
+    if data.startswith("admin:proxy:countries"):
+        try:
+            page = int(data.rsplit(":", 1)[1]) if data.count(":") >= 3 else 0
+        except ValueError:
+            page = 0
         async with SessionLocal() as session:
             settings = await get_proxy_shop_settings(session)
         await update_or_send(
             callback,
-            "🌍 › Доступные страны\n\nОтметьте страны, которые сможет выбирать покупатель.",
-            reply_markup=admin_proxy_countries_keyboard(settings, SUPPORTED_COUNTRIES),
+            "🌍 Страны прокси\n\nПопулярные страны стоят первыми. Выберите доступные страны для покупателей.",
+            reply_markup=admin_proxy_countries_keyboard(settings, SUPPORTED_COUNTRIES, page=page),
         )
         await callback.answer()
         return True
 
     if data.startswith("admin:proxy:country:"):
-        code = data.rsplit(":", 1)[1]
+        parts_country = data.split(":")
+        code = parts_country[3] if len(parts_country) > 3 else data.rsplit(":", 1)[1]
+        try:
+            page = int(parts_country[4]) if len(parts_country) > 4 else 0
+        except ValueError:
+            page = 0
         if code not in SUPPORTED_COUNTRIES:
             await callback.answer("Неизвестная страна", show_alert=True)
             return True
@@ -6690,7 +6787,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         await update_or_send(
             callback,
             "🌍 › Доступные страны\n\nОтметьте страны, которые сможет выбирать покупатель.",
-            reply_markup=admin_proxy_countries_keyboard(settings, SUPPORTED_COUNTRIES),
+            reply_markup=admin_proxy_countries_keyboard(settings, SUPPORTED_COUNTRIES, page=page),
         )
         await callback.answer("Сохранено")
         return True
@@ -7201,7 +7298,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
                 callback_data=f"v25:product:{product.id}",
             )
         kb.button(text="⬅️ Назад", callback_data="v25:catalog")
-        kb.adjust(1)
+        kb.adjust(2)
         await update_or_send(
             callback,
             "📁 Товары без категории",
@@ -8323,7 +8420,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         _, _, category_key, country_code, page_raw = data.split(":")
         async with SessionLocal() as session:
             products = await list_proxy_products_by_category(session, category_key)
-            proxy_markup = await get_proxy_markup_multiplier(session)
+            proxy_markup = await get_proxy_markup_multiplier_for_category(session, category_key)
         product = next(
             (
                 row for row in products
@@ -8369,7 +8466,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
 
         async with SessionLocal() as session:
             product = await session.get(ShopProduct, product_id)
-            proxy_markup = await get_proxy_markup_multiplier(session)
+            proxy_markup = await get_proxy_markup_multiplier_for_category(session, category_key)
             if product and product.fulfillment_type != "proxyline":
                 # Товар выбран именно через прокси-витрину, значит выдача должна идти через proxy-provider.
                 product.fulfillment_type = "proxyline"

@@ -137,16 +137,62 @@ async def _critical_schema_migrations(conn) -> None:
             raise
 
 
-    # V52: allow product rows to be physically deleted while keeping purchase history.
-    # Historical purchases keep all delivery/payment data; product_id may become NULL.
+    # V52/V60: allow product rows to be physically deleted while keeping history.
+    # Historical purchases, marketplace applications, promo codes and wallet payments
+    # keep their data; product_id may become NULL after catalog cleanup.
     if dialect == "postgresql":
+        nullable_product_refs = (
+            "digital_purchases",
+            "marketplace_applications",
+            "promo_codes",
+            "wallet_payments",
+            "cart_items",
+            "product_stock_items",
+        )
+        for table_name in nullable_product_refs:
+            try:
+                table_columns = await conn.run_sync(columns, table_name)
+                if "product_id" in table_columns:
+                    await conn.execute(text(f"ALTER TABLE {table_name} ALTER COLUMN product_id DROP NOT NULL"))
+                    logger.info("Migration applied: %s.product_id DROP NOT NULL", table_name)
+            except Exception:
+                logger.exception("Failed to make %s.product_id nullable", table_name)
+                raise
+
+        # V62: make product FKs tolerant to hard deletion. If an old database was
+        # created before nullable models, PostgreSQL constraints can still block
+        # DELETE even after ORM cleanup. Recreate those FKs with ON DELETE SET NULL
+        # where possible. This block is idempotent and only touches product_id FKs.
         try:
-            dp_columns = await conn.run_sync(columns, "digital_purchases")
-            if "product_id" in dp_columns:
-                await conn.execute(text("ALTER TABLE digital_purchases ALTER COLUMN product_id DROP NOT NULL"))
-                logger.info("Migration applied: digital_purchases.product_id DROP NOT NULL")
+            fk_rows = (await conn.execute(text("""
+                SELECT tc.table_name, tc.constraint_name, kcu.column_name
+                FROM information_schema.table_constraints AS tc
+                JOIN information_schema.key_column_usage AS kcu
+                  ON tc.constraint_name = kcu.constraint_name
+                 AND tc.table_schema = kcu.table_schema
+                JOIN information_schema.constraint_column_usage AS ccu
+                  ON ccu.constraint_name = tc.constraint_name
+                 AND ccu.table_schema = tc.table_schema
+                WHERE tc.constraint_type = 'FOREIGN KEY'
+                  AND ccu.table_name = 'shop_products'
+                  AND ccu.column_name = 'id'
+                  AND tc.table_schema = 'public'
+            """))).all()
+            for table_name, constraint_name, column_name in fk_rows:
+                if column_name != "product_id":
+                    continue
+                safe_table = str(table_name).replace('_', '').isalnum()
+                safe_constraint = str(constraint_name).replace('_', '').isalnum()
+                if not (safe_table and safe_constraint):
+                    continue
+                await conn.execute(text(f'ALTER TABLE {table_name} DROP CONSTRAINT IF EXISTS {constraint_name}'))
+                await conn.execute(text(
+                    f'ALTER TABLE {table_name} ADD CONSTRAINT {constraint_name} '
+                    f'FOREIGN KEY (product_id) REFERENCES shop_products(id) ON DELETE SET NULL'
+                ))
+                logger.info("Migration applied: %s.%s ON DELETE SET NULL", table_name, column_name)
         except Exception:
-            logger.exception("Failed to make digital_purchases.product_id nullable")
+            logger.exception("Failed to update shop_products FK constraints")
             raise
 
     # Cross-process duplicate checkout protection.

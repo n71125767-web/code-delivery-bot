@@ -134,7 +134,7 @@ def admin_categories_keyboard(rows) -> InlineKeyboardMarkup:
     kb.button(text="➕ Категория", callback_data="admin:shop:add_category")
     kb.button(text="⚙️ Вид товаров", callback_data="admin:shop")
     kb.button(text="⬅️ Назад", callback_data="admin:shop")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -204,7 +204,7 @@ def admin_products_keyboard(rows) -> InlineKeyboardMarkup:
         )
     kb.button(text="➕ Товар", callback_data="admin:shop:add_product")
     kb.button(text="⬅️ Назад", callback_data="admin:shop")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -298,9 +298,8 @@ async def toggle_product(session, product_id: int):
 async def delete_product(session, product_id: int):
     row = await session.get(ShopProduct, product_id)
     if row:
-        await unbind_product_provider(session, row.internal_key)
-        await session.delete(row)
-        await session.commit()
+        from app.v51_features import hard_delete_product
+        await hard_delete_product(session, product_id)
     return row
 
 
@@ -374,7 +373,7 @@ def admin_products_keyboard(rows) -> InlineKeyboardMarkup:
         kb.button(text=f"{icon} #{row.id} {row.name} · {_fmt_money_v53(row.price, row.currency)}", callback_data=f"admin:shop:product:{row.id}")
     kb.button(text="➕ Товар", callback_data="admin:shop:add_product")
     kb.button(text="⬅️ Назад", callback_data="admin:shop")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -402,7 +401,7 @@ def admin_category_keyboard(category, products) -> InlineKeyboardMarkup:
     kb.button(text="⬇️ Ниже", callback_data=f"admin:shop:category_down:{category.id}")
     kb.button(text="🗑 Удалить", callback_data=f"admin:shop:category_delete_prompt:{category.id}")
     kb.button(text="⬅️ Назад", callback_data="admin:shop:categories")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -430,7 +429,7 @@ def admin_products_keyboard(rows) -> InlineKeyboardMarkup:
         kb.button(text=f"{icon} #{row.id} {row.name} · {_fmt_money_v54(row.price, row.currency)}", callback_data=f"admin:shop:product:{row.id}")
     kb.button(text="➕ Товар", callback_data="admin:shop:add_product")
     kb.button(text="🔙 Назад", callback_data="admin:shop")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -458,7 +457,7 @@ def admin_category_keyboard(category, products) -> InlineKeyboardMarkup:
     kb.button(text="⬇️ Ниже", callback_data=f"admin:shop:category_down:{category.id}")
     kb.button(text="🗑 Удалить", callback_data=f"admin:shop:category_delete_prompt:{category.id}")
     kb.button(text="🔙 Назад", callback_data="admin:shop:categories")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 

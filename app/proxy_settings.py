@@ -6,7 +6,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.services import get_text, set_text
 from app.country_ru import COUNTRY_RU_NAMES, country_display
 
-SUPPORTED_COUNTRIES = {code: country_display(code, name) for code, name in COUNTRY_RU_NAMES.items()}
+POPULAR_COUNTRY_ORDER_V61 = [
+    "ru", "us", "de", "nl", "gb", "fr", "pl", "es", "it", "tr",
+    "ua", "kz", "by", "ca", "br", "in", "id", "jp", "kr", "sg",
+]
+
+def _popular_country_map() -> dict[str, str]:
+    items: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for code in POPULAR_COUNTRY_ORDER_V61:
+        if code in COUNTRY_RU_NAMES and code not in seen:
+            items.append((code, country_display(code, COUNTRY_RU_NAMES[code])))
+            seen.add(code)
+    for code, name in COUNTRY_RU_NAMES.items():
+        if code not in seen:
+            items.append((code, country_display(code, name)))
+    return dict(items)
+
+SUPPORTED_COUNTRIES = _popular_country_map()
 SUPPORTED_PERIODS = [5, 10, 20, 30, 60, 90, 180, 360]
 SUPPORTED_TYPES = ["dedicated", "shared"]
 

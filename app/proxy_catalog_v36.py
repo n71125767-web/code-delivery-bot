@@ -32,6 +32,7 @@ PROXY_PERIODS = {
 
 # Используется только если API временно не вернул справочник стран.
 FALLBACK_COUNTRIES = COUNTRY_RU_NAMES
+POPULAR_COUNTRY_ORDER_V61 = ["ru", "us", "de", "nl", "gb", "fr", "pl", "es", "it", "tr", "ua", "kz", "by", "ca", "br", "in", "id", "jp", "kr", "sg"]
 
 _cache: tuple[float, list[tuple[str, str]]] | None = None
 _cache_lock = asyncio.Lock()
@@ -121,7 +122,7 @@ async def available_proxyline_countries(force: bool = False) -> list[tuple[str, 
             rows = list(FALLBACK_COUNTRIES.items())
 
         unique = {code: country_ru_name(code, name) for code, name in rows if len(code) == 2}
-        rows = sorted(unique.items(), key=lambda item: item[1].lower())
+        rows = sorted(unique.items(), key=lambda item: (POPULAR_COUNTRY_ORDER_V61.index(item[0]) if item[0] in POPULAR_COUNTRY_ORDER_V61 else 999, item[1].lower()))
         _cache = (time.monotonic(), rows)
         return rows
 
@@ -196,7 +197,7 @@ def periods_keyboard(
         text="⬅️ К странам",
         callback_data=f"buyer:pxcountries:{category_key}:0",
     )
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 

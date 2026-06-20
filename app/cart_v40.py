@@ -145,5 +145,5 @@ def cart_keyboard(rows) -> InlineKeyboardMarkup:
     if rows:
         kb.adjust(*([3] * len(rows)), 2, 2)
     else:
-        kb.adjust(1)
+        kb.adjust(2)
     return kb.as_markup()

@@ -27,7 +27,7 @@ def payment_methods_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="🔄 Обновить", callback_data="admin:payment_methods")
     kb.button(text="⬅️ Назад", callback_data="admin:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -87,7 +87,7 @@ def payments_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="🔄 Обновить", callback_data="admin:payments")
     kb.button(text="⚠️ Проблемы", callback_data="admin:problems")
     kb.button(text="⬅️ Назад", callback_data="admin:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -97,7 +97,7 @@ def store_settings_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="👮 Администраторы", callback_data="admin:admins")
     kb.button(text="⚠️ Проблемы", callback_data="admin:problems")
     kb.button(text="⬅️ Назад", callback_data="admin:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -108,5 +108,5 @@ def broadcast_preview_keyboard() -> InlineKeyboardMarkup:
         callback_data="v28:broadcast_confirm",
     )
     kb.button(text="❌ Отмена", callback_data="admin:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()

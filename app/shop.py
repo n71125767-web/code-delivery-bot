@@ -190,7 +190,7 @@ PROXY_CATEGORY_DEFINITIONS = {
         "keywords": ("standard", "стандарт"),
     },
     "residential": {
-        "title": "🎲 Прокси",
+        "title": "🏠 RESIDENTIAL",
         "keywords": ("residential", "резидент", "резидентские"),
     },
 }
@@ -262,8 +262,9 @@ def proxy_categories_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="🔐 MTProxy", callback_data="buyer:proxycat:mtproxy")
     kb.button(text="🏆 PREMIUM", callback_data="buyer:proxycat:premium")
     kb.button(text="💯 STANDART", callback_data="buyer:proxycat:standard")
+    kb.button(text="🏠 RESIDENTIAL", callback_data="buyer:proxycat:residential")
     kb.button(text="🏠 Главное меню", callback_data="buyer:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -284,7 +285,7 @@ def special_products_keyboard(
             callback_data=f"buyer:shopproduct:{row.id}",
         )
     kb.button(text="⬅️ Назад", callback_data=back_callback)
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -342,7 +343,7 @@ def proxy_main_keyboard() -> InlineKeyboardMarkup:
         group = PROXY_PACKAGE_CATEGORIES[key]
         kb.button(text=group["title"], callback_data=f"buyer:proxygroup:{key}")
     kb.button(text="⬅️ Назад", callback_data="buyer:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -361,7 +362,7 @@ def proxy_group_keyboard(group_key: str) -> InlineKeyboardMarkup:
                 callback_data=f"buyer:proxypackage:{group_key}:{package_key}",
             )
     kb.button(text="⬅️ Назад", callback_data="buyer:proxy_catalog")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -388,7 +389,7 @@ def proxy_package_keyboard(
         text="Откройте актуальный каталог прокси", callback_data="buyer:proxy_catalog"
     )
     kb.button(text="⬅️ Назад", callback_data="buyer:proxy_catalog")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -451,7 +452,7 @@ def shop_main_keyboard(categories) -> InlineKeyboardMarkup:
     kb.button(text="🛒 › Корзина", callback_data="buyer:cart")
     kb.button(text="🧾 › Мои заказы", callback_data="buyer:orders")
     kb.button(text="🏠 › Главное меню", callback_data="buyer:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -518,7 +519,7 @@ def product_keyboard(product: ShopProduct, shop_username: str) -> InlineKeyboard
         text="⬅️ Назад",
         callback_data=(f"buyer:shopcat:{product.category_id}" if product.category_id else "buyer:shop"),
     )
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 

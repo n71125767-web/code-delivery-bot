@@ -121,7 +121,7 @@ def product_type_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="♾️ Статический товар", callback_data="v25:type:static")
     kb.button(text="📦 Количественный товар", callback_data="v25:type:quantity")
     kb.button(text="⬅️ Назад", callback_data="v25:wizard:back_name")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -145,7 +145,7 @@ def content_back_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="⬅️ Назад", callback_data="v25:wizard:back_price")
     kb.button(text="❌ Отмена", callback_data="v25:wizard:cancel")
     kb.button(text="🏠 Главное меню", callback_data="buyer:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -246,7 +246,7 @@ def fulfillment_keyboard(product_id: int) -> InlineKeyboardMarkup:
     kb.button(text="🚚 Поставщик", callback_data=f"v34:fulfillment:{product_id}:supplier")
     kb.button(text="📱 Номер", callback_data=f"v34:fulfillment:{product_id}:number")
     kb.button(text="⬅️ Назад", callback_data=f"v25:advanced:{product_id}")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -275,7 +275,7 @@ def delete_confirm_keyboard(product_id: int) -> InlineKeyboardMarkup:
     kb.button(
         text="⬅️ Отмена", callback_data=f"v25:product:{product_id}"
     )
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -348,7 +348,7 @@ def sort_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="💰 По цене", callback_data="v25:sort_set:price")
     kb.button(text="🆕 Сначала новые", callback_data="v25:sort_set:newest")
     kb.button(text="⬅️ Назад", callback_data="v25:view_settings")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -429,7 +429,7 @@ def admin_catalog_keyboard(categories, products) -> InlineKeyboardMarkup:
     kb.button(text="➕ Категория", callback_data="v25:add_category")
     kb.button(text="⚙️ Вид", callback_data="v25:view_settings")
     kb.button(text="⬅️ Назад", callback_data="admin:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -456,7 +456,7 @@ def category_card_keyboard(category_id: int, active: bool, products=None) -> Inl
     kb.button(text="🙈 Скрыть" if active else "👁 Показать", callback_data=f"v25:category_toggle:{category_id}")
     kb.button(text="🗑 Удалить", callback_data=f"v25:category_delete_prompt:{category_id}")
     kb.button(text="⬅️ Назад", callback_data="v25:catalog")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -519,7 +519,7 @@ def admin_catalog_keyboard(categories, products) -> InlineKeyboardMarkup:
     kb.button(text="➕ Категория", callback_data="v25:add_category")
     kb.button(text="⚙️ Вид", callback_data="v25:view_settings")
     kb.button(text="🔙 Назад", callback_data="admin:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -546,7 +546,7 @@ def category_card_keyboard(category_id: int, active: bool, products=None) -> Inl
     kb.button(text="🙈 Скрыть" if active else "👁 Показать", callback_data=f"v25:category_toggle:{category_id}")
     kb.button(text="🗑 Удалить", callback_data=f"v25:category_delete_prompt:{category_id}")
     kb.button(text="🔙 Назад", callback_data="v25:catalog")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -633,5 +633,5 @@ def delete_confirm_keyboard(product_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Да, удалить", callback_data=f"v25:delete_confirm:{product_id}")
     kb.button(text="🔙 Отмена", callback_data=f"v25:product:{product_id}")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()

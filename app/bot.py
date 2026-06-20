@@ -19,6 +19,7 @@ from app.cryptopay_service import (
     recover_pending_payments,
 )
 from app.wallet_service import process_wallet_webhook
+from app.proxy_balance_v61 import proxy_balance_monitor_loop
 from sqlalchemy import text
 from app.database import SessionLocal, init_db, engine
 from app.handlers_main import (
@@ -189,6 +190,7 @@ async def main():
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=None))
     await start_health_server(bot)
     recovery_task = asyncio.create_task(payment_recovery_loop(bot))
+    proxy_balance_task = asyncio.create_task(proxy_balance_monitor_loop(bot))
 
     try:
         me = await bot.me()
@@ -221,7 +223,8 @@ async def main():
         )
     finally:
         recovery_task.cancel()
-        await asyncio.gather(recovery_task, return_exceptions=True)
+        proxy_balance_task.cancel()
+        await asyncio.gather(recovery_task, proxy_balance_task, return_exceptions=True)
         await close_crypto_client()
         await release_single_instance_lock()
         await bot.session.close()

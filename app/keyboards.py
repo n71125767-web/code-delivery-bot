@@ -26,13 +26,12 @@ def _short_button_text(value: str | None, limit: int = 24) -> str:
 def supplier_reply_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="👤 Мой профиль")],
-            [KeyboardButton(text="🚚 Панель поставщика")],
-            [KeyboardButton(text="⏳ Заявки в ожидании")],
+            [KeyboardButton(text="🚚 Панель поставщика"), KeyboardButton(text="⏳ Заявки в ожидании")],
+            [KeyboardButton(text="👤 Мой профиль"), KeyboardButton(text="🏠 Главное меню")],
         ],
         resize_keyboard=True,
         one_time_keyboard=False,
-        input_field_placeholder="Откройте профиль, панель или отправьте номер/код",
+        input_field_placeholder="Панель поставщика",
     )
 
 
@@ -46,13 +45,13 @@ def _short_admin_button_text(value: str | None, limit: int = 28) -> str:
 def buyer_reply_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="👤 Мой профиль")],
-            [KeyboardButton(text="📦 Мои заказы")],
-            [KeyboardButton(text="🆘 Помощь")],
+            [KeyboardButton(text="🛒 Товары"), KeyboardButton(text="🛍 Корзина")],
+            [KeyboardButton(text="📱 Номера"), KeyboardButton(text="🌐 Прокси")],
+            [KeyboardButton(text="💼 Кошелёк"), KeyboardButton(text="🧾 Мои заказы")],
         ],
         resize_keyboard=True,
         one_time_keyboard=False,
-        input_field_placeholder="Выберите действие",
+        input_field_placeholder="Главное меню",
     )
 
 
@@ -79,7 +78,7 @@ def confirm_keyboard(order_id: int):
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ › Всё успешно", callback_data=f"confirm_success:{order_id}")
     kb.button(text="⚠️ › Код не работает", callback_data=f"code_invalid:{order_id}")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -87,7 +86,7 @@ def number_keyboard(order_id: int):
     kb = InlineKeyboardBuilder()
     kb.button(text="📩 › Код отправлен", callback_data=f"code_sent:{order_id}")
     kb.button(text="⚠️ › Номер не работает", callback_data=f"number_invalid:{order_id}")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -109,7 +108,7 @@ def service_keyboard_from_services(
         kb.button(
             text="➡️ › Дальше", callback_data=f"svcpage:{order_id or 0}:{page + 1}"
         )
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -118,7 +117,7 @@ def service_keyboard(order_id: int | None = None) -> InlineKeyboardMarkup:
     kb.button(
         text="🧩 › Открыть список сервисов", callback_data=f"svcpage:{order_id or 0}:0"
     )
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -129,14 +128,14 @@ def service_confirm_keyboard(order_id: int, service_slug: str) -> InlineKeyboard
         callback_data=f"service_confirm:{order_id}:{service_slug}",
     )
     kb.button(text="🔄 › Выбрать другой", callback_data=f"svcpage:{order_id}:0")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
 def admin_back_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="🏠 › Главное меню", callback_data="admin:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -149,7 +148,7 @@ def admin_suppliers_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="🔓 Забрать доступ", callback_data="admin:unbind_supplier")
     kb.button(text="🗑 Удалить партнёра", callback_data="admin:remove_supplier")
     kb.button(text="⬅️ Назад", callback_data="admin:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -159,7 +158,7 @@ def admin_suppliers_cancel_keyboard() -> InlineKeyboardMarkup:
         text="❌ › Отмена",
         callback_data="admin:supplier_action_cancel",
     )
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -170,7 +169,7 @@ def admin_services_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="🗑 › Удалить сервис", callback_data="admin:remove_service_help")
     kb.button(text="🔥 › Эмодзи сервиса", callback_data="admin:service_emoji_help")
     kb.button(text="🏠 › Главное меню", callback_data="admin:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -182,7 +181,7 @@ def admin_lists_keyboard() -> InlineKeyboardMarkup:
         text="➕ › Добавить сервис в лист", callback_data="admin:list_add_service_help"
     )
     kb.button(text="🏠 › Главное меню", callback_data="admin:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -191,7 +190,7 @@ def admin_texts_menu_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="📋 › Список текстов", callback_data="admin:texts_list")
     kb.button(text="✏️ › Изменить текст", callback_data="admin:set_text_help")
     kb.button(text="🏠 › Главное меню", callback_data="admin:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -213,7 +212,7 @@ def admin_text_keys_keyboard() -> InlineKeyboardMarkup:
         text="⚠️ › Проблема отправлена", callback_data="admin:edit_text:problem_sent"
     )
     kb.button(text="🏠 › Главное меню", callback_data="admin:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -222,7 +221,7 @@ def admin_settings_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="📖 › Команды", callback_data="admin:commands")
     kb.button(text="🔄 › Обновить", callback_data="admin:panel")
     kb.button(text="🏠 › Главное меню", callback_data="admin:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -230,7 +229,7 @@ def admin_profile_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="👤 › Мой профиль", callback_data="admin:profile")
     kb.button(text="🏠 › Главное меню", callback_data="admin:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -240,7 +239,7 @@ def admin_admins_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="➕ › Добавить админа", callback_data="admin:add_admin_prompt")
     kb.button(text="➖ › Удалить админа", callback_data="admin:remove_admin_list")
     kb.button(text="🏠 › Главное меню", callback_data="admin:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -269,7 +268,7 @@ def admin_remove_admin_keyboard(
         kb.button(text="📭 › Доп. админов нет", callback_data="admin:noop")
     kb.button(text="⬅️ › Назад к админам", callback_data="admin:admins")
     kb.button(text="🏠 › Главное меню", callback_data="admin:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -277,7 +276,7 @@ def admin_add_admin_cancel_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="❌ › Отмена", callback_data="admin:add_admin_cancel")
     kb.button(text="⬅️ › Назад к админам", callback_data="admin:admins")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -298,7 +297,7 @@ def admin_orders_keyboard(
         label = f"{status_icon} › #{order.operation_id} — {_short_admin_button_text(order.service_name or order.product_name)}"
         kb.button(text=label, callback_data=f"admin:order:{order.id}")
     kb.button(text="⬅️ › Назад", callback_data=back_callback)
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -325,7 +324,7 @@ def admin_order_card_keyboard(order_id: int) -> InlineKeyboardMarkup:
     )
     kb.button(text="⬅️ › К проблемам", callback_data="admin:problems")
     kb.button(text="🏠 › Главное меню", callback_data="admin:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -334,7 +333,7 @@ def buyer_back_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="📦 › Активный заказ", callback_data="buyer:active")
     kb.button(text="🧾 › Мои заказы", callback_data="buyer:orders")
     kb.button(text="🏠 › Главное меню", callback_data="buyer:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -357,7 +356,7 @@ def buyer_orders_list_keyboard(orders) -> InlineKeyboardMarkup:
         kb.button(text=label, callback_data=f"buyer:order:{order.id}")
     kb.button(text="📦 › Активный заказ", callback_data="buyer:active")
     kb.button(text="🏠 › Главное меню", callback_data="buyer:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -365,7 +364,7 @@ def buyer_empty_section_keyboard(back_to: str = "buyer:panel") -> InlineKeyboard
     kb = InlineKeyboardBuilder()
     kb.button(text="⬅️ › Назад", callback_data=back_to)
     kb.button(text="🏠 › Главное меню", callback_data="buyer:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -382,7 +381,7 @@ def supplier_inline_menu_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="👤 › Мой профиль", callback_data="supplier:profile")
     kb.button(text="📖 › Команды", callback_data="supplier:commands")
     kb.button(text="🔄 › Обновить", callback_data="supplier:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -393,7 +392,7 @@ def supplier_requests_menu_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="🔑 › Ждут код", callback_data="supplier:filter:code:0")
     kb.button(text="📊 › Все активные", callback_data="supplier:filter:active:0")
     kb.button(text="🏠 › Главное меню", callback_data="supplier:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -403,7 +402,7 @@ def supplier_commands_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="⏳ › Ожидающие", callback_data="supplier:pending:0")
     kb.button(text="📊 › Все активные", callback_data="supplier:filter:active:0")
     kb.button(text="🏠 › Главное меню", callback_data="supplier:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -425,7 +424,7 @@ def supplier_filter_keyboard(
     )
     kb.button(text="📋 › К разделу заявок", callback_data="supplier:requests")
     kb.button(text="🏠 › Главное меню", callback_data="supplier:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -446,7 +445,7 @@ def supplier_orders_keyboard(
     kb.button(text="🔄 › Обновить", callback_data=f"supplier:pending:{page}")
     kb.button(text="📋 › К разделу заявок", callback_data="supplier:requests")
     kb.button(text="🏠 › Главное меню", callback_data="supplier:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -481,7 +480,7 @@ def supplier_section_orders_keyboard(
     )
     kb.button(text="📋 › К разделу заявок", callback_data="supplier:requests")
     kb.button(text="🏠 › Главное меню", callback_data="supplier:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -494,7 +493,7 @@ def supplier_wait_confirm_keyboard(
     )
     kb.button(text="📋 › К разделу заявок", callback_data="supplier:requests")
     kb.button(text="🏠 › Главное меню", callback_data="supplier:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -502,7 +501,7 @@ def supplier_empty_section_keyboard(mode: str = "active") -> InlineKeyboardMarku
     kb = InlineKeyboardBuilder()
     kb.button(text="📋 › К разделу заявок", callback_data="supplier:requests")
     kb.button(text="🏠 › Главное меню", callback_data="supplier:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -522,7 +521,7 @@ def supplier_request_actions_keyboard(
         )
     kb.button(text="📋 › Все заявки", callback_data="supplier:pending:0")
     kb.button(text="🏠 › Главное меню", callback_data="supplier:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -548,7 +547,7 @@ def admin_proxy_countries_keyboard(
             callback_data=f"admin:proxy:country:{code}",
         )
     kb.button(text="⬅️ › К настройкам прокси", callback_data="admin:proxy")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -585,7 +584,7 @@ def buyer_proxy_country_keyboard(
             callback_data=f"proxy:country:{order_id}:{code}",
         )
     kb.button(text="🏠 › Главное меню", callback_data="buyer:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -618,7 +617,7 @@ def buyer_proxy_confirm_keyboard(order_id: int) -> InlineKeyboardMarkup:
         callback_data=f"proxy:back_period:{order_id}",
     )
     kb.button(text="🏠 › Главное меню", callback_data="buyer:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -657,7 +656,7 @@ def buyer_active_order_keyboard(
         kb.button(text="⚠️ › Код не работает", callback_data=f"code_invalid:{order_id}")
     kb.button(text="🧾 › Мои заказы", callback_data="buyer:orders")
     kb.button(text="🏠 › Главное меню", callback_data="buyer:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -694,7 +693,7 @@ def buyer_order_card_keyboard(
         kb.button(text="⚠️ › Код не работает", callback_data=f"code_invalid:{order_id}")
     kb.button(text="⬅️ › К заказам", callback_data="buyer:orders")
     kb.button(text="🏠 › Главное меню", callback_data="buyer:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -706,7 +705,7 @@ def admin_proxy_products_keyboard() -> InlineKeyboardMarkup:
     )
     kb.button(text="🔄 › Обновить список", callback_data="admin:proxy:products")
     kb.button(text="⬅️ › К настройкам прокси", callback_data="admin:proxy")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -752,7 +751,7 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="▫️ Админы", callback_data="admin:admins")
     kb.button(text="▫️ Проблемы", callback_data="admin:problems")
     kb.button(text="▫️ Настройки", callback_data="admin:store_settings")
-    kb.button(text="▫️ Прокси-настройки", callback_data="admin:proxy")
+    kb.button(text="🌐 Прокси", callback_data="admin:proxy")
     kb.button(text="▫️ Скрытые", callback_data="admin:hidden")
     kb.button(text="🏠 Главная", callback_data="buyer:panel")
     kb.adjust(2, 2, 2, 2, 1)
@@ -799,7 +798,7 @@ def buyer_back_to_panel_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="⬅️ Назад", callback_data="buyer:shop")
     kb.button(text="🏠 Главная", callback_data="buyer:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -848,7 +847,7 @@ def admin_category_select_keyboard(categories) -> InlineKeyboardMarkup:
     kb.button(
         text="❌ Отмена", callback_data="admin:shop:wizard_cancel"
     )
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -862,7 +861,7 @@ def confirm_delete_product_keyboard(product_id: int) -> InlineKeyboardMarkup:
         text="⬅️ Отмена",
         callback_data=f"admin:shop:product:{product_id}",
     )
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -876,7 +875,7 @@ def confirm_delete_category_keyboard(category_id: int) -> InlineKeyboardMarkup:
         text="⬅️ Отмена",
         callback_data=f"admin:shop:category:{category_id}",
     )
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -893,18 +892,17 @@ def supplier_selected_request_keyboard(
         callback_data=f"supplier:cancel_selection:{request_id}",
     )
     kb.button(text="⬅️ К заявкам", callback_data="supplier:pending:0")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 # V50 final UI overrides: role-separated reply panels, cleaner categories, no auto-emojis.
 def admin_main_reply_keyboard() -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text="💰 Управление товарами")],
-        [KeyboardButton(text="💵 Способы оплаты"), KeyboardButton(text="📊 Статистика")],
-        [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="📢 Рассылка")],
-        [KeyboardButton(text="🤝 Партнёры"), KeyboardButton(text="🌐 Прокси")],
-        [KeyboardButton(text="👥 Админы"), KeyboardButton(text="👁 Скрытые")],
-        [KeyboardButton(text="🔙 Главное меню")],
+        [KeyboardButton(text="💰 Управление товарами"), KeyboardButton(text="💵 Способы оплаты")],
+        [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="⚙️ Настройки")],
+        [KeyboardButton(text="📢 Рассылка"), KeyboardButton(text="🤝 Партнёры")],
+        [KeyboardButton(text="🌐 Прокси"), KeyboardButton(text="👥 Админы")],
+        [KeyboardButton(text="👁 Скрытые"), KeyboardButton(text="🔙 Главное меню")],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=False, input_field_placeholder="⚙️ Админ меню", selective=True)
 
@@ -921,7 +919,7 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="🌐 Прокси", callback_data="admin:proxy")
     kb.button(text="👁 Скрытые", callback_data="admin:hidden")
     kb.button(text="🔙 Главное меню", callback_data="buyer:panel")
-    kb.adjust(1, 2, 2, 2, 2, 1)
+    kb.adjust(2, 2, 2, 2, 2)
     return kb.as_markup()
 
 
@@ -932,7 +930,7 @@ def admin_hidden_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="👥 Права админов", callback_data="admin:caps")
     kb.button(text="🧹 Очистка удалённых товаров", callback_data="admin:cleanup:deleted_products")
     kb.button(text="🔙 Назад", callback_data="admin:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -992,10 +990,13 @@ def buyer_main_reply_keyboard(is_admin: bool = False, is_supplier: bool = False)
         [KeyboardButton(text="💼 Кошелёк"), KeyboardButton(text="🧾 Мои заказы")],
         [KeyboardButton(text="🤝 Стать партнёром"), KeyboardButton(text="📕 FAQ")],
     ]
+    role_row = []
     if is_supplier:
-        rows.append([KeyboardButton(text="🚚 Поставщик")])
+        role_row.append(KeyboardButton(text="🚚 Поставщик"))
     if is_admin:
-        rows.append([KeyboardButton(text="⚙️ Админ меню")])
+        role_row.append(KeyboardButton(text="⚙️ Админ меню"))
+    if role_row:
+        rows.append(role_row)
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=False, input_field_placeholder="Главное меню", selective=True)
 
 
@@ -1005,5 +1006,12 @@ def payments_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="💼 Баланс магазина", callback_data="admin:payments:wallet")
     kb.button(text="🔄 Обновить", callback_data="admin:payments")
     kb.button(text="🔙 Назад", callback_data="admin:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
+
+
+# FIX_MARKER_V61_PROXY_ADMIN_SPLIT
+def admin_proxy_settings_keyboard(settings) -> InlineKeyboardMarkup:
+    from app.proxy_admin_v61 import proxy_admin_keyboard
+    return proxy_admin_keyboard()
+

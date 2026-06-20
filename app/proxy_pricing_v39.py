@@ -11,6 +11,18 @@ from app.services import get_text, set_text
 # Значение можно переопределить через Render env PROXY_MARKUP_MULTIPLIER или командой /proxy_markup.
 DEFAULT_PROXY_MARKUP_MULTIPLIER = os.getenv("PROXY_MARKUP_MULTIPLIER", "1.77").strip() or "1.77"
 PROXY_MARKUP_TEXT_KEY = "proxy_markup_multiplier"
+PROXY_KIND_MARKUP_KEYS = {
+    "mtproxy": "proxy_markup_multiplier_mtproxy",
+    "premium": "proxy_markup_multiplier_premium",
+    "standard": "proxy_markup_multiplier_standard",
+    "residential": "proxy_markup_multiplier_residential",
+}
+PROXY_KIND_LABELS = {
+    "mtproxy": "MTProxy",
+    "premium": "Premium",
+    "standard": "Standard",
+    "residential": "Residential",
+}
 
 
 def _to_decimal(value: object, fallback: str = "1.77") -> Decimal:
@@ -30,6 +42,30 @@ def money(value: Decimal) -> Decimal:
 async def get_proxy_markup_multiplier(session: AsyncSession) -> Decimal:
     raw = await get_text(session, PROXY_MARKUP_TEXT_KEY, DEFAULT_PROXY_MARKUP_MULTIPLIER)
     return _to_decimal(raw, DEFAULT_PROXY_MARKUP_MULTIPLIER)
+
+
+async def get_proxy_markup_multiplier_for_category(session: AsyncSession, category_key: str | None = None) -> Decimal:
+    category_key = (category_key or "").strip().lower()
+    key = PROXY_KIND_MARKUP_KEYS.get(category_key)
+    if not key:
+        return await get_proxy_markup_multiplier(session)
+    fallback = str(await get_proxy_markup_multiplier(session))
+    raw = await get_text(session, key, fallback)
+    return _to_decimal(raw, fallback)
+
+
+async def set_proxy_markup_multiplier_for_category(session: AsyncSession, category_key: str, value: object) -> Decimal:
+    category_key = (category_key or "").strip().lower()
+    key = PROXY_KIND_MARKUP_KEYS.get(category_key)
+    if not key:
+        return await set_proxy_markup_multiplier(session, value)
+    multiplier = _to_decimal(value, DEFAULT_PROXY_MARKUP_MULTIPLIER)
+    if multiplier < Decimal("1"):
+        raise ValueError("Наценка должна быть не меньше 1.00")
+    if multiplier > Decimal("20"):
+        raise ValueError("Слишком большая наценка. Максимум 20.00")
+    await set_text(session, key, str(multiplier.normalize()))
+    return multiplier
 
 
 async def set_proxy_markup_multiplier(session: AsyncSession, value: object) -> Decimal:

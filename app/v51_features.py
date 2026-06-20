@@ -6,7 +6,7 @@ from typing import Iterable
 
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -20,6 +20,9 @@ from app.models import (
     TextTemplate,
     UserWallet,
     CartItem,
+    MarketplaceApplication,
+    PromoCode,
+    WalletPayment,
 )
 from app.database import SessionLocal
 
@@ -115,36 +118,98 @@ async def buyer_orders_page(user_id: int, username: str | None, page: int = 0):
     if page < max_page:
         kb.button(text="➡️ Вперёд", callback_data=f"buyer:orders_page:{page + 1}")
     kb.button(text="🏠 Главная", callback_data="buyer:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return text, kb.as_markup()
 
 
 async def hard_delete_product(session: AsyncSession, product_id: int) -> bool:
+    """Hard-delete a product safely even when old marketplace/history rows reference it.
+
+    The previous ORM-only cleanup could miss legacy FK rows on PostgreSQL.
+    This version first detaches every known product reference with direct SQL,
+    then deletes dependent non-history rows, and only after that deletes the product.
+    """
     product = await session.get(ShopProduct, product_id)
     if not product:
         return False
 
-    providers = list((await session.scalars(select(ProductProvider).where(ProductProvider.internal_key == product.internal_key))).all())
-    for row in providers:
-        await session.delete(row)
+    internal_key = product.internal_key
+    pid = int(product_id)
 
-    carts = list((await session.scalars(select(CartItem).where(CartItem.product_id == product_id))).all())
-    for row in carts:
-        await session.delete(row)
+    # History tables: keep the history, detach the catalog product.
+    known_update_refs = (
+        "marketplace_applications",
+        "promo_codes",
+        "wallet_payments",
+        "digital_purchases",
+    )
+    for table_name in known_update_refs:
+        try:
+            if table_name == "digital_purchases":
+                await session.execute(
+                    text("UPDATE digital_purchases SET product_id = NULL, stock_item_id = NULL WHERE product_id = :pid"),
+                    {"pid": pid},
+                )
+            else:
+                await session.execute(
+                    text(f"UPDATE {table_name} SET product_id = NULL WHERE product_id = :pid"),
+                    {"pid": pid},
+                )
+        except Exception:
+            # If a legacy installation does not have this table/column, continue and let
+            # the final DELETE expose any real remaining constraint.
+            pass
 
-    # Сохраняем историю покупок, но отвязываем её от удаляемого товара и складской позиции.
-    # В V52 product_id у digital_purchases переводится в nullable миграцией.
-    purchases = list((await session.scalars(select(DigitalPurchase).where(DigitalPurchase.product_id == product_id))).all())
-    for row in purchases:
-        row.product_id = None
-        row.stock_item_id = None
+    # Non-history tables: remove rows owned by this product.
+    for sql in (
+        "DELETE FROM cart_items WHERE product_id = :pid",
+        "DELETE FROM product_stock_items WHERE product_id = :pid",
+    ):
+        try:
+            await session.execute(text(sql), {"pid": pid})
+        except Exception:
+            pass
 
-    stock = list((await session.scalars(select(ProductStockItem).where(ProductStockItem.product_id == product_id))).all())
-    for row in stock:
-        await session.delete(row)
+    if internal_key is not None:
+        try:
+            await session.execute(text("DELETE FROM product_providers WHERE internal_key = :ikey"), {"ikey": internal_key})
+        except Exception:
+            pass
 
-    await session.flush()
-    await session.delete(product)
+    # Extra safety for future tables: in PostgreSQL discover any FK column that still
+    # references shop_products and try to NULL it before deleting.
+    try:
+        bind = session.get_bind()
+        dialect = getattr(getattr(bind, "dialect", None), "name", "")
+    except Exception:
+        dialect = ""
+    if dialect == "postgresql":
+        try:
+            rows = (await session.execute(text("""
+                SELECT tc.table_name, kcu.column_name
+                FROM information_schema.table_constraints AS tc
+                JOIN information_schema.key_column_usage AS kcu
+                  ON tc.constraint_name = kcu.constraint_name
+                 AND tc.table_schema = kcu.table_schema
+                JOIN information_schema.constraint_column_usage AS ccu
+                  ON ccu.constraint_name = tc.constraint_name
+                 AND ccu.table_schema = tc.table_schema
+                WHERE tc.constraint_type = 'FOREIGN KEY'
+                  AND ccu.table_name = 'shop_products'
+                  AND ccu.column_name = 'id'
+                  AND tc.table_schema = 'public'
+            """))).all()
+            for table_name, column_name in rows:
+                if not str(table_name).replace("_", "").isalnum() or not str(column_name).replace("_", "").isalnum():
+                    continue
+                if table_name in {"cart_items", "product_stock_items"}:
+                    await session.execute(text(f"DELETE FROM {table_name} WHERE {column_name} = :pid"), {"pid": pid})
+                else:
+                    await session.execute(text(f"UPDATE {table_name} SET {column_name} = NULL WHERE {column_name} = :pid"), {"pid": pid})
+        except Exception:
+            pass
+
+    await session.execute(text("DELETE FROM shop_products WHERE id = :pid"), {"pid": pid})
     await session.commit()
     return True
 
@@ -199,7 +264,7 @@ def admin_capabilities_keyboard(admins) -> InlineKeyboardMarkup:
         kb.button(text=f"👤 {admin.telegram_id} · {_safe_name(admin.name, 'админ')}", callback_data=f"admin:caps:user:{admin.telegram_id}")
     kb.button(text="➕ Добавить админа", callback_data="admin:add_admin_prompt")
     kb.button(text="⬅️ Назад", callback_data="admin:admins")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 

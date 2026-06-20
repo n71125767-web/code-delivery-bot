@@ -90,7 +90,7 @@ def wallet_keyboard(is_supplier: bool = False) -> InlineKeyboardMarkup:
     if is_supplier:
         kb.button(text="↗️ Вывести", callback_data="supplier:withdraw_help")
     kb.button(text="🏠 Главная", callback_data="buyer:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -100,7 +100,7 @@ def supplier_wallet_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="💼 Баланс", callback_data="supplier:wallet")
     kb.button(text="↗️ Вывод", callback_data="supplier:withdraw_help")
     kb.button(text="🏠 Режим покупателя", callback_data="buyer:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 

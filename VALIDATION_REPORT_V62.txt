@@ -1,0 +1,12 @@
+V62 validation
+
+Checks performed:
+- python -m compileall -q app: OK
+- scanned direct product delete paths: only app.v51_features.hard_delete_product now deletes from shop_products
+- shop_admin_v20.delete_product now delegates to hard_delete_product
+- proxy admin buttons unified with buyer proxy labels
+- proxy text edit flow added through buttons
+
+Notes:
+- Full Telegram runtime/API tests were not executed in this offline environment.
+- Animated custom emoji cannot be used as proper animated entities inside Telegram keyboard button text; only ordinary Unicode emoji can be used in buttons.

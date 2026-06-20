@@ -73,7 +73,7 @@ def marketplace_moderation_keyboard(application_id: int) -> InlineKeyboardMarkup
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Подтвердить", callback_data=f"market:approve:{application_id}")
     kb.button(text="❌ Отклонить", callback_data=f"market:reject:{application_id}")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -82,7 +82,7 @@ def wallet_payment_keyboard(payment_id: int) -> InlineKeyboardMarkup:
     kb.button(text="🔄 Проверить оплату", callback_data=f"wallet:check:{payment_id}")
     kb.button(text="🧾 Мои заказы", callback_data="buyer:orders")
     kb.button(text="🏠 Главное меню", callback_data="buyer:panel")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -365,7 +365,7 @@ PROXY_AUTOFIX_PRODUCTS = [
     ("mtproxy", "🔑 MTProxy • [1 мес.]", "Автоматическая выдача Telegram-прокси", "proxyline", PROXYLINE_MTPROXY_API_TYPE),
     ("premium", "🪐 Прокси [1 мес.]", "Премиум-прокси с автовыдачей", "proxyline", "dedicated"),
     ("standard", "🎲 Прокси [1 мес.]", "Стандартные прокси с автовыдачей", "proxys", "shared"),
-    ("residential", "🎲 Прокси [1 мес.]", "Резидентские прокси с автовыдачей", "proxys", "residential"),
+    ("residential", "🏠 Резидентские прокси [1 мес.]", "Резидентские прокси с автовыдачей", "proxys", "residential"),
 ]
 
 

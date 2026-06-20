@@ -138,6 +138,12 @@ PROXYS_IO_SERVICE_ID = int(os.getenv("PROXYS_IO_SERVICE_ID", "1"))
 PROXYS_IO_PROXY_POOL_ID = os.getenv("PROXYS_IO_PROXY_POOL_ID", "S1").strip()
 PROXYS_IO_USE_NEW_USER = os.getenv("PROXYS_IO_USE_NEW_USER", "0").strip() == "1"
 
+# Proxy provider balance monitoring. Values are treated as USD-compatible balance
+# amounts unless provider returns another currency in the payload.
+PROXY_BALANCE_WARN_USD = float(os.getenv("PROXY_BALANCE_WARN_USD", "10"))
+PROXY_BALANCE_CRITICAL_USD = float(os.getenv("PROXY_BALANCE_CRITICAL_USD", "5"))
+PROXY_BALANCE_CHECK_INTERVAL_SECONDS = int(os.getenv("PROXY_BALANCE_CHECK_INTERVAL_SECONDS", "1800"))
+
 
 # Crypto Pay / @CryptoBot
 CRYPTO_PAY_TOKEN = os.getenv("CRYPTO_PAY_TOKEN", "").strip()
