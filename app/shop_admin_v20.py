@@ -489,6 +489,7 @@ async def product_admin_text(session, product) -> str:
 def admin_product_keyboard(product) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="🎁 Выдать товар", callback_data=f"v25:give:{product.id}")
+    kb.button(text="🚚 Поставщик", callback_data=f"admin:shop:product_supplier:{product.id}")
     kb.button(text="✏️ Изменить товар", callback_data=f"v25:advanced:{product.id}")
     kb.button(text="👁 Показать товар", callback_data=f"v25:preview:{product.id}")
     kb.button(text="📝 Название", callback_data=f"admin:shop:product_name:{product.id}")

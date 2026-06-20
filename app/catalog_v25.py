@@ -431,6 +431,7 @@ def product_card_text(product: ShopProduct, stock_count: int = 0) -> str:
 def product_card_keyboard(product: ShopProduct) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="🎁 Выдать товар", callback_data=f"v25:give:{product.id}")
+    kb.button(text="🚚 Поставщик", callback_data=f"admin:shop:product_supplier:{product.id}")
     kb.button(text="✏️ Изменить товар", callback_data=f"v25:advanced:{product.id}")
     kb.button(text="👁 Показать товар", callback_data=f"v25:preview:{product.id}")
     kb.button(text="📝 Название", callback_data=f"v25:edit_name:{product.id}")
@@ -661,6 +662,7 @@ def product_card_keyboard(product: ShopProduct) -> InlineKeyboardMarkup:
         return kb.as_markup()
 
     kb.button(text="🎁 Выдать товар", callback_data=f"v25:give:{product.id}")
+    kb.button(text="🚚 Поставщик", callback_data=f"admin:shop:product_supplier:{product.id}")
     kb.button(text="✏️ Изменить товар", callback_data=f"v25:advanced:{product.id}")
     kb.button(text="👁 Показать товар", callback_data=f"v25:preview:{product.id}")
     kb.button(text="📝 Название", callback_data=f"v25:edit_name:{product.id}")

@@ -1065,9 +1065,12 @@ async def approve_marketplace_application(bot: Bot, app_id: int, moderator_id: i
         session.add(product)
         await session.flush()
         supplier = await _ensure_supplier_from_application(session, app)
-        existing_link = await session.scalar(select(SupplierProduct).where(SupplierProduct.supplier_telegram_id == supplier.telegram_id, SupplierProduct.product_key == str(product.internal_key)))
-        if existing_link is None:
-            session.add(SupplierProduct(supplier_telegram_id=supplier.telegram_id, product_key=str(product.internal_key)))
+        # Привязываем поставщика и по ID товара, и по legacy internal_key.
+        # Заказы ищут поставщика по product_id, а старые блоки — по internal_key.
+        for product_key in {str(product.id), str(product.internal_key)}:
+            existing_link = await session.scalar(select(SupplierProduct).where(SupplierProduct.supplier_telegram_id == supplier.telegram_id, SupplierProduct.product_key == product_key))
+            if existing_link is None:
+                session.add(SupplierProduct(supplier_telegram_id=supplier.telegram_id, product_key=product_key))
         session.add(ProductProvider(internal_key=product.internal_key, product_name=product.name, provider_type="supplier", provider_key=str(supplier.telegram_id), enabled=True))
         app.status = "approved"
         app.moderator_id = moderator_id

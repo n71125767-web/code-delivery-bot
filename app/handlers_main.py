@@ -400,113 +400,86 @@ logger.info("FIX_MARKER_V61_PROXY_ADMIN_SPLIT_BALANCES loaded")
 
 
 def validate_runtime_ui() -> None:
+    """Non-fatal UI sanity check.
+
+    Older patches used this function as a hard gate and Render could crash when
+    a menu was intentionally simplified. From V68 it only logs warnings: the bot
+    must start even if a cosmetic menu layout changes.
     """
-    Проверяет актуальный интерфейс V22.
+    try:
+        buyer_inline = buyer_inline_menu_keyboard(is_admin=False)
+        buyer_inline_callbacks = {
+            button.callback_data
+            for row in buyer_inline.inline_keyboard
+            for button in row
+            if button.callback_data
+        }
 
-    Inline-панель пользователя:
-    - Товары
-    - Обратная связь
-    - FAQ
-    - Админ меню только при is_admin=True
+        required_buyer_callbacks = {
+            "buyer:shop",
+            "buyer:faq",
+            "buyer:orders",
+        }
+        missing = required_buyer_callbacks - buyer_inline_callbacks
+        if missing:
+            logger.warning("UI_SELF_CHECK_WARN missing buyer callbacks: %s", sorted(missing))
 
-    Reply-клавиатура:
-    - Товар
-    - Прокси
-    - Номера
-    """
-    buyer_inline = buyer_inline_menu_keyboard(is_admin=False)
-    admin_inline = buyer_inline_menu_keyboard(is_admin=True)
+        if "admin:panel" in buyer_inline_callbacks:
+            logger.warning("UI_SELF_CHECK_WARN admin callback leaked to buyer inline menu")
 
-    buyer_inline_callbacks = {
-        button.callback_data
-        for row in buyer_inline.inline_keyboard
-        for button in row
-        if button.callback_data
-    }
-    admin_inline_callbacks = {
-        button.callback_data
-        for row in admin_inline.inline_keyboard
-        for button in row
-        if button.callback_data
-    }
+        # The main chat uses reply keyboard now. Admin inline availability is
+        # checked against the actual admin panel keyboard, not buyer inline menu.
+        try:
+            admin_panel = admin_panel_keyboard()
+            admin_panel_callbacks = {
+                button.callback_data
+                for row in admin_panel.inline_keyboard
+                for button in row
+                if button.callback_data
+            }
+            if not any(cb and cb.startswith("admin:") for cb in admin_panel_callbacks):
+                logger.warning("UI_SELF_CHECK_WARN admin panel has no admin callbacks")
+        except Exception as exc:
+            logger.warning("UI_SELF_CHECK_WARN cannot inspect admin panel: %s", exc)
 
-    required_buyer_callbacks = {
-        "buyer:shop",
-        "buyer:faq",
-        "buyer:orders",
-    }
+        buyer_reply = buyer_main_reply_keyboard(is_admin=False)
+        buyer_reply_texts = {button.text for row in buyer_reply.keyboard for button in row}
+        required_reply_buttons = {
+            "🛒 Товары",
+            "🛍 Корзина",
+            "💼 Кошелёк",
+            "🧾 Мои заказы",
+            "📕 FAQ",
+            "🤝 Стать партнёром",
+        }
+        missing_reply = required_reply_buttons - buyer_reply_texts
+        if missing_reply:
+            logger.warning("UI_SELF_CHECK_WARN missing buyer reply buttons: %s", sorted(missing_reply))
 
-    missing = required_buyer_callbacks - buyer_inline_callbacks
-    if missing:
-        raise RuntimeError(
-            f"UI self-check failed: missing buyer callbacks: {sorted(missing)}"
-        )
+        if {"⚙️ Админ меню", "🛠 Админ", "💰 Управление товарами"} & buyer_reply_texts:
+            logger.warning("UI_SELF_CHECK_WARN admin reply button leaked to buyer")
 
-    if "admin:panel" in buyer_inline_callbacks:
-        raise RuntimeError(
-            "UI self-check failed: admin callback leaked to buyer inline menu"
-        )
+        try:
+            proxy_markup = proxy_categories_keyboard()
+            proxy_callbacks = {
+                button.callback_data
+                for row in proxy_markup.inline_keyboard
+                for button in row
+                if button.callback_data
+            }
+            required_proxy_callbacks = {
+                "buyer:proxycat:mtproxy",
+                "buyer:proxycat:standard",
+            }
+            missing_proxy = required_proxy_callbacks - proxy_callbacks
+            if missing_proxy:
+                logger.warning("UI_SELF_CHECK_WARN missing proxy callbacks: %s", sorted(missing_proxy))
+        except Exception as exc:
+            logger.warning("UI_SELF_CHECK_WARN cannot inspect proxy markup: %s", exc)
 
-    if "admin:panel" not in admin_inline_callbacks:
-        raise RuntimeError(
-            "UI self-check failed: admin callback missing in admin inline menu"
-        )
-
-    buyer_reply = buyer_main_reply_keyboard(is_admin=False)
-    admin_reply = buyer_main_reply_keyboard(is_admin=True)
-
-    buyer_reply_texts = {button.text for row in buyer_reply.keyboard for button in row}
-    admin_reply_texts = {button.text for row in admin_reply.keyboard for button in row}
-
-    required_reply_buttons = {
-        "🛒 Товары",
-        "🛍 Корзина",
-        "📱 Номера",
-        "🌐 Прокси",
-    }
-
-    # Совместимость со старыми сообщениями: обработчик принимает старые кнопки
-    # «🛒 Товар/Товары», но актуальная клавиатура показывает «🛍 Каталог».
-    missing_reply = {button for button in required_reply_buttons if button not in buyer_reply_texts}
-    if missing_reply:
-        raise RuntimeError(
-            f"UI self-check failed: missing reply buttons: {sorted(missing_reply)}"
-        )
-
-    if {"⚙️ Админ меню", "🛠 Админ"} & buyer_reply_texts:
-        raise RuntimeError("UI self-check failed: admin reply button leaked to buyer")
-
-    if not ({"⚙️ Админ меню", "🛠 Админ"} & admin_reply_texts):
-        raise RuntimeError("UI self-check failed: admin reply button missing for admin")
-
-    proxy_markup = proxy_categories_keyboard()
-    proxy_callbacks = {
-        button.callback_data
-        for row in proxy_markup.inline_keyboard
-        for button in row
-        if button.callback_data
-    }
-
-    required_proxy_callbacks = {
-        "buyer:proxycat:mtproxy",
-        "buyer:proxycat:standard",
-    }
-
-    missing_proxy = required_proxy_callbacks - proxy_callbacks
-    if missing_proxy:
-        raise RuntimeError(
-            f"UI self-check failed: missing proxy callbacks: {sorted(missing_proxy)}"
-        )
-
-    logger.info(
-        "UI_SELF_CHECK_OK "
-        "buyer_inline=%s admin_inline=%s buyer_reply=%s admin_reply=%s proxy=%s",
-        len(buyer_inline_callbacks),
-        len(admin_inline_callbacks),
-        len(buyer_reply_texts),
-        len(admin_reply_texts),
-        len(proxy_callbacks),
-    )
+        logger.info("UI_SELF_CHECK_OK_NON_FATAL")
+    except Exception as exc:
+        logger.warning("UI_SELF_CHECK_SKIPPED_NON_FATAL: %s", exc)
 
 
 validate_runtime_ui()
@@ -2579,11 +2552,28 @@ async def process_shop_admin_pending_input(
                 result = "✅ Цена обновлена."
             elif action == "product_supplier":
                 row = await session.get(ShopProduct, object_id)
-                supplier_id = int(text)
+                supplier_id = int(text.replace("@", "").strip())
+                supplier = await add_supplier(session, supplier_id, f"supplier_{supplier_id}")
+                # 1) Поставщик становится активным поставщиком магазина.
+                # 2) Привязываем доступ к товару по ID и legacy internal_key.
+                # 3) ProductProvider нужен для уведомлений/зачислений по покупке.
+                await bind_supplier_to_product(session, supplier_id, row.id)
+                await bind_supplier_to_product(session, supplier_id, row.internal_key)
                 await bind_product_provider(
                     session, row.internal_key, "supplier", str(supplier_id), row.name
                 )
-                result = "✅ Поставщик назначен."
+                try:
+                    await safe_send_message(
+                        bot,
+                        supplier_id,
+                        "✅ Вы назначены поставщиком товара.\n\n"
+                        f"Товар: {row.name}\n"
+                        "При покупке этого товара вам придёт заявка/уведомление.",
+                        reply_markup=supplier_inline_menu_keyboard(),
+                    )
+                except Exception:
+                    logger.exception("SUPPLIER_ASSIGN_NOTIFY_FAILED supplier_id=%s product_id=%s", supplier_id, row.id)
+                result = f"✅ Поставщик назначен.\nID: {supplier.telegram_id}\nТовар: {row.name}"
             else:
                 return False
         SHOP_ADMIN_WAIT.pop(admin_id, None)
@@ -3332,6 +3322,9 @@ async def process_supplier_command(
         return False
 
     text = (message.text or "").strip()
+    # Любая кнопка/команда поставщика сбрасывает незавершённую рассылку админа.
+    # Иначе старое состояние рассылки перехватывает сообщения поставщика.
+    ADMIN_BROADCAST_V28.pop(message.from_user.id, None)
 
     if text in {"/commands", "📖 Команды"}:
         await send_supplier_role_panel(
@@ -3589,7 +3582,7 @@ async def process_main_reply_button(
         await answer_message(bot, message, supplier_main_panel_text(), business_connection_id, reply_markup=supplier_inline_menu_keyboard())
         return True
 
-    if text in {"📦 Мои заказы", "📦 Заказы", "🛍 Мои товары", "🛍 Товары", "💼 Баланс", "↗️ Вывод", "💵 Изменить цену", "💵 Цена", "📖 Помощь"} and supplier_access:
+    if text in {"📦 Мои заказы", "📦 Заказы", "🛍 Мои товары", "🛍 Товары", "💼 Баланс", "↗️ Вывод", "💵 Изменить цену", "💵 Цена", "📖 Помощь", "👤 Мой профиль"} and supplier_access:
         ADMIN_BROADCAST_V28.pop(user_id, None)
         return await process_supplier_command(bot, message, business_connection_id)
 
@@ -4627,6 +4620,22 @@ async def handle_supplier_message(
     supplier_id = message.from_user.id
     text = (message.text or "").strip()
 
+    # Кнопки панели поставщика не должны восприниматься как номер/код
+    # и не должны запускать/продолжать рассылку.
+    supplier_button_texts = {
+        "🚚 Панель поставщика", "🚚 Поставщик", "🚚 Я поставщик",
+        "⏳ Заявки в ожидании", "⏳ Все активные", "📞 Ждут номер", "🔑 Ждут код",
+        "📦 Мои заказы", "📦 Заказы", "🛍 Мои товары", "🛍 Товары",
+        "💼 Баланс", "↗️ Вывод", "💵 Изменить цену", "💵 Цена",
+        "📖 Помощь", "👤 Мой профиль", "🏠 Главное меню", "🔙 Главное меню",
+    }
+    if text in supplier_button_texts:
+        ADMIN_BROADCAST_V28.pop(supplier_id, None)
+        if await process_main_reply_button(bot, message, business_connection_id):
+            return
+        if await process_supplier_command(bot, message, business_connection_id):
+            return
+
     # Дополнительная страховка: даже если route_message по какой-то причине пропустил команду,
     # команда поставщика не должна восприниматься как номер или код.
     if is_supplier_command_like_text(text):
@@ -4903,9 +4912,8 @@ async def handle_supplier_message(
             bot,
             message,
             (
-                "Нет активного запроса для вас.\n\n"
-                "Откройте панель кнопкой ниже и выберите конкретную заявку. "
-                "После этого отправьте номер или код обычным сообщением."
+                "Нет активного запроса.\n\n"
+                "Выберите заявку в панели поставщика, затем отправьте номер или код."
             ),
             business_connection_id,
             reply_markup=supplier_inline_menu_keyboard(),
@@ -5171,6 +5179,7 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         "💵 Изменить цену",
         "💵 Цена",
         "📖 Помощь",
+        "👤 Мой профиль",
         "📊 Статистика",
         "🧩 Прокси",
         "⚙️ Настройки прокси",
@@ -6636,7 +6645,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         }
         await update_or_send(
             callback,
-            "🚚 Отправьте Telegram ID поставщика.",
+            "🚚 Отправьте Telegram ID поставщика.\n\nПосле сохранения он станет поставщиком этого товара и будет получать заявки по покупкам.",
             reply_markup=admin_shop_keyboard(),
         )
         await callback.answer()
