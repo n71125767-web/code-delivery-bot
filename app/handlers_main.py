@@ -2635,7 +2635,7 @@ async def process_admin_command(
         await answer_message(bot, message, await set_faq_text(text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else ""), business_connection_id, reply_markup=admin_hidden_keyboard())
         return True
     if text == "/number_services":
-        await answer_message(bot, message, await number_services_text(), business_connection_id, reply_markup=admin_hidden_keyboard())
+        await answer_message(bot, message, await number_services_text(), business_connection_id, reply_markup=admin_back_keyboard())
         return True
     if text.startswith("/number_service_add"):
         await answer_message(bot, message, await add_number_service(text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else ""), business_connection_id, reply_markup=admin_hidden_keyboard())
@@ -3538,7 +3538,17 @@ async def process_main_reply_button(
         await answer_message(bot, message, admin_catalog_text(categories, products), business_connection_id, reply_markup=admin_catalog_keyboard(categories, products))
         return True
 
-    if admin_access and text in {"💳 Способы оплаты", "💳 Оплата", "Способы оплаты", "Оплата"}:
+    if admin_access and text in {"🌐 Прокси", "Прокси", "⚙️ Настройки прокси", "🧩 Настройки прокси"}:
+        async with SessionLocal() as session:
+            text_value = await v61_proxy_admin_text(session)
+        await answer_message(bot, message, text_value, business_connection_id, reply_markup=v61_proxy_admin_keyboard())
+        return True
+
+    if admin_access and text in {"📱 Номера", "Номера"}:
+        await answer_message(bot, message, await number_services_text(), business_connection_id, reply_markup=admin_back_keyboard())
+        return True
+
+    if admin_access and text in {"💵 Способы оплаты", "💳 Способы оплаты", "📊 Оплата", "💳 Оплата", "Способы оплаты", "Оплата"}:
         async with SessionLocal() as session:
             text_value = await payments_text(session)
         await answer_message(bot, message, text_value, business_connection_id, reply_markup=payments_keyboard())
@@ -3636,7 +3646,7 @@ async def process_main_reply_button(
         await answer_message(bot, message, await get_faq_page_text(), business_connection_id, reply_markup=(await buyer_inline_keyboard_for_user(user_id) if is_business_context else await buyer_reply_keyboard_for_user(user_id)))
         return True
 
-    if text == "📢 Рассылка":
+    if text in {"📢 Рассылка", "📣 Рассылка"}:
         if not admin_access:
             await answer_message(bot, message, "У вас нет доступа.", business_connection_id)
             return True
@@ -5141,7 +5151,9 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         "👥 Админы",
         "💰 Управление товарами",
         "💳 Оплата",
+        "📊 Оплата",
         "💳 Способы оплаты",
+        "💵 Способы оплаты",
         "⚙️ Настройки",
         "📢 Рассылка",
         "📣 Рассылка",
@@ -7225,7 +7237,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data == "admin:number_settings":
-        await update_or_send(callback, await number_services_text(), reply_markup=admin_hidden_keyboard())
+        await update_or_send(callback, await number_services_text(), reply_markup=admin_back_keyboard())
         await callback.answer()
         return True
 
@@ -7503,7 +7515,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data == "admin:number_settings":
-        await update_or_send(callback, await number_services_text(), reply_markup=admin_hidden_keyboard())
+        await update_or_send(callback, await number_services_text(), reply_markup=admin_back_keyboard())
         await callback.answer()
         return True
 
@@ -7975,14 +7987,16 @@ async def handle_buyer_callback(bot: Bot, callback: CallbackQuery) -> bool:
         ADMIN_KEYBOARD_SENT.discard(callback.from_user.id)
         BUYER_CATALOG_SEARCH_WAIT.discard(callback.from_user.id)
         try:
-            await bot.send_message(callback.message.chat.id, "🏠 Главное меню", reply_markup=await buyer_reply_keyboard_for_user(callback.from_user.id))
+            await bot.send_message(
+                callback.message.chat.id,
+                "Главное меню",
+                reply_markup=await buyer_reply_keyboard_for_user(callback.from_user.id),
+            )
         except Exception:
             pass
-        await update_or_send(
-            callback,
-            await get_main_page_text(),
-            reply_markup=await buyer_inline_keyboard_for_user(user_id),
-        )
+        # В обычном Telegram reply-клавиатура уже есть снизу, поэтому не дублируем
+        # те же кнопки inline-кнопками на главной.
+        await update_or_send(callback, await get_main_page_text(), reply_markup=None)
         await callback.answer()
         return True
 

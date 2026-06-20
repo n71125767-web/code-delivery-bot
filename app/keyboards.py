@@ -1056,3 +1056,96 @@ def supplier_inline_menu_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="🔙 Главное меню", callback_data="buyer:panel")
     kb.adjust(2)
     return kb.as_markup()
+
+# ---------------- V66 admin menu numbers/proxy restore ----------------
+def admin_main_reply_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text="💰 Управление товарами")],
+        [KeyboardButton(text="🌐 Прокси"), KeyboardButton(text="📱 Номера")],
+        [KeyboardButton(text="💵 Способы оплаты"), KeyboardButton(text="📊 Оплата")],
+        [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="📣 Рассылка")],
+        [KeyboardButton(text="🔙 Главное меню")],
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="Админ меню",
+        selective=True,
+    )
+
+
+def admin_panel_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="💰 Управление товарами", callback_data="v25:catalog")
+    kb.button(text="🌐 Прокси", callback_data="admin:proxy")
+    kb.button(text="📱 Номера", callback_data="admin:number_settings")
+    kb.button(text="💵 Способы оплаты", callback_data="admin:payments")
+    kb.button(text="📊 Оплата", callback_data="admin:status")
+    kb.button(text="⚙️ Настройки", callback_data="admin:main_settings")
+    kb.button(text="📣 Рассылка", callback_data="admin:broadcast")
+    kb.button(text="🔙 Главное меню", callback_data="buyer:panel")
+    kb.adjust(1, 2, 2, 2, 1)
+    return kb.as_markup()
+
+
+# ---------------- V67 final buyer/admin keyboard layout fixes ----------------
+def buyer_main_reply_keyboard(is_admin: bool = False, is_supplier: bool = False) -> ReplyKeyboardMarkup:
+    """Final clean buyer reply panel: no duplicate inline menu on main screen."""
+    rows = [
+        [KeyboardButton(text="🛒 Товары")],
+        [KeyboardButton(text="🛍 Корзина"), KeyboardButton(text="💼 Кошелёк")],
+        [KeyboardButton(text="🧾 Мои заказы")],
+        [KeyboardButton(text="📕 FAQ"), KeyboardButton(text="🤝 Стать партнёром")],
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="Главное меню",
+        selective=True,
+    )
+
+
+def buyer_inline_menu_keyboard(is_admin: bool = False, is_supplier: bool = False) -> InlineKeyboardMarkup:
+    """Business/inline fallback. Normal chats use reply keyboard only on main."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🛒 Товары", callback_data="buyer:shop")
+    kb.button(text="🛍 Корзина", callback_data="buyer:cart")
+    kb.button(text="💼 Кошелёк", callback_data="buyer:wallet")
+    kb.button(text="🧾 Мои заказы", callback_data="buyer:orders")
+    kb.button(text="📕 FAQ", callback_data="buyer:faq")
+    kb.button(text="🤝 Стать партнёром", callback_data="buyer:partner")
+    kb.adjust(1, 2, 1, 2)
+    return kb.as_markup()
+
+
+def admin_main_reply_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text="💰 Управление товарами")],
+        [KeyboardButton(text="🌐 Прокси"), KeyboardButton(text="📱 Номера")],
+        [KeyboardButton(text="💵 Способы оплаты"), KeyboardButton(text="📊 Оплата")],
+        [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="📣 Рассылка")],
+        [KeyboardButton(text="🔙 Главное меню")],
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="Админ меню",
+        selective=True,
+    )
+
+
+def admin_panel_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="💰 Управление товарами", callback_data="v25:catalog")
+    kb.button(text="🌐 Прокси", callback_data="admin:proxy")
+    kb.button(text="📱 Номера", callback_data="admin:number_settings")
+    kb.button(text="💵 Способы оплаты", callback_data="admin:payments")
+    kb.button(text="📊 Оплата", callback_data="admin:status")
+    kb.button(text="⚙️ Настройки", callback_data="admin:main_settings")
+    kb.button(text="📣 Рассылка", callback_data="admin:broadcast")
+    kb.button(text="🔙 Главное меню", callback_data="buyer:panel")
+    kb.adjust(1, 2, 2, 2, 1)
+    return kb.as_markup()

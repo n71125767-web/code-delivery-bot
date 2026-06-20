@@ -424,8 +424,11 @@ async def ensure_proxy_autofix_products(session: AsyncSession, price: Decimal, c
             product.category_id = None
             product.name = name
             product.description = description
-            product.price = price
-            product.currency = currency.upper()[:10]
+            # Не сбрасываем вручную настроенную цену при «Создать/обновить».
+            if product.price is None:
+                product.price = price
+            if not product.currency:
+                product.currency = currency.upper()[:10]
             product.product_type = "static"
             product.fulfillment_type = "proxyline"
             product.provider_key = provider_payload

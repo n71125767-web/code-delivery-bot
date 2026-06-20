@@ -569,3 +569,114 @@ def fulfillment_keyboard(product_id: int) -> InlineKeyboardMarkup:
     kb.button(text="🔙 Назад", callback_data=f"v25:product:{product_id}")
     kb.adjust(2, 2, 2)
     return kb.as_markup()
+
+
+# ---------------- V67 final catalog visual/navigation fixes ----------------
+def admin_catalog_text(categories, products) -> str:
+    if not categories and not products:
+        return "💰 Управление товарами\n\nКатегорий и товаров пока нет."
+    return "💰 Управление товарами\n\nВыберите категорию или товар кнопкой ниже."
+
+
+def admin_catalog_keyboard(categories, products) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for category in categories:
+        count = len([p for p in products if p.category_id == category.id])
+        suffix = f" · {count}" if count else ""
+        kb.button(text=f"{category.name}{suffix}", callback_data=f"v25:category:{category.id}")
+    uncategorized = [p for p in products if not p.category_id]
+    if uncategorized:
+        kb.button(text=f"Без категории · {len(uncategorized)}", callback_data="v28:uncategorized")
+    # Не дублируем товары из категорий в корне. На главной админки показываем категории + без категории.
+    kb.button(text="➕ Товар", callback_data="v25:add_product")
+    kb.button(text="➕ Категория", callback_data="v25:add_category")
+    kb.button(text="⚙️ Вид", callback_data="v25:view_settings")
+    kb.button(text="🔙 Назад", callback_data="admin:panel")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+def category_card_text(category: ShopCategory, product_count: int) -> str:
+    if category.description:
+        return f"{category.name}\n\n{category.description}\n\nВыберите товар кнопкой ниже."
+    return f"{category.name}\n\nВыберите товар кнопкой ниже."
+
+
+def category_card_keyboard(category_id: int, active: bool, products=None) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for product in list(products or [])[:30]:
+        kb.button(text=f"{product.name} · {_fmt_money_v54(product.price, product.currency)}", callback_data=f"v25:product:{product.id}")
+    if not products:
+        kb.button(text="Товаров пока нет", callback_data="v25:noop")
+    kb.button(text="➕ Товар", callback_data=f"v25:category_add_product:{category_id}")
+    kb.button(text="📝 Название", callback_data=f"v25:category_name:{category_id}")
+    kb.button(text="📝 Описание", callback_data=f"v25:category_description:{category_id}")
+    kb.button(text="🖼 Фото", callback_data=f"v25:category_photo:{category_id}")
+    kb.button(text="Скрыть" if active else "Показать", callback_data=f"v25:category_toggle:{category_id}")
+    kb.button(text="🗑 Удалить", callback_data=f"v25:category_delete_prompt:{category_id}")
+    kb.button(text="🔙 Назад", callback_data="v25:catalog")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+def product_card_text(product: ShopProduct, stock_count: int = 0) -> str:
+    # Для прокси не показываем перегруженную логическую карточку — управление находится в разделе «Прокси».
+    if (getattr(product, 'note', '') or '').startswith('proxy_autofix:'):
+        return (
+            f"{product.name}\n\n"
+            f"Цена: {_fmt_money_v54(product.price, product.currency)}\n"
+            f"Оплата: {'включена' if product.payment_enabled else 'выключена'}\n"
+            f"Статус: {'показывается' if product.is_active else 'скрыт'}"
+        )
+    type_label = "Статический" if product.product_type == "static" else "Количественный"
+    lines = [
+        f"📦 Карточка товара",
+        "",
+        f"Название: {product.name}",
+        f"Тип: {type_label}",
+        f"Цена: {_fmt_money_v54(product.price, product.currency)}",
+        f"Статус: {'показывается' if product.is_active else 'скрыт'}",
+        f"Оплата: {'включена' if product.payment_enabled else 'выключена'}",
+    ]
+    if product.product_type == "quantity":
+        lines.append(f"Остаток: {stock_count} шт.")
+    if product.description:
+        lines.extend(["", product.description])
+    return "\n".join(lines)
+
+
+def product_card_keyboard(product: ShopProduct) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    note = (getattr(product, 'note', '') or '')
+    if note.startswith('proxy_autofix:'):
+        kind = note.split(':', 1)[1]
+        kb.button(text="💰 Цена", callback_data=f"admin:proxy:price:{kind}")
+        kb.button(text="📈 Наценка", callback_data=f"admin:proxy:markup:{kind}")
+        kb.button(text="📝 Текст", callback_data=f"admin:proxy:text:{kind}")
+        kb.button(text=("Приостановить оплату" if product.payment_enabled else "Включить оплату"), callback_data=f"v25:toggle_payment:{product.id}")
+        kb.button(text=("Скрыть товар" if product.is_active else "Показать товар"), callback_data=f"v25:toggle_visible:{product.id}")
+        kb.button(text="🗑 Удалить", callback_data=f"v25:delete_prompt:{product.id}")
+        kb.button(text="🔙 Назад", callback_data="admin:proxy")
+        kb.adjust(2)
+        return kb.as_markup()
+
+    kb.button(text="🎁 Выдать товар", callback_data=f"v25:give:{product.id}")
+    kb.button(text="✏️ Изменить товар", callback_data=f"v25:advanced:{product.id}")
+    kb.button(text="👁 Показать товар", callback_data=f"v25:preview:{product.id}")
+    kb.button(text="📝 Название", callback_data=f"v25:edit_name:{product.id}")
+    kb.button(text="📝 Цена", callback_data=f"v25:edit_price:{product.id}")
+    kb.button(text="📝 Описание", callback_data=f"v25:edit_description:{product.id}")
+    kb.button(text="📝 Категория", callback_data=f"v25:edit_category:{product.id}")
+    kb.button(text="📝 Валюта", callback_data=f"v25:edit_currency:{product.id}")
+    kb.button(text="📝 Примечание", callback_data=f"v25:edit_note:{product.id}")
+    kb.button(text=("Удалить фото" if getattr(product, 'photo_file_id', None) else "🖼 Добавить фото"), callback_data=(f"v25:photo_delete:{product.id}" if getattr(product, 'photo_file_id', None) else f"v25:edit_photo:{product.id}"))
+    kb.button(text=("Приостановить оплату" if product.payment_enabled else "Включить оплату"), callback_data=f"v25:toggle_payment:{product.id}")
+    kb.button(text="Расширенные настройки", callback_data=f"v25:advanced:{product.id}")
+    if product.product_type == "quantity":
+        kb.button(text="📦 Позиции товара", callback_data=f"v25:stock:{product.id}")
+    kb.button(text=("Скрыть товар" if product.is_active else "Показать товар"), callback_data=f"v25:toggle_visible:{product.id}")
+    kb.button(text="🗑 Удалить", callback_data=f"v25:delete_prompt:{product.id}")
+    back = f"v25:category:{product.category_id}" if product.category_id else "v28:uncategorized"
+    kb.button(text="🔙 Назад", callback_data=back)
+    kb.adjust(2)
+    return kb.as_markup()

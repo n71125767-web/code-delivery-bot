@@ -127,7 +127,19 @@ def provider_keyboard(provider: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 async def find_proxy_product(session: AsyncSession, kind: str) -> ShopProduct | None:
-    return await session.scalar(select(ShopProduct).where(ShopProduct.note == f"proxy_autofix:{kind}"))
+    """Find proxy product by current and legacy notes."""
+    aliases = [kind]
+    if kind == "standard":
+        aliases += ["default", "standart"]
+    if kind == "premium":
+        aliases += ["proxy", "proxyline"]
+    notes = [f"proxy_autofix:{item}" for item in aliases]
+    return await session.scalar(
+        select(ShopProduct)
+        .where(ShopProduct.note.in_(notes), ShopProduct.is_deleted.is_(False))
+        .order_by(ShopProduct.id.desc())
+        .limit(1)
+    )
 
 async def proxy_kind_text(session: AsyncSession, kind: str) -> str:
     meta = PROXY_KIND_META.get(kind, PROXY_KIND_META["standard"])
@@ -136,8 +148,8 @@ async def proxy_kind_text(session: AsyncSession, kind: str) -> str:
     lines = [f"{meta['title']}", ""]
     if product:
         final = apply_proxy_markup(product.price, markup)
-        lines.append(f"Товар: {product.id} — {product.name}")
-        lines.append(f"База: {fmt_amount(product.price, product.currency)}")
+        lines.append(f"Товар: {product.name}")
+        lines.append(f"Цена: {fmt_amount(product.price, product.currency)}")
         lines.append(f"Наценка: {multiplier_label(markup)}")
         lines.append(f"Покупателю: {fmt_amount(final, product.currency)} за 1 мес.")
         lines.append(f"Оплата: {'включена' if product.payment_enabled else 'выключена'}")
