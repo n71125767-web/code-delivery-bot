@@ -1176,3 +1176,32 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="🔙 Главное меню", callback_data="buyer:panel")
     kb.adjust(1, 2, 2, 2, 1)
     return kb.as_markup()
+
+
+# ---------------- V72 clean buyer/admin reply keyboards ----------------
+def buyer_main_reply_keyboard(is_admin: bool = False, is_supplier: bool = False) -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text="🛒 Товары")],
+        [KeyboardButton(text="🛍 Корзина"), KeyboardButton(text="💼 Кошелёк")],
+        [KeyboardButton(text="🧾 Мои заказы")],
+        [KeyboardButton(text="📕 FAQ"), KeyboardButton(text="🤝 Стать партнёром")],
+    ]
+    role_row = []
+    if is_supplier:
+        role_row.append(KeyboardButton(text="🚚 Поставщик"))
+    if is_admin:
+        role_row.append(KeyboardButton(text="⚙️ Админ меню"))
+    if role_row:
+        rows.append(role_row)
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=False, input_field_placeholder="Главное меню", selective=True)
+
+
+def admin_main_reply_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text="💰 Управление товарами")],
+        [KeyboardButton(text="🌐 Прокси"), KeyboardButton(text="📱 Номера")],
+        [KeyboardButton(text="💵 Способы оплаты"), KeyboardButton(text="📊 Оплата")],
+        [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="📣 Рассылка")],
+        [KeyboardButton(text="🔙 Главное меню")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=False, input_field_placeholder="Админ меню", selective=True)

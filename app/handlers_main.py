@@ -1,4 +1,5 @@
 import asyncio
+import json
 from decimal import Decimal
 import logging
 import re
@@ -9,7 +10,7 @@ from sqlalchemy import select, func
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramRetryAfter
-from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
+from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.config import (
@@ -844,10 +845,102 @@ async def buyer_inline_keyboard_for_user(user_id: int | None) -> object:
 
 
 async def buyer_reply_keyboard_for_user(user_id: int | None) -> object:
-    return buyer_main_reply_keyboard(
-        is_admin=await is_admin_user(user_id),
-        is_supplier=bool(user_id and await is_supplier_user(user_id)),
-    )
+    """Clean buyer reply keyboard with optional admin/supplier switch buttons and custom buttons from settings."""
+    rows = [
+        [KeyboardButton(text="🛒 Товары")],
+        [KeyboardButton(text="🛍 Корзина"), KeyboardButton(text="💼 Кошелёк")],
+        [KeyboardButton(text="🧾 Мои заказы")],
+        [KeyboardButton(text="📕 FAQ"), KeyboardButton(text="🤝 Стать партнёром")],
+    ]
+    try:
+        async with SessionLocal() as session:
+            raw = await get_text(session, "main_reply_buttons", "[]")
+        extra = json.loads(raw or "[]")
+        chunk = []
+        for item in extra if isinstance(extra, list) else []:
+            title = str((item or {}).get("title") or "").strip()
+            if not title:
+                continue
+            chunk.append(KeyboardButton(text=title[:32]))
+            if len(chunk) == 2:
+                rows.append(chunk)
+                chunk = []
+        if chunk:
+            rows.append(chunk)
+    except Exception:
+        logger.exception("CUSTOM_REPLY_BUTTONS_LOAD_FAILED user_id=%s", user_id)
+    role_row = []
+    if user_id and await is_supplier_user(user_id):
+        role_row.append(KeyboardButton(text="🚚 Поставщик"))
+    if await is_admin_user(user_id):
+        role_row.append(KeyboardButton(text="⚙️ Админ меню"))
+    if role_row:
+        rows.append(role_row)
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=False, input_field_placeholder="Главное меню", selective=True)
+
+
+def _safe_json_list(raw: str) -> list[dict]:
+    try:
+        data = json.loads(raw or "[]")
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+async def _load_template_buttons(session, key: str) -> list[dict]:
+    return _safe_json_list(await get_text(session, key, "[]"))
+
+
+def _url_buttons_markup(buttons: list[dict], back_callback: str | None = None):
+    kb = InlineKeyboardBuilder()
+    for item in buttons:
+        title = str((item or {}).get("title") or "").strip()
+        url = str((item or {}).get("url") or "").strip()
+        if title and url:
+            kb.button(text=title[:64], url=url)
+    if back_callback:
+        kb.button(text="🔙 Назад", callback_data=back_callback)
+    kb.adjust(1)
+    return kb.as_markup() if buttons or back_callback else None
+
+
+async def send_configured_page(bot: Bot, message: Message, page: str, business_connection_id: str | None = None, reply_markup=None):
+    """Send main/FAQ page with optional saved photo and URL buttons."""
+    text_key = "faq_text" if page == "faq" else "main_page_text"
+    photo_key = "faq_photo_id" if page == "faq" else "main_page_photo_id"
+    buttons_key = "faq_buttons" if page == "faq" else "main_page_buttons"
+    default_text = await get_faq_page_text() if page == "faq" else await get_main_page_text()
+    async with SessionLocal() as session:
+        text_value = await get_text(session, text_key, default_text)
+        photo_id = await get_text(session, photo_key, "")
+        buttons = await _load_template_buttons(session, buttons_key)
+    markup = _url_buttons_markup(buttons) or reply_markup
+    if photo_id and not business_connection_id:
+        try:
+            return await message.answer_photo(photo_id, caption=text_value, reply_markup=markup)
+        except Exception:
+            logger.exception("CONFIGURED_PAGE_PHOTO_SEND_FAILED page=%s", page)
+    return await answer_message(bot, message, text_value, business_connection_id, reply_markup=markup)
+
+
+async def process_custom_reply_button(bot: Bot, message: Message, business_connection_id: str | None) -> bool:
+    text = (message.text or "").strip()
+    if not text:
+        return False
+    async with SessionLocal() as session:
+        buttons = await _load_template_buttons(session, "main_reply_buttons")
+    for item in buttons:
+        title = str((item or {}).get("title") or "").strip()
+        url = str((item or {}).get("url") or "").strip()
+        if title == text:
+            if url:
+                kb = InlineKeyboardBuilder()
+                kb.button(text=title[:64], url=url)
+                await answer_message(bot, message, f"{title}\n{url}", business_connection_id, reply_markup=kb.as_markup())
+            else:
+                await answer_message(bot, message, title, business_connection_id)
+            return True
+    return False
 
 
 async def user_is_root_admin(user_id: int | None) -> bool:
@@ -1573,31 +1666,63 @@ async def process_admin_pending_input(
     if not key:
         return False
 
-    if not text:
-        await temp_answer(
-            bot, message, "Пришлите новый текст сообщением.", business_connection_id
-        )
-        return True
-
     if text.lower() in {"отмена", "cancel", "/cancel"}:
         ADMIN_TEXT_EDIT_WAIT.pop(admin_id, None)
-        await temp_answer(
-            bot, message, "Редактирование отменено.", business_connection_id
-        )
+        await temp_answer(bot, message, "Редактирование отменено.", business_connection_id, reply_markup=admin_settings_visual_keyboard())
         return True
 
-    async with SessionLocal() as session:
-        result = await set_text(session, key, text)
+    if key.endswith("_photo_id"):
+        if not message.photo:
+            await temp_answer(bot, message, "Пришлите фото.", business_connection_id, reply_markup=simple_back_keyboard("admin:main_settings"))
+            return True
+        async with SessionLocal() as session:
+            result = await set_text(session, key, message.photo[-1].file_id)
+        ADMIN_TEXT_EDIT_WAIT.pop(admin_id, None)
+        await temp_answer(bot, message, "✅ Фото сохранено.", business_connection_id, reply_markup=admin_settings_visual_keyboard())
+        return True
+
+    if key.startswith("button:"):
+        target_key = key.split(":", 1)[1]
+        if not text:
+            await temp_answer(bot, message, "Отправьте: Название | https://ссылка", business_connection_id, reply_markup=simple_back_keyboard("admin:main_settings"))
+            return True
+        async with SessionLocal() as session:
+            if text.lower() in {"очистить", "clear"}:
+                result = await set_text(session, target_key, "[]")
+            else:
+                if "|" not in text:
+                    await temp_answer(bot, message, "Формат: Название | https://ссылка", business_connection_id, reply_markup=simple_back_keyboard("admin:main_settings"))
+                    return True
+                title, url = [x.strip() for x in text.split("|", 1)]
+                if not title or not (url.startswith("http://") or url.startswith("https://") or url.startswith("tg://")):
+                    await temp_answer(bot, message, "Проверьте название и ссылку. Ссылка должна начинаться с http://, https:// или tg://", business_connection_id, reply_markup=simple_back_keyboard("admin:main_settings"))
+                    return True
+                buttons = _safe_json_list(await get_text(session, target_key, "[]"))
+                buttons.append({"title": title[:64], "url": url})
+                result = await set_text(session, target_key, json.dumps(buttons, ensure_ascii=False))
+        ADMIN_TEXT_EDIT_WAIT.pop(admin_id, None)
+        await temp_answer(bot, message, "✅ Кнопки обновлены.", business_connection_id, reply_markup=admin_settings_visual_keyboard())
+        return True
+
+    value_text = (getattr(message, "html_text", None) or getattr(message, "html_caption", None) or message.caption or text or "").strip()
+    if not value_text and not message.photo:
+        await temp_answer(bot, message, "Пришлите новый текст сообщением.", business_connection_id, reply_markup=simple_back_keyboard("admin:main_settings"))
+        return True
+
+    if message.photo and key in {"main_page_text", "faq_text"}:
+        photo_key = "main_page_photo_id" if key == "main_page_text" else "faq_photo_id"
+        async with SessionLocal() as session:
+            if value_text:
+                result = await set_text(session, key, value_text)
+            else:
+                result = "OK. Текст не изменён."
+            await set_text(session, photo_key, message.photo[-1].file_id)
+    else:
+        async with SessionLocal() as session:
+            result = await set_text(session, key, value_text)
 
     ADMIN_TEXT_EDIT_WAIT.pop(admin_id, None)
-
-    await temp_answer(
-        bot,
-        message,
-        f"{result}\n\nНовый текст:\n{text}",
-        business_connection_id,
-        reply_markup=admin_panel_keyboard(),
-    )
+    await temp_answer(bot, message, f"{result}\n\n✅ Сохранено.", business_connection_id, reply_markup=admin_settings_visual_keyboard())
     return True
 
 
@@ -3601,13 +3726,16 @@ async def process_main_reply_button(
 
     if text in {"🏠 Главное меню", "🔙 Главное меню", "Главное меню", "🏠 Режим покупателя", "Режим покупателя", "🏠 Покупатель", "Покупатель"}:
         ADMIN_KEYBOARD_SENT.discard(user_id)
-        await answer_message(
-            bot,
-            message,
-            await get_main_page_text(),
-            business_connection_id,
-            reply_markup=(await buyer_inline_keyboard_for_user(user_id) if is_business_context else await buyer_reply_keyboard_for_user(user_id)),
-        )
+        if is_business_context:
+            await answer_message(
+                bot,
+                message,
+                await get_main_page_text(),
+                business_connection_id,
+                reply_markup=await buyer_inline_keyboard_for_user(user_id),
+            )
+        else:
+            await send_configured_page(bot, message, "main", business_connection_id=None, reply_markup=await buyer_reply_keyboard_for_user(user_id))
         return True
 
     if text in {"🛒 Товар", "🛒 Товары", "🛍 Каталог", "🛒 Товары"}:
@@ -3649,7 +3777,7 @@ async def process_main_reply_button(
         return True
 
     if text == "📕 FAQ":
-        await answer_message(bot, message, await get_faq_page_text(), business_connection_id, reply_markup=(await buyer_inline_keyboard_for_user(user_id) if is_business_context else await buyer_reply_keyboard_for_user(user_id)))
+        await send_configured_page(bot, message, "faq", business_connection_id, reply_markup=(await buyer_inline_keyboard_for_user(user_id) if is_business_context else await buyer_reply_keyboard_for_user(user_id)))
         return True
 
     if text in {"📢 Рассылка", "📣 Рассылка"}:
@@ -3838,10 +3966,10 @@ async def process_command_message(
                 business_connection_id=business_connection_id,
             )
         else:
-            await answer_message(
+            await send_configured_page(
                 bot,
                 message,
-                await get_main_page_text(),
+                "main",
                 business_connection_id=None,
                 reply_markup=await buyer_reply_keyboard_for_user(user_id),
             )
@@ -5189,6 +5317,9 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         await send_supplier_menu(bot, message.chat.id, supplier_main_panel_text(), business_connection_id)
         return
 
+    if await process_custom_reply_button(bot, message, business_connection_id):
+        return
+
     main_reply_buttons = {
         "🛒 Товар",
         "🛒 Товары",
@@ -5414,14 +5545,33 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
     if data == "admin:edit_faq":
         ADMIN_TEXT_EDIT_WAIT[callback.from_user.id] = "faq_text"
-        await update_or_send(callback, "📕 Изменение FAQ\n\nОтправьте новый текст FAQ одним сообщением.\nДля отмены напишите: отмена", reply_markup=simple_back_keyboard("admin:main_settings"))
+        await update_or_send(callback, "📕 Изменение FAQ\n\nОтправьте новый текст FAQ одним сообщением. Можно отправить фото с подписью.\nДля отмены напишите: отмена", reply_markup=simple_back_keyboard("admin:main_settings"))
         await callback.answer("Жду новый FAQ")
         return True
 
     if data == "admin:edit_main_page":
         ADMIN_TEXT_EDIT_WAIT[callback.from_user.id] = "main_page_text"
-        await update_or_send(callback, "🏠 Изменение главной страницы\n\nОтправьте новый текст главной одним сообщением.\nДля отмены напишите: отмена", reply_markup=simple_back_keyboard("admin:main_settings"))
+        await update_or_send(callback, "🏠 Изменение главной страницы\n\nОтправьте новый текст главной одним сообщением. Можно отправить фото с подписью.\nДля отмены напишите: отмена", reply_markup=simple_back_keyboard("admin:main_settings"))
         await callback.answer("Жду текст главной")
+        return True
+
+    if data == "admin:main_photo":
+        ADMIN_TEXT_EDIT_WAIT[callback.from_user.id] = "main_page_photo_id"
+        await update_or_send(callback, "🖼 Фото главной\n\nОтправьте фото. Для отмены напишите: отмена", reply_markup=simple_back_keyboard("admin:main_settings"))
+        await callback.answer("Жду фото")
+        return True
+
+    if data == "admin:faq_photo":
+        ADMIN_TEXT_EDIT_WAIT[callback.from_user.id] = "faq_photo_id"
+        await update_or_send(callback, "🖼 Фото FAQ\n\nОтправьте фото. Для отмены напишите: отмена", reply_markup=simple_back_keyboard("admin:main_settings"))
+        await callback.answer("Жду фото")
+        return True
+
+    if data in {"admin:main_buttons", "admin:faq_buttons", "admin:reply_buttons"}:
+        page_key = {"admin:main_buttons":"main_page_buttons", "admin:faq_buttons":"faq_buttons", "admin:reply_buttons":"main_reply_buttons"}[data]
+        ADMIN_TEXT_EDIT_WAIT[callback.from_user.id] = "button:" + page_key
+        await update_or_send(callback, "🔗 Добавление кнопки\n\nОтправьте: Название | https://ссылка\nНапример: Поддержка | https://t.me/username\n\nДля очистки всех кнопок отправьте: очистить\nДля отмены: отмена", reply_markup=simple_back_keyboard("admin:main_settings"))
+        await callback.answer("Жду кнопку")
         return True
 
     if data == "admin:status":
@@ -6019,10 +6169,14 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             product_id,
             {"fulfillment_type": fulfillment_type},
         )
+        async with SessionLocal() as session:
+            product = await session.get(ShopProduct, product_id)
+            count = await v25_stock_count(session, product_id) if product else 0
+        hint = "\n\nДля номера добавьте позиции в склад товара: каждый номер/строка отдельной строкой." if fulfillment_type == "number" else ""
         await update_or_send(
             callback,
-            "✅ Способ выдачи сохранён.\n\nДальше настройте выдачу через кнопки карточки товара.",
-            reply_markup=advanced_keyboard(product_id),
+            (v25_product_card_text(product, count) if product else "✅ Способ выдачи сохранён.") + hint,
+            reply_markup=v25_product_card_keyboard(product) if product else advanced_keyboard(product_id),
         )
         await callback.answer("Сохранено")
         return True
@@ -8433,7 +8587,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
         if handled:
             return
 
-    if data.startswith(("admin:", "v25:", "v28:")):
+    if data.startswith(("admin:", "v25:", "v28:", "v34:")):
         handled = await handle_admin_callback(bot, callback)
         if handled:
             return

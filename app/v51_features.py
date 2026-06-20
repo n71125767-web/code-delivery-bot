@@ -372,8 +372,13 @@ async def admin_settings_visual_text() -> str:
 
 def admin_settings_visual_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="🏠 Главная страница", callback_data="admin:edit_main_page")
-    kb.button(text="📕 FAQ", callback_data="admin:edit_faq")
+    kb.button(text="🏠 Текст главной", callback_data="admin:edit_main_page")
+    kb.button(text="🖼 Фото главной", callback_data="admin:main_photo")
+    kb.button(text="🔗 Кнопки главной", callback_data="admin:main_buttons")
+    kb.button(text="⌨️ Кнопки клавиатуры", callback_data="admin:reply_buttons")
+    kb.button(text="📕 Текст FAQ", callback_data="admin:edit_faq")
+    kb.button(text="🖼 Фото FAQ", callback_data="admin:faq_photo")
+    kb.button(text="🔗 Кнопки FAQ", callback_data="admin:faq_buttons")
     kb.button(text="🧩 Вид каталога", callback_data="v25:view_settings")
     kb.button(text="🔙 Назад", callback_data="admin:panel")
     kb.adjust(2)
