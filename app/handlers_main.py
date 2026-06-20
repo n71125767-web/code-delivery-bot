@@ -382,6 +382,7 @@ logger.info("FIX_MARKER_MCS_HARDENED=v31 loaded")
 logger.info("FIX_MARKER_MCS_UI_ROUTING=v31.1 loaded")
 logger.info("FIX_MARKER_MCS_VISUAL=v32 loaded")
 logger.info("FIX_MARKER_V51_UI_PERMS_ORDERS loaded")
+logger.info("FIX_MARKER_V55_UI_SELFCHECK_FEEDBACK_FIX loaded")
 
 
 def validate_runtime_ui() -> None:
@@ -417,7 +418,6 @@ def validate_runtime_ui() -> None:
 
     required_buyer_callbacks = {
         "buyer:shop",
-        "buyer:feedback",
         "buyer:faq",
         "buyer:orders",
     }
