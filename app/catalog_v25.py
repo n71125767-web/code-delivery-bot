@@ -515,3 +515,57 @@ def category_card_keyboard(category_id: int, active: bool, products=None) -> Inl
     kb.button(text="🔙 Назад", callback_data="v25:catalog")
     kb.adjust(2)
     return kb.as_markup()
+
+# ---------------- V65 compatibility hotfix: wizard keyboards restored ----------------
+def product_type_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard used by the product creation wizard."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="♾️ Статический", callback_data="v25:type:static")
+    kb.button(text="📦 Количественный", callback_data="v25:type:quantity")
+    kb.button(text="🔙 Назад", callback_data="v25:wizard:back_name")
+    kb.button(text="❌ Отмена", callback_data="v25:wizard:cancel")
+    kb.adjust(2, 2)
+    return kb.as_markup()
+
+
+def currency_keyboard() -> InlineKeyboardMarkup:
+    """Currency selector used by create/edit product flows."""
+    kb = InlineKeyboardBuilder()
+    preferred = ("USDT", "USD", "RUB", "TON")
+    ordered = list(preferred) + [c for c in CURRENCIES if c not in preferred]
+    for currency in ordered:
+        kb.button(text=currency, callback_data=f"v25:currency:{currency}")
+    kb.button(text="🔙 Назад", callback_data="v25:wizard:back_type")
+    kb.button(text="❌ Отмена", callback_data="v25:wizard:cancel")
+    kb.adjust(4, 4, 4, 2)
+    return kb.as_markup()
+
+
+def price_back_keyboard() -> InlineKeyboardMarkup:
+    """Back/cancel controls for price input step."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🔙 Назад", callback_data="v25:wizard:back_currency")
+    kb.button(text="❌ Отмена", callback_data="v25:wizard:cancel")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+def content_back_keyboard() -> InlineKeyboardMarkup:
+    """Generic cancel keyboard for text/photo/content input steps."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="❌ Отмена", callback_data="v25:wizard:cancel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def fulfillment_keyboard(product_id: int) -> InlineKeyboardMarkup:
+    """Fulfillment selector for product advanced settings."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📄 Цифровой", callback_data=f"v34:fulfillment:{product_id}:digital")
+    kb.button(text="📦 Склад", callback_data=f"v34:fulfillment:{product_id}:stock")
+    kb.button(text="🌐 Прокси", callback_data=f"v34:fulfillment:{product_id}:proxyline")
+    kb.button(text="🚚 Поставщик", callback_data=f"v34:fulfillment:{product_id}:supplier")
+    kb.button(text="📱 Номер", callback_data=f"v34:fulfillment:{product_id}:number")
+    kb.button(text="🔙 Назад", callback_data=f"v25:product:{product_id}")
+    kb.adjust(2, 2, 2)
+    return kb.as_markup()
