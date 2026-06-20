@@ -344,3 +344,59 @@ async def create_product(session, raw: str, category_id: int | None = None):
     await session.commit()
     await session.refresh(row)
     return row
+
+
+# ---------------- V53 clean product/category lists ----------------
+def _fmt_money_v53(value, currency: str | None = None) -> str:
+    from decimal import Decimal, InvalidOperation
+    if value is None:
+        rendered = "0"
+    else:
+        try:
+            rendered = f"{Decimal(str(value)).quantize(Decimal('0.01')):.2f}".rstrip('0').rstrip('.')
+        except (InvalidOperation, ValueError):
+            rendered = str(value)
+    return f"{rendered} {currency}" if currency else rendered
+
+
+def admin_products_text(rows) -> str:
+    return "📦 Товары\n\nВыберите товар кнопкой ниже." if rows else "📦 Товары\n\nТоваров пока нет."
+
+
+def admin_products_keyboard(rows) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for row in rows:
+        icon = "✅" if row.is_active else "🙈"
+        kb.button(text=f"{icon} #{row.id} {row.name} · {_fmt_money_v53(row.price, row.currency)}", callback_data=f"admin:shop:product:{row.id}")
+    kb.button(text="➕ Товар", callback_data="admin:shop:add_product")
+    kb.button(text="⬅️ Назад", callback_data="admin:shop")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_category_text(category, product_count: int) -> str:
+    return (
+        f"📁 КАТЕГОРИЯ {category.name}\n\n"
+        f"Название: {category.name}\n"
+        f"Описание: {getattr(category, 'description', None) or 'не задано'}\n"
+        f"Товаров: {product_count}\n"
+        f"Статус: {'показывается' if category.is_active else 'скрыта'}\n\n"
+        "Товары:"
+    )
+
+
+def admin_category_keyboard(category, products) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for row in products:
+        icon = "✅" if row.is_active else "🙈"
+        kb.button(text=f"{icon} #{row.id} {row.name} · {_fmt_money_v53(row.price, row.currency)}", callback_data=f"admin:shop:product:{row.id}")
+    kb.button(text="➕ Товар", callback_data=f"admin:shop:add_product_to:{category.id}")
+    kb.button(text="📝 Название", callback_data=f"admin:shop:category_name:{category.id}")
+    kb.button(text="📄 Описание", callback_data=f"admin:shop:category_desc:{category.id}")
+    kb.button(text="🙈 Скрыть" if category.is_active else "👁 Показать", callback_data=f"admin:shop:category_toggle:{category.id}")
+    kb.button(text="⬆️ Выше", callback_data=f"admin:shop:category_up:{category.id}")
+    kb.button(text="⬇️ Ниже", callback_data=f"admin:shop:category_down:{category.id}")
+    kb.button(text="🗑 Удалить", callback_data=f"admin:shop:category_delete_prompt:{category.id}")
+    kb.button(text="⬅️ Назад", callback_data="admin:shop:categories")
+    kb.adjust(1)
+    return kb.as_markup()

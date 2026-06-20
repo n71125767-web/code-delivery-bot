@@ -445,9 +445,10 @@ def validate_runtime_ui() -> None:
     admin_reply_texts = {button.text for row in admin_reply.keyboard for button in row}
 
     required_reply_buttons = {
-        "🛍 Каталог",
+        "🛒 Товары",
+        "🛍 Корзина",
         "📱 Номера",
-        "🛒 Корзина",
+        "🌐 Прокси",
     }
 
     # Совместимость со старыми сообщениями: обработчик принимает старые кнопки
@@ -1186,12 +1187,11 @@ async def send_buyer_menu(
     business_connection_id: str | None = None,
 ):
     """Динамическая inline-панель покупателя без спама новыми сообщениями."""
-    admin_access = await is_admin_user(chat_id)
     return await send_buyer_role_panel(
         bot,
         chat_id,
         text,
-        reply_markup=await buyer_inline_keyboard_for_user(user_id),
+        reply_markup=await buyer_inline_keyboard_for_user(chat_id),
         business_connection_id=business_connection_id,
     )
 
@@ -3540,7 +3540,7 @@ async def process_main_reply_button(
         await answer_message(bot, message, text_value, business_connection_id, reply_markup=admin_proxy_settings_keyboard(settings))
         return True
 
-    if text in {"🚚 Я поставщик", "🚚 Панель поставщика"}:
+    if text in {"🚚 Я поставщик", "🚚 Панель поставщика", "🚚 Поставщик"}:
         ADMIN_BROADCAST_V28.pop(user_id, None)
         if not supplier_access:
             await answer_message(
@@ -3555,11 +3555,11 @@ async def process_main_reply_button(
         await answer_message(bot, message, supplier_main_panel_text(), business_connection_id, reply_markup=supplier_inline_menu_keyboard())
         return True
 
-    if text in {"📦 Мои заказы", "🛍 Мои товары", "💼 Баланс", "↗️ Вывод", "💵 Изменить цену", "📖 Помощь"} and supplier_access:
+    if text in {"📦 Мои заказы", "📦 Заказы", "🛍 Мои товары", "🛍 Товары", "💼 Баланс", "↗️ Вывод", "💵 Изменить цену", "💵 Цена", "📖 Помощь"} and supplier_access:
         ADMIN_BROADCAST_V28.pop(user_id, None)
         return await process_supplier_command(bot, message, business_connection_id)
 
-    if text in {"🏠 Главное меню", "Главное меню", "🏠 Режим покупателя", "Режим покупателя"}:
+    if text in {"🏠 Главное меню", "Главное меню", "🏠 Режим покупателя", "Режим покупателя", "🏠 Покупатель", "Покупатель"}:
         ADMIN_KEYBOARD_SENT.discard(user_id)
         await answer_message(
             bot,
@@ -3570,7 +3570,7 @@ async def process_main_reply_button(
         )
         return True
 
-    if text in {"🛒 Товар", "🛒 Товары", "🛍 Каталог"}:
+    if text in {"🛒 Товар", "🛒 Товары", "🛍 Каталог", "🛒 Товары"}:
         async with SessionLocal() as session:
             categories = await list_categories(session)
             display_settings = await get_display_settings(session)
@@ -3583,7 +3583,11 @@ async def process_main_reply_button(
         await answer_message(bot, message, "📱 Номера", business_connection_id, reply_markup=special_products_keyboard(products, back_callback="buyer:panel"))
         return True
 
-    if text == "🛒 Корзина":
+    if text == "🌐 Прокси":
+        await answer_message(bot, message, proxy_categories_text(), business_connection_id, reply_markup=proxy_categories_keyboard())
+        return True
+
+    if text in {"🛒 Корзина", "🛍 Корзина"}:
         async with SessionLocal() as session:
             rows = await get_cart_rows(session, user_id)
         await answer_message(bot, message, cart_text(rows), business_connection_id, reply_markup=cart_keyboard(rows))
@@ -5066,7 +5070,7 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
             SUPPLIER_PRICE_WAIT.pop(user_id, None)
             had_state = True
         if had_state:
-            target_markup = admin_main_reply_keyboard() if await is_admin_user(user_id) else (supplier_reply_keyboard() if await is_supplier_user(user_id) else await buyer_reply_keyboard_for_user(user_id))
+            target_markup = supplier_reply_keyboard() if await is_supplier_user(user_id) else (admin_main_reply_keyboard() if await is_admin_user(user_id) else await buyer_reply_keyboard_for_user(user_id))
             await answer_message(bot, message, "✅ Действие отменено.", business_connection_id, reply_markup=target_markup)
             return
 
@@ -5081,8 +5085,11 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         "🛒 Товар",
         "🛒 Товары",
         "🛍 Каталог",
+        "🛒 Товары",
         "📱 Номера",
+        "🌐 Прокси",
         "🛒 Корзина",
+        "🛍 Корзина",
         "🧾 Мои заказы",
         "🤝 Стать партнёром",
         "✉️ Обратная связь",
@@ -5101,10 +5108,13 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         "🛠 Админ",
         "🚚 Я поставщик",
         "🚚 Панель поставщика",
+        "🚚 Поставщик",
         "🛍 Мои товары",
+        "🛍 Товары",
         "💼 Баланс",
         "↗️ Вывод",
         "💵 Изменить цену",
+        "💵 Цена",
         "📖 Помощь",
         "📊 Статистика",
         "🧩 Прокси",
@@ -5949,12 +5959,10 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             products_in_category = list((await session.scalars(select(ShopProduct).where(ShopProduct.category_id == category_id, ShopProduct.is_deleted.is_(False)).order_by(ShopProduct.sort_order, ShopProduct.id))).all())
             count = len(products_in_category)
         text_value = category_card_text(category, count)
-        if products_in_category:
-            text_value += "\n\nТовары:\n" + "\n".join(f"• #{p.id} — {p.name} — {p.price} {p.currency}" for p in products_in_category[:25])
         await update_or_send(
             callback,
             text_value,
-            reply_markup=category_card_keyboard(category.id, category.is_active),
+            reply_markup=category_card_keyboard(category.id, category.is_active, products_in_category),
         )
         await callback.answer()
         return True
@@ -6554,33 +6562,17 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
 
     if data == "admin:proxy:products":
         async with SessionLocal() as session:
-            rows = await list_product_providers(session)
-        if rows:
-            text = "🔗 › Привязки товаров\n\n" + "\n".join(
-                f"{'✅' if row.enabled else '⛔'} {row.internal_key} — {row.product_name or 'Товар'}"
-                for row in rows
-            )
-        else:
-            text = "🔗 › Привязки товаров\n\nПривязок пока нет. Создайте товар и назначьте способ выдачи."
+            settings = await get_proxy_shop_settings(session)
         await update_or_send(
-            callback, text, reply_markup=admin_proxy_products_keyboard()
+            callback,
+            "🧩 Прокси\n\nТовары прокси создаются и настраиваются в разделе «Управление товарами». В этом разделе оставлены только настройки выдачи: страны, сроки, количество и наценка.",
+            reply_markup=admin_proxy_settings_keyboard(settings),
         )
         await callback.answer()
         return True
 
     if data == "admin:proxy:products_help":
-        text = (
-            "🔗 › Привязка товара\n\n"
-            "1. Выполните /products\n"
-            "2. Скопируйте Product ID\n"
-            "3. Для автопрокси: /bind_proxyline PRODUCT_ID\n"
-            "4. Для поставщика: /bind_product_supplier PRODUCT_ID TELEGRAM_ID\n"
-            "5. Отвязать: /unbind_product PRODUCT_ID"
-        )
-        await update_or_send(
-            callback, text, reply_markup=admin_proxy_products_keyboard()
-        )
-        await callback.answer()
+        await callback.answer("Настройка товаров находится в «Управление товарами».", show_alert=True)
         return True
 
     if data == "admin:proxy:markup_help":
@@ -6588,14 +6580,11 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             markup = await get_proxy_markup_multiplier(session)
             settings = await get_proxy_shop_settings(session)
         text = (
-            "💹 Наценка прокси\n\n"
+            "📈 Наценка прокси\n\n"
             "Финальная цена для покупателя считается так:\n"
             "базовая цена товара × коэффициент наценки.\n\n"
             f"Сейчас: {multiplier_label(markup)}\n\n"
-            "Команды:\n"
-            "├ /proxy_markup 1.77 — изменить коэффициент\n"
-            "├ /proxy_price 100 RUB — изменить базовую цену прокси-товаров\n"
-            "└ /proxy_autofix 100 RUB — создать/обновить прокси-товары"
+            "Изменение через кнопки будет добавлено в следующем шаге. Сейчас товары и базовые цены меняются через «Управление товарами»."
         )
         await update_or_send(callback, text, reply_markup=admin_proxy_settings_keyboard(settings))
         await callback.answer()
@@ -9317,3 +9306,20 @@ def format_buyer_active_order_text(order) -> str:
 
 
 # --------------------------------------------------
+
+
+# ---------------- V53 clean role panel text overrides ----------------
+def admin_panel_text() -> str:
+    return "🛠 Админ-панель\n\nВыберите раздел кнопкой ниже."
+
+
+def supplier_main_panel_text() -> str:
+    return "🚚 Панель поставщика\n\nВыберите нужный раздел кнопкой ниже."
+
+
+def supplier_commands_text() -> str:
+    return "📖 Помощь поставщика\n\nРабота идёт через кнопки панели. Выберите заказ, затем отправьте номер или код, когда бот попросит."
+
+
+def supplier_empty_panel_text() -> str:
+    return "🚚 Панель поставщика\n\nАктивных заявок сейчас нет."

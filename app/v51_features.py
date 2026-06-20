@@ -43,7 +43,7 @@ def _money(value, currency: str | None = None) -> str:
         amount = Decimal(str(value or 0)).quantize(Decimal("0.01"))
     except Exception:
         amount = Decimal("0.00")
-    text = f"{amount:.2f}"
+    text = f"{amount:.2f}".rstrip("0").rstrip(".")
     return f"{text} {currency}" if currency else text
 
 
@@ -244,16 +244,12 @@ async def admin_capability_user_keyboard(session: AsyncSession, telegram_id: int
 
 async def category_products_text_admin(session: AsyncSession, category_id: int) -> str:
     from app.catalog_v25 import category_card_text
-    category = await session.get(__import__('app.models', fromlist=['ShopCategory']).ShopCategory, category_id)
+    from app.models import ShopCategory
+    category = await session.get(ShopCategory, category_id)
     rows = list((await session.scalars(select(ShopProduct).where(ShopProduct.category_id == category_id, ShopProduct.is_deleted.is_(False)).order_by(ShopProduct.sort_order, ShopProduct.id))).all())
     if not category:
         return "Категория не найдена."
-    text = category_card_text(category, len(rows))
-    if rows:
-        text += "\n\nТовары в категории:\n" + "\n".join(f"• #{p.id} — {_safe_name(p.name)} — {_money(p.price, p.currency)}" for p in rows[:30])
-    else:
-        text += "\n\nВ этой категории пока нет товаров."
-    return text
+    return category_card_text(category, len(rows))
 
 
 async def admin_settings_visual_text() -> str:
@@ -284,20 +280,24 @@ def admin_settings_visual_keyboard() -> InlineKeyboardMarkup:
 async def admin_statistics_visual_text(session: AsyncSession) -> str:
     purchases = int(await session.scalar(select(func.count(DigitalPurchase.id))) or 0)
     delivered = int(await session.scalar(select(func.count(DigitalPurchase.id)).where(DigitalPurchase.status == "delivered")) or 0)
-    revenue = await session.scalar(select(func.coalesce(func.sum(DigitalPurchase.amount), 0)).where(DigitalPurchase.status.in_(["paid", "delivering", "delivered", "fulfillment_problem"])))
     products = int(await session.scalar(select(func.count(ShopProduct.id)).where(ShopProduct.is_deleted.is_(False))) or 0)
     users = int(await session.scalar(select(func.count(BotUser.telegram_id))) or 0)
     wallets = await session.scalar(select(func.coalesce(func.sum(UserWallet.balance), 0)))
+    revenue_rows = (await session.execute(
+        select(DigitalPurchase.currency, func.coalesce(func.sum(DigitalPurchase.amount), 0))
+        .where(DigitalPurchase.status.in_(["paid", "delivering", "delivered", "fulfillment_problem"]))
+        .group_by(DigitalPurchase.currency)
+    )).all()
+    revenue_text = ", ".join(f"{_money(amount, currency or 'USDT')}" for currency, amount in revenue_rows) or "0"
     return (
         "📊 Статистика\n\n"
         f"👥 Пользователей: {users}\n"
         f"📦 Товаров: {products}\n"
-        f"🧾 Покупок всего: {purchases}\n"
+        f"🧾 Покупок: {purchases}\n"
         f"🎁 Выдано: {delivered}\n"
-        f"💵 Оборот: {_money(revenue)}\n"
-        f"💼 Балансы пользователей: {_money(wallets)}"
+        f"💰 Оборот: {revenue_text}\n"
+        f"💼 Балансы: {_money(wallets, 'USDT')}"
     )
-
 
 def simple_back_keyboard(callback_data: str = "admin:panel") -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()

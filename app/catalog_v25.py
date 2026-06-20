@@ -393,3 +393,98 @@ async def next_stock_item(session, product_id: int):
         .limit(1)
     )
     return row
+
+
+# ---------------- V53 clean catalog/admin visual overrides ----------------
+def _fmt_money_v53(value, currency: str | None = None) -> str:
+    from decimal import Decimal, InvalidOperation
+    if value is None:
+        rendered = "0"
+    else:
+        try:
+            rendered = f"{Decimal(str(value)).quantize(Decimal('0.01')):.2f}".rstrip('0').rstrip('.')
+        except (InvalidOperation, ValueError):
+            rendered = str(value)
+    return f"{rendered} {currency}" if currency else rendered
+
+
+def admin_catalog_text(categories, products) -> str:
+    total_categories = len(categories or [])
+    total_products = len(products or [])
+    return (
+        "📦 Управление товарами\n\n"
+        f"📁 Категорий: {total_categories}\n"
+        f"🛍 Товаров: {total_products}\n\n"
+        "Выберите категорию или товар кнопкой ниже."
+    )
+
+
+def admin_catalog_keyboard(categories, products) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for category in categories:
+        count = len([p for p in products if p.category_id == category.id])
+        icon = "👁" if category.is_active else "🙈"
+        kb.button(text=f"📁 {category.name} · {count}", callback_data=f"v25:category:{category.id}")
+    uncategorized = [p for p in products if not p.category_id]
+    if uncategorized:
+        kb.button(text=f"📂 Без категории · {len(uncategorized)}", callback_data="v28:uncategorized")
+    for product in [p for p in products if not p.category_id][:20]:
+        icon = "✅" if product.is_active else "🙈"
+        kb.button(text=f"{icon} #{product.id} {product.name} · {_fmt_money_v53(product.price, product.currency)}", callback_data=f"v25:product:{product.id}")
+    kb.button(text="➕ Товар", callback_data="v25:add_product")
+    kb.button(text="➕ Категория", callback_data="v25:add_category")
+    kb.button(text="⚙️ Вид", callback_data="v25:view_settings")
+    kb.button(text="⬅️ Назад", callback_data="admin:panel")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def category_card_text(category: ShopCategory, product_count: int) -> str:
+    return (
+        f"📁 КАТЕГОРИЯ {category.name}\n\n"
+        f"Название: {category.name}\n"
+        f"Описание: {category.description or 'не задано'}\n"
+        f"Товаров: {product_count}\n"
+        f"Статус: {'показывается' if category.is_active else 'скрыта'}\n\n"
+        "Товары:"
+    )
+
+
+def category_card_keyboard(category_id: int, active: bool, products=None) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for product in list(products or [])[:30]:
+        icon = "✅" if product.is_active else "🙈"
+        kb.button(text=f"{icon} #{product.id} {product.name} · {_fmt_money_v53(product.price, product.currency)}", callback_data=f"v25:product:{product.id}")
+    kb.button(text="➕ Товар", callback_data=f"v25:category_add_product:{category_id}")
+    kb.button(text="📝 Название", callback_data=f"v25:category_name:{category_id}")
+    kb.button(text="📄 Описание", callback_data=f"v25:category_description:{category_id}")
+    kb.button(text="🖼 Фото", callback_data=f"v25:category_photo:{category_id}")
+    kb.button(text="🙈 Скрыть" if active else "👁 Показать", callback_data=f"v25:category_toggle:{category_id}")
+    kb.button(text="🗑 Удалить", callback_data=f"v25:category_delete_prompt:{category_id}")
+    kb.button(text="⬅️ Назад", callback_data="v25:catalog")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def product_card_text(product: ShopProduct, stock_count: int = 0) -> str:
+    type_label = "Статический" if product.product_type == "static" else "Количественный"
+    lines = [
+        f"📦 ТОВАР #{product.id}",
+        "",
+        f"Название: {product.name}",
+        f"Тип: {type_label}",
+        f"Цена: {_fmt_money_v53(product.price, product.currency)}",
+        f"Статус: {'показывается' if product.is_active else 'скрыт'}",
+        f"Оплата: {'включена' if product.payment_enabled else 'выключена'}",
+        f"Выдача: {product.fulfillment_type}",
+    ]
+    if product.category_id:
+        lines.append(f"Категория ID: {product.category_id}")
+    if product.description:
+        lines += ["", f"Описание: {product.description}"]
+    if product.note:
+        lines.append(f"Примечание: {product.note}")
+    if product.product_type == "quantity":
+        lines.append(f"Доступно позиций: {stock_count}")
+    lines += ["", f"Ссылка: /start product_{product.id}"]
+    return "\n".join(lines)

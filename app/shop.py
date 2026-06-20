@@ -20,7 +20,9 @@ def money(value, currency: str = "RUB") -> str:
         return "Цена уточняется"
     try:
         number = Decimal(str(value)).quantize(Decimal("0.01"))
-        rendered = f"{number:,.2f}".replace(",", " ")
+        rendered = f"{number:.2f}"
+        if "." in rendered:
+            rendered = rendered.rstrip("0").rstrip(".")
     except (InvalidOperation, ValueError):
         rendered = str(value)
     return f"{rendered} {currency}"
@@ -155,9 +157,6 @@ async def list_number_products(session):
             )
         ).all()
     )
-    supplier_ids = {
-        row.internal_key for row in providers if row.provider_type == "supplier"
-    }
     proxy_ids = {
         row.internal_key
         for row in providers
@@ -172,9 +171,7 @@ async def list_number_products(session):
             continue
         if any(word in name for word in proxy_words):
             continue
-        if row.internal_key in supplier_ids or any(
-            word in name for word in number_words
-        ):
+        if getattr(row, "fulfillment_type", None) == "number" or any(word in name for word in number_words):
             result.append(row)
     return result
 
@@ -268,15 +265,10 @@ def special_products_keyboard(
     kb = InlineKeyboardBuilder()
     for row in products:
         kb.button(
-            text=f"📦 › {row.name} — {money(row.price, row.currency)}",
+            text=f"📦 {row.name} · {money(row.price, row.currency)}",
             callback_data=f"buyer:shopproduct:{row.id}",
         )
-
-    kb.button(
-        text="⬅️ › Назад",
-        callback_data=back_callback,
-        style="danger",
-    )
+    kb.button(text="⬅️ Назад", callback_data=back_callback)
     kb.adjust(1)
     return kb.as_markup()
 
