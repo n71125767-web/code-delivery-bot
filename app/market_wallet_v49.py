@@ -81,21 +81,68 @@ async def _raw_crypto_pay_request(method: str, payload: dict[str, Any]) -> dict[
 
 
 def _extract_check_link(data: dict[str, Any]) -> str | None:
-    return (
+    """Extract a CryptoBot check URL from direct API or library responses."""
+    if not isinstance(data, dict):
+        return None
+    direct = (
         data.get("bot_check_url")
         or data.get("check_url")
         or data.get("url")
         or data.get("link")
+        or data.get("pay_url")
     )
+    if direct:
+        return str(direct)
+    for key in ("result", "check", "data"):
+        nested = data.get(key)
+        if isinstance(nested, dict):
+            found = _extract_check_link(nested)
+            if found:
+                return found
+    return None
+
+
+def _extract_check_id(data: dict[str, Any]) -> str:
+    if not isinstance(data, dict):
+        return ""
+    direct = data.get("check_id") or data.get("id")
+    if direct:
+        return str(direct)
+    for key in ("result", "check", "data"):
+        nested = data.get(key)
+        if isinstance(nested, dict):
+            value = _extract_check_id(nested)
+            if value:
+                return value
+    return ""
 
 
 async def _create_cryptobot_withdraw_check(*, supplier_id: int, amount: Decimal, asset: str) -> tuple[str | None, str | None]:
     """Create an outgoing CryptoBot check for supplier withdrawal.
 
-    createInvoice from examples is for incoming payments, not payouts.
-    For withdrawal we first use createCheck; if the library cannot do it,
-    we call Crypto Pay API directly.
+    Important: createInvoice creates an incoming payment link; supplier payouts need
+    createCheck. We try the official HTTP method first, then the library method.
+    If CryptoBot disallows checks for this token, caller sends the withdrawal to
+    manual moderation instead of losing the request.
     """
+    normalized_amount = str(Decimal(str(amount)).quantize(Decimal("0.01")))
+    errors: list[str] = []
+
+    # Some CryptoBot tokens reject pinned checks, so try both variants.
+    for payload in (
+        {"asset": asset, "amount": normalized_amount, "pin_to_user_id": supplier_id},
+        {"asset": asset, "amount": normalized_amount},
+    ):
+        try:
+            data = await _raw_crypto_pay_request("createCheck", payload)
+            link = _extract_check_link(data)
+            check_id = _extract_check_id(data)
+            if link or check_id:
+                return link, check_id
+            errors.append(f"empty createCheck response: {data}")
+        except Exception as exc:
+            errors.append(str(exc))
+
     try:
         from app.cryptopay_service import crypto_client
         try:
@@ -110,17 +157,15 @@ async def _create_cryptobot_withdraw_check(*, supplier_id: int, amount: Decimal,
                 amount=float(amount),
             )
         data = _obj_to_dict(check)
-        return _extract_check_link(data), str(data.get("check_id") or data.get("id") or "")
-    except Exception:
-        data = await _raw_crypto_pay_request(
-            "createCheck",
-            {
-                "asset": asset,
-                "amount": str(amount),
-                "pin_to_user_id": supplier_id,
-            },
-        )
-        return _extract_check_link(data), str(data.get("check_id") or data.get("id") or "")
+        link = _extract_check_link(data)
+        check_id = _extract_check_id(data)
+        if link or check_id:
+            return link, check_id
+        errors.append(f"empty library response: {data}")
+    except Exception as exc:
+        errors.append(str(exc))
+
+    raise RuntimeError("; ".join(errors[-3:]) or "CryptoBot createCheck failed")
 
 
 def user_label(user_id: int | None, username: str | None = None) -> str:
@@ -240,9 +285,13 @@ async def notify_purchase_and_credit_supplier(bot: Bot, purchase_id: int) -> Non
                     # указанную админом при привязке поставщика к товару.
                     payout_amount = getattr(provider, "supplier_payout_amount", None)
                     payout_currency = getattr(provider, "supplier_payout_currency", None) or purchase.currency
+                    qty = max(1, int(getattr(purchase, "quantity", 1) or 1))
                     if payout_amount is None:
-                        # Legacy fallback for old bindings: keep previous behavior, but new bindings should always store payout.
+                        # Legacy fallback for old bindings: old records used the full order amount.
                         payout_amount = purchase.amount
+                    else:
+                        # New bindings store supplier payout per 1 unit, so multiply by quantity.
+                        payout_amount = money(payout_amount) * qty
                     existing_ledger = await session.scalar(
                         select(WalletLedger).where(
                             WalletLedger.user_id == supplier_id,
@@ -287,8 +336,11 @@ async def notify_purchase_and_credit_supplier(bot: Bot, purchase_id: int) -> Non
         try:
             payout_amount = getattr(provider, "supplier_payout_amount", None)
             payout_currency = getattr(provider, "supplier_payout_currency", None) or purchase.currency
+            qty = max(1, int(getattr(purchase, "quantity", 1) or 1))
             if payout_amount is not None:
-                payout_line = f"\n✅ Начислено: {money_text(payout_amount, payout_currency)}"
+                payout_amount = money(payout_amount) * qty
+                qty_note = f" × {qty}" if qty > 1 else ""
+                payout_line = f"\n✅ Начислено: {money_text(payout_amount, payout_currency)}{qty_note}"
         except Exception:
             payout_line = ""
         supplier_text = (

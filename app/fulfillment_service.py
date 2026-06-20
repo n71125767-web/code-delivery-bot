@@ -214,7 +214,8 @@ async def _fulfill_mtproxy_stock(bot: Bot, purchase: DigitalPurchase, product: S
             stock.reserved_at = None
             stock.reserved_purchase_id = None
         if db_product:
-            db_product.sales_count = int(db_product.sales_count or 0) + 1
+            qty = max(1, int(getattr(row, "quantity", None) or getattr(purchase, "quantity", 1) or 1))
+            db_product.sales_count = int(db_product.sales_count or 0) + qty
             db_product.revenue_total = Decimal(str(db_product.revenue_total or 0)) + Decimal(str(row.amount if row else purchase.amount))
         await session.commit()
     await notify_admins_simple(bot, f"✅ MTProxy purchase #{purchase.id} delivered from stock")
@@ -297,7 +298,8 @@ async def fulfill_proxyline(
         row.delivery_error = None
         row.active_key = None
         row.updated_at = datetime.utcnow()
-        db_product.sales_count = int(db_product.sales_count or 0) + 1
+        qty = max(1, int(getattr(row, "quantity", None) or getattr(purchase, "quantity", 1) or 1))
+        db_product.sales_count = int(db_product.sales_count or 0) + qty
         db_product.revenue_total = Decimal(
             str(db_product.revenue_total or 0)
         ) + Decimal(str(row.amount))

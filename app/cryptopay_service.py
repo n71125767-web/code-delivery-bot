@@ -753,7 +753,8 @@ async def deliver_purchase(bot: Bot, purchase_id: int) -> bool:
                 db_purchase.delivery_error = None
                 db_purchase.active_key = None
                 db_purchase.delivery_message_id = getattr(message, "message_id", None)
-                db_product.sales_count = int(db_product.sales_count or 0) + 1
+                qty = max(1, int(getattr(db_purchase, "quantity", 1) or 1))
+                db_product.sales_count = int(db_product.sales_count or 0) + qty
                 db_product.revenue_total = _decimal(
                     db_product.revenue_total or 0
                 ) + _decimal(db_purchase.amount)

@@ -84,9 +84,12 @@ def confirm_keyboard(order_id: int):
 
 def number_keyboard(order_id: int):
     kb = InlineKeyboardBuilder()
-    kb.button(text="📩 › Код отправлен", callback_data=f"code_sent:{order_id}")
+    # После получения номера покупатель должен явно запросить код, если он нужен.
+    # Кнопка успеха оставлена последней, чтобы заказ случайно не закрывался вместо запроса кода.
+    kb.button(text="🔑 › Запросить код", callback_data=f"code_sent:{order_id}")
     kb.button(text="⚠️ › Номер не работает", callback_data=f"number_invalid:{order_id}")
-    kb.adjust(2)
+    kb.button(text="✅ › Всё успешно", callback_data=f"confirm_success:{order_id}")
+    kb.adjust(2, 1)
     return kb.as_markup()
 
 

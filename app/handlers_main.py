@@ -2663,12 +2663,14 @@ async def process_shop_admin_pending_input(
             elif action == "product_supplier":
                 row = await session.get(ShopProduct, object_id)
                 raw_parts = text.replace("@", "").split()
-                if len(raw_parts) < 2:
-                    raise ValueError("Формат: TELEGRAM_ID СУММА [ВАЛЮТА]. Пример: 123456789 4.50 USDT")
+                if len(raw_parts) < 1:
+                    raise ValueError("Формат: TELEGRAM_ID [СУММА] [ВАЛЮТА]. Пример: 123456789 4.50 USDT")
                 supplier_id = int(raw_parts[0])
-                supplier_amount = Decimal(raw_parts[1].replace(",", "."))
+                # Если админ указал только ID — поставщик сохраняется, а сумма берётся из цены товара.
+                # Это убирает ситуацию, когда товар нельзя показать/сохранить из-за незаполненной суммы.
+                supplier_amount = Decimal(str(row.price or "0")) if len(raw_parts) < 2 else Decimal(raw_parts[1].replace(",", "."))
                 if supplier_amount <= 0:
-                    raise ValueError("Сумма поставщика должна быть больше 0.")
+                    raise ValueError("Сумма поставщика должна быть больше 0. Укажите, например: 123456789 4.50 USDT")
                 supplier_currency = (raw_parts[2] if len(raw_parts) > 2 else (row.currency or "USDT")).upper()[:10]
                 supplier = await add_supplier(session, supplier_id, f"supplier_{supplier_id}")
                 # 1) Поставщик становится активным поставщиком магазина.
@@ -4493,18 +4495,16 @@ async def send_supplier_request_for_order(
         "Пример: +79990000000"
     )
 
+    # Поставщик должен получать заявки в обычный чат с ботом.
+    # business_connection_id покупателя сюда передавать нельзя — иначе сообщение может не уйти.
     ok = await safe_send_message(
         bot,
         supplier.telegram_id,
         supplier_text,
-        actual_business_id,
+        business_connection_id=None,
         reply_markup=supplier_inline_menu_keyboard(),
-        allow_normal_fallback=False if actual_business_id else True,
+        allow_normal_fallback=True,
     )
-    # Если есть business_connection_id, НЕ падаем в обычный бот-чат,
-    # иначе уведомления поставщика начинают приходить в бота, а не в Business-чат.
-    if not ok and not actual_business_id:
-        ok = await safe_send_message(bot, supplier.telegram_id, supplier_text)
 
     if not ok:
         await notify_admins(
@@ -4532,18 +4532,10 @@ async def send_supplier_request_for_order(
         bot,
         supplier.telegram_id,
         button_text,
-        actual_business_id,
+        business_connection_id=None,
         reply_markup=supplier_new_order_keyboard(supplier_request.id, "number"),
-        allow_normal_fallback=False if actual_business_id else True,
+        allow_normal_fallback=True,
     )
-    # Если есть business_connection_id, НЕ отправляем fallback в обычный бот-чат.
-    if not sent_with_buttons and not actual_business_id:
-        sent_with_buttons = await safe_send_message(
-            bot,
-            supplier.telegram_id,
-            button_text,
-            reply_markup=supplier_new_order_keyboard(supplier_request.id, "number"),
-        )
 
     if sent_with_buttons and hasattr(sent_with_buttons, "message_id"):
         async with SessionLocal() as session:
@@ -5152,6 +5144,27 @@ async def handle_supplier_message(
             )
             return
 
+    # Если поставщик отправил сумму и адрес после кнопки «Вывод», но состояние
+    # сбросилось после рестарта/обновления, не воспринимаем это как номер/код.
+    # Пример: 10 UQ...
+    if re.match(r"^\s*\d+(?:[,.]\d+)?\s+\S+", text):
+        result = await create_withdrawal_request(supplier_id, text)
+        await answer_message(
+            bot,
+            message,
+            result,
+            business_connection_id,
+            reply_markup=wallet_keyboard(is_supplier=True),
+        )
+        if "Заявка на вывод" in result or "модерац" in result.lower():
+            await notify_admins(
+                bot,
+                "↗️ Запрос поставщика на вывод\n\n"
+                f"Поставщик: {supplier_id}\n"
+                f"Результат: {result}",
+            )
+        return
+
     # Сюда попадаем только если у поставщика нет активной заявки.
     try:
         await answer_message(
@@ -5563,16 +5576,10 @@ async def resend_problem_to_supplier(bot: Bot, order, problem_type: str) -> None
         bot,
         supplier.telegram_id,
         supplier_text,
-        order.business_connection_id,
+        business_connection_id=None,
         reply_markup=supplier_new_order_keyboard(problem_request.id, request_type),
+        allow_normal_fallback=True,
     )
-    if not ok:
-        ok = await safe_send_message(
-            bot,
-            supplier.telegram_id,
-            supplier_text,
-            reply_markup=supplier_new_order_keyboard(problem_request.id, request_type),
-        )
 
     if ok and hasattr(ok, "message_id"):
         async with SessionLocal() as session:
@@ -7457,10 +7464,8 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             )
 
         sent = await safe_send_message(
-            bot, supplier.telegram_id, supplier_text, order.business_connection_id
+            bot, supplier.telegram_id, supplier_text, business_connection_id=None, allow_normal_fallback=True
         )
-        if not sent:
-            sent = await safe_send_message(bot, supplier.telegram_id, supplier_text)
 
         text = (
             f"{result}\n\n"
@@ -9518,16 +9523,10 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             bot,
             supplier.telegram_id,
             supplier_text,
-            order.business_connection_id,
+            business_connection_id=None,
             reply_markup=supplier_new_order_keyboard(code_request.id, "code"),
+            allow_normal_fallback=True,
         )
-        if not ok:
-            ok = await safe_send_message(
-                bot,
-                supplier.telegram_id,
-                supplier_text,
-                reply_markup=supplier_new_order_keyboard(code_request.id, "code"),
-            )
 
         if ok and hasattr(ok, "message_id"):
             async with SessionLocal() as session:
