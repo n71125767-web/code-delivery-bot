@@ -123,91 +123,91 @@ async def buyer_orders_page(user_id: int, username: str | None, page: int = 0):
 
 
 async def hard_delete_product(session: AsyncSession, product_id: int) -> bool:
-    """Hard-delete a product safely even when old marketplace/history rows reference it.
+    """Physically delete product and clean every known FK safely.
 
-    The previous ORM-only cleanup could miss legacy FK rows on PostgreSQL.
-    This version first detaches every known product reference with direct SQL,
-    then deletes dependent non-history rows, and only after that deletes the product.
+    PostgreSQL aborts the whole transaction after a failed statement, so this
+    function avoids blind try/except DDL/DML. It discovers FK columns first and
+    then either NULLs nullable references or deletes rows that cannot be NULL.
     """
-    product = await session.get(ShopProduct, product_id)
+    product = await session.get(ShopProduct, int(product_id))
     if not product:
         return False
-
-    internal_key = product.internal_key
     pid = int(product_id)
+    internal_key = product.internal_key
 
-    # History tables: keep the history, detach the catalog product.
-    known_update_refs = (
-        "marketplace_applications",
-        "promo_codes",
-        "wallet_payments",
-        "digital_purchases",
-    )
-    for table_name in known_update_refs:
-        try:
-            if table_name == "digital_purchases":
-                await session.execute(
-                    text("UPDATE digital_purchases SET product_id = NULL, stock_item_id = NULL WHERE product_id = :pid"),
-                    {"pid": pid},
-                )
-            else:
-                await session.execute(
-                    text(f"UPDATE {table_name} SET product_id = NULL WHERE product_id = :pid"),
-                    {"pid": pid},
-                )
-        except Exception:
-            # If a legacy installation does not have this table/column, continue and let
-            # the final DELETE expose any real remaining constraint.
-            pass
+    bind = session.get_bind()
+    dialect = getattr(getattr(bind, "dialect", None), "name", "")
 
-    # Non-history tables: remove rows owned by this product.
-    for sql in (
-        "DELETE FROM cart_items WHERE product_id = :pid",
-        "DELETE FROM product_stock_items WHERE product_id = :pid",
-    ):
-        try:
-            await session.execute(text(sql), {"pid": pid})
-        except Exception:
-            pass
+    def safe_ident(value: str) -> str:
+        value = str(value)
+        if not value.replace("_", "").isalnum():
+            raise ValueError("unsafe identifier")
+        return value
 
-    if internal_key is not None:
-        try:
-            await session.execute(text("DELETE FROM product_providers WHERE internal_key = :ikey"), {"ikey": internal_key})
-        except Exception:
-            pass
-
-    # Extra safety for future tables: in PostgreSQL discover any FK column that still
-    # references shop_products and try to NULL it before deleting.
-    try:
-        bind = session.get_bind()
-        dialect = getattr(getattr(bind, "dialect", None), "name", "")
-    except Exception:
-        dialect = ""
     if dialect == "postgresql":
-        try:
-            rows = (await session.execute(text("""
-                SELECT tc.table_name, kcu.column_name
-                FROM information_schema.table_constraints AS tc
-                JOIN information_schema.key_column_usage AS kcu
-                  ON tc.constraint_name = kcu.constraint_name
-                 AND tc.table_schema = kcu.table_schema
-                JOIN information_schema.constraint_column_usage AS ccu
-                  ON ccu.constraint_name = tc.constraint_name
-                 AND ccu.table_schema = tc.table_schema
-                WHERE tc.constraint_type = 'FOREIGN KEY'
-                  AND ccu.table_name = 'shop_products'
-                  AND ccu.column_name = 'id'
-                  AND tc.table_schema = 'public'
-            """))).all()
-            for table_name, column_name in rows:
-                if not str(table_name).replace("_", "").isalnum() or not str(column_name).replace("_", "").isalnum():
-                    continue
-                if table_name in {"cart_items", "product_stock_items"}:
-                    await session.execute(text(f"DELETE FROM {table_name} WHERE {column_name} = :pid"), {"pid": pid})
-                else:
-                    await session.execute(text(f"UPDATE {table_name} SET {column_name} = NULL WHERE {column_name} = :pid"), {"pid": pid})
-        except Exception:
-            pass
+        # Provider binding is not an FK to shop_products.id.
+        if internal_key is not None:
+            await session.execute(text("DELETE FROM product_providers WHERE internal_key = :ikey"), {"ikey": internal_key})
+
+        rows = (await session.execute(text("""
+            SELECT tc.table_name, kcu.column_name, cols.is_nullable
+            FROM information_schema.table_constraints AS tc
+            JOIN information_schema.key_column_usage AS kcu
+              ON tc.constraint_name = kcu.constraint_name
+             AND tc.table_schema = kcu.table_schema
+            JOIN information_schema.constraint_column_usage AS ccu
+              ON ccu.constraint_name = tc.constraint_name
+             AND ccu.table_schema = tc.table_schema
+            JOIN information_schema.columns AS cols
+              ON cols.table_schema = kcu.table_schema
+             AND cols.table_name = kcu.table_name
+             AND cols.column_name = kcu.column_name
+            WHERE tc.constraint_type = 'FOREIGN KEY'
+              AND ccu.table_name = 'shop_products'
+              AND ccu.column_name = 'id'
+              AND tc.table_schema = 'public'
+        """))).all()
+
+        delete_tables = {
+            "cart_items",
+            "product_stock_items",
+            "product_providers",
+            "marketplace_applications",
+        }
+        for table_name, column_name, is_nullable in rows:
+            table = safe_ident(table_name)
+            column = safe_ident(column_name)
+            if table in delete_tables or str(is_nullable).upper() != "YES":
+                await session.execute(text(f"DELETE FROM {table} WHERE {column} = :pid"), {"pid": pid})
+            else:
+                await session.execute(text(f"UPDATE {table} SET {column} = NULL WHERE {column} = :pid"), {"pid": pid})
+
+        # Legacy direct relations that might not have declared FKs.
+        await session.execute(text("DELETE FROM cart_items WHERE product_id = :pid"), {"pid": pid})
+        await session.execute(text("DELETE FROM product_stock_items WHERE product_id = :pid"), {"pid": pid})
+        await session.execute(text("DELETE FROM marketplace_applications WHERE product_id = :pid"), {"pid": pid})
+        await session.execute(text("UPDATE digital_purchases SET product_id = NULL, stock_item_id = NULL WHERE product_id = :pid"), {"pid": pid})
+        await session.execute(text("UPDATE promo_codes SET product_id = NULL WHERE product_id = :pid"), {"pid": pid})
+        await session.execute(text("UPDATE wallet_payments SET product_id = NULL WHERE product_id = :pid"), {"pid": pid})
+    else:
+        # SQLite/local fallback. If a table is absent, ignore after rollback and continue.
+        statements = [
+            ("DELETE FROM product_providers WHERE internal_key = :ikey", {"ikey": internal_key}) if internal_key is not None else None,
+            ("DELETE FROM cart_items WHERE product_id = :pid", {"pid": pid}),
+            ("DELETE FROM product_stock_items WHERE product_id = :pid", {"pid": pid}),
+            ("DELETE FROM marketplace_applications WHERE product_id = :pid", {"pid": pid}),
+            ("UPDATE digital_purchases SET product_id = NULL, stock_item_id = NULL WHERE product_id = :pid", {"pid": pid}),
+            ("UPDATE promo_codes SET product_id = NULL WHERE product_id = :pid", {"pid": pid}),
+            ("UPDATE wallet_payments SET product_id = NULL WHERE product_id = :pid", {"pid": pid}),
+        ]
+        for item in statements:
+            if not item:
+                continue
+            sql, params = item
+            try:
+                await session.execute(text(sql), params)
+            except Exception:
+                await session.rollback()
 
     await session.execute(text("DELETE FROM shop_products WHERE id = :pid"), {"pid": pid})
     await session.commit()
@@ -348,4 +348,33 @@ async def admin_statistics_visual_text(session: AsyncSession) -> str:
 def simple_back_keyboard(callback_data: str = "admin:panel") -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="⬅️ Назад", callback_data=callback_data)
+    return kb.as_markup()
+
+
+# ---------------- V63 clean settings visual overrides ----------------
+async def admin_settings_visual_text() -> str:
+    return "⚙️ Настройки магазина"
+
+def admin_settings_visual_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🏠 Главная страница", callback_data="admin:edit_main_page")
+    kb.button(text="📕 FAQ", callback_data="admin:edit_faq")
+    kb.button(text="👥 Админы", callback_data="admin:admins")
+    kb.button(text="🔙 Назад", callback_data="admin:panel")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+# ---------------- V64 audit-clean final overrides ----------------
+async def admin_settings_visual_text() -> str:
+    return "⚙️ Настройки магазина\n\nВыберите нужный раздел кнопкой ниже."
+
+
+def admin_settings_visual_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🏠 Главная страница", callback_data="admin:edit_main_page")
+    kb.button(text="📕 FAQ", callback_data="admin:edit_faq")
+    kb.button(text="🧩 Вид каталога", callback_data="v25:view_settings")
+    kb.button(text="🔙 Назад", callback_data="admin:panel")
+    kb.adjust(2)
     return kb.as_markup()

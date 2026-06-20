@@ -898,11 +898,10 @@ def supplier_selected_request_keyboard(
 # V50 final UI overrides: role-separated reply panels, cleaner categories, no auto-emojis.
 def admin_main_reply_keyboard() -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text="💰 Управление товарами"), KeyboardButton(text="💵 Способы оплаты")],
-        [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="⚙️ Настройки")],
-        [KeyboardButton(text="📢 Рассылка"), KeyboardButton(text="🤝 Партнёры")],
-        [KeyboardButton(text="🌐 Прокси"), KeyboardButton(text="👥 Админы")],
-        [KeyboardButton(text="👁 Скрытые"), KeyboardButton(text="🔙 Главное меню")],
+        [KeyboardButton(text="💰 Управление товарами")],
+        [KeyboardButton(text="💵 Способы оплаты"), KeyboardButton(text="📊 Оплата")],
+        [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="📣 Рассылка")],
+        [KeyboardButton(text="🔙 Главное меню")],
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=False, input_field_placeholder="⚙️ Админ меню", selective=True)
 
@@ -911,15 +910,11 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="💰 Управление товарами", callback_data="v25:catalog")
     kb.button(text="💵 Способы оплаты", callback_data="admin:payments")
-    kb.button(text="📊 Статистика", callback_data="admin:status")
+    kb.button(text="📊 Оплата", callback_data="admin:status")
     kb.button(text="⚙️ Настройки", callback_data="admin:main_settings")
-    kb.button(text="📢 Рассылка", callback_data="admin:broadcast")
-    kb.button(text="🤝 Партнёры", callback_data="admin:partners")
-    kb.button(text="👥 Админы", callback_data="admin:admins")
-    kb.button(text="🌐 Прокси", callback_data="admin:proxy")
-    kb.button(text="👁 Скрытые", callback_data="admin:hidden")
+    kb.button(text="📣 Рассылка", callback_data="admin:broadcast")
     kb.button(text="🔙 Главное меню", callback_data="buyer:panel")
-    kb.adjust(2, 2, 2, 2, 2)
+    kb.adjust(1, 2, 2, 1)
     return kb.as_markup()
 
 
@@ -928,7 +923,6 @@ def admin_hidden_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="🤝 Заявки партнёров", callback_data="market:admin:list")
     kb.button(text="↗️ Выводы поставщиков", callback_data="admin:withdrawals")
     kb.button(text="👥 Права админов", callback_data="admin:caps")
-    kb.button(text="🧹 Очистка удалённых товаров", callback_data="admin:cleanup:deleted_products")
     kb.button(text="🔙 Назад", callback_data="admin:panel")
     kb.adjust(2)
     return kb.as_markup()
@@ -1015,3 +1009,50 @@ def admin_proxy_settings_keyboard(settings) -> InlineKeyboardMarkup:
     from app.proxy_admin_v61 import proxy_admin_keyboard
     return proxy_admin_keyboard()
 
+
+
+# ---------------- V64 final stable menu overrides ----------------
+def admin_main_reply_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text="💰 Управление товарами")],
+        [KeyboardButton(text="💵 Способы оплаты"), KeyboardButton(text="📊 Оплата")],
+        [KeyboardButton(text="⚙️ Настройки"), KeyboardButton(text="📣 Рассылка")],
+        [KeyboardButton(text="🔙 Главное меню")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=False, input_field_placeholder="Админ меню", selective=True)
+
+
+def admin_panel_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="💰 Управление товарами", callback_data="v25:catalog")
+    kb.button(text="💵 Способы оплаты", callback_data="admin:payments")
+    kb.button(text="📊 Оплата", callback_data="admin:status")
+    kb.button(text="⚙️ Настройки", callback_data="admin:main_settings")
+    kb.button(text="📣 Рассылка", callback_data="admin:broadcast")
+    kb.button(text="🔙 Главное меню", callback_data="buyer:panel")
+    kb.adjust(1, 2, 2, 1)
+    return kb.as_markup()
+
+
+def admin_hidden_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🤝 Заявки партнёров", callback_data="market:admin:list")
+    kb.button(text="↗️ Выводы поставщиков", callback_data="admin:withdrawals")
+    kb.button(text="👥 Права админов", callback_data="admin:caps")
+    kb.button(text="🧹 Очистка удалённых", callback_data="admin:cleanup_deleted_products")
+    kb.button(text="🔙 Назад", callback_data="admin:panel")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+def supplier_inline_menu_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📦 Мои заказы", callback_data="supplier:my_orders")
+    kb.button(text="🛍 Мои товары", callback_data="supplier:products")
+    kb.button(text="💼 Баланс", callback_data="supplier:wallet")
+    kb.button(text="↗️ Вывод", callback_data="supplier:withdraw_help")
+    kb.button(text="⏳ Ожидают", callback_data="supplier:pending:0")
+    kb.button(text="👤 Профиль", callback_data="supplier:profile")
+    kb.button(text="🔙 Главное меню", callback_data="buyer:panel")
+    kb.adjust(2)
+    return kb.as_markup()

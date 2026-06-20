@@ -1,0 +1,17 @@
+V64 self-audit report
+
+Checked base: V63_ADMIN_CLEANUP_FIX.
+
+Confirmed issues found and addressed:
+1. Multiple duplicate menu function definitions existed in keyboards.py/handlers_main.py/v51_features.py. Python uses only the last definition, which explains why the visual changed unpredictably between patches. V64 appends final stable overrides for the main menus.
+2. Admin broadcast state could intercept product photo/text edits because broadcast input was processed before catalog/admin pending input. V64 processes targeted catalog/shop/admin states before broadcast and clears broadcast state when entering product/proxy edit flows.
+3. Settings menu still exposed number services and unrelated controls. V64 reduces store settings to main page, FAQ and catalog view only.
+4. Supplier menu had command/help-heavy items. V64 reduces it to functional buttons.
+5. Product/category buttons still displayed internal numeric IDs in some places. V64 removes those IDs from visible button labels and product card title.
+6. V63 package claim about cleanup was checked; generated __pycache__ appears only after local compileall, not in the original ZIP. V64 package is built after removing caches.
+
+Still requires live verification on Render/PostgreSQL:
+- actual Telegram media save flow;
+- real PROXYS.IO API response format;
+- hard-delete against the exact production DB constraints;
+- CryptoBot webhook delivery and notification formatting.

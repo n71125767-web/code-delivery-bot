@@ -98,13 +98,8 @@ async def balances_text() -> str:
         return f"{name}: {warn} {label}"
     return line("Proxyline", p_amount, p_cur, p_err) + "\n" + line("Proxys", x_amount, x_cur, x_err)
 
-async def proxy_admin_text(session: AsyncSession, include_balances: bool = True) -> str:
-    balances = await balances_text() if include_balances else "Proxyline: —\nProxys: —"
-    return (
-        "🌐 Прокси\n\n"
-        "Балансы:\n" + balances + "\n\n"
-        "Выберите раздел кнопкой ниже."
-    )
+async def proxy_admin_text(session: AsyncSession, include_balances: bool = False) -> str:
+    return "🌐 Прокси"
 
 def proxy_admin_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
@@ -113,11 +108,9 @@ def proxy_admin_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="💯 STANDART", callback_data="admin:proxy:kind:standard")
     kb.button(text="🏠 RESIDENTIAL", callback_data="admin:proxy:kind:residential")
     kb.button(text="💰 Балансы", callback_data="admin:proxy:balances")
-    kb.button(text="🌍 Страны", callback_data="admin:proxy:countries:0")
-    kb.button(text="📅 Сроки", callback_data="admin:proxy:periods")
     kb.button(text="🔄 Создать/обновить", callback_data="admin:proxy:autofix")
-    kb.button(text="🔙 Назад", callback_data="admin:panel")
-    kb.adjust(2, 2, 2, 2, 1)
+    kb.button(text="🔙 Назад", callback_data="v25:catalog")
+    kb.adjust(2)
     return kb.as_markup()
 
 def provider_keyboard(provider: str) -> InlineKeyboardMarkup:
@@ -141,10 +134,9 @@ async def proxy_kind_text(session: AsyncSession, kind: str) -> str:
     product = await find_proxy_product(session, kind)
     markup = await get_proxy_markup_multiplier_for_category(session, kind)
     lines = [f"{meta['title']}", ""]
-    lines.append(f"Провайдер: {'Proxyline' if meta['provider']=='proxyline' else 'Proxys'}")
     if product:
         final = apply_proxy_markup(product.price, markup)
-        lines.append(f"Товар: #{product.id} — {product.name}")
+        lines.append(f"Товар: {product.id} — {product.name}")
         lines.append(f"База: {fmt_amount(product.price, product.currency)}")
         lines.append(f"Наценка: {multiplier_label(markup)}")
         lines.append(f"Покупателю: {fmt_amount(final, product.currency)} за 1 мес.")

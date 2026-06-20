@@ -2225,7 +2225,7 @@ async def process_catalog_v25_input(
                     count = await v25_stock_count(session, product.id)
 
                 CATALOG_V25_STATE.pop(admin_id, None)
-                if data["product_type"] == "quantity":
+                if getattr(product, "product_type", None) == "quantity":
                     kb = InlineKeyboardBuilder()
                     kb.button(text="Следующий", callback_data=f"v25:stock:{product.id}")
                     kb.button(text="Отмена", callback_data=f"v25:product:{product.id}")
@@ -2415,7 +2415,7 @@ async def process_catalog_v25_input(
                 await session.refresh(product)
                 count = await v25_stock_count(session, product.id)
                 CATALOG_V25_STATE.pop(admin_id, None)
-                if data["product_type"] == "quantity":
+                if getattr(product, "product_type", None) == "quantity":
                     kb = InlineKeyboardBuilder()
                     kb.button(text="Следующий", callback_data=f"v25:stock:{product.id}")
                     kb.button(text="Отмена", callback_data=f"v25:product:{product.id}")
@@ -3558,7 +3558,7 @@ async def process_main_reply_button(
         await answer_message(bot, message, "👁 Скрытые разделы\n\nВыберите действие кнопкой ниже.", business_connection_id, reply_markup=admin_hidden_keyboard())
         return True
 
-    if admin_access and text in {"🧩 Прокси", "🌐 Прокси", "Прокси"}:
+    if admin_access and text in {"⚙️ Настройки прокси", "🧩 Настройки прокси"}:
         async with SessionLocal() as session:
             text_value = await v61_proxy_admin_text(session)
         await answer_message(bot, message, text_value, business_connection_id, reply_markup=v61_proxy_admin_keyboard())
@@ -5144,6 +5144,7 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         "💳 Способы оплаты",
         "⚙️ Настройки",
         "📢 Рассылка",
+        "📣 Рассылка",
         "👁 Скрытые",
         "🏠 Главное меню",
         "⚙️ Админ меню",
@@ -5160,6 +5161,7 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         "📖 Помощь",
         "📊 Статистика",
         "🧩 Прокси",
+        "⚙️ Настройки прокси",
     }
     if text in main_reply_buttons:
         # Нажатие главной кнопки отменяет незавершённый ввод старого мастера.
@@ -5173,14 +5175,32 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         CART_QUANTITY_WAIT.pop(user_id, None)
         PARTNER_APPLICATION_WAIT.discard(user_id)
         ADMIN_BROADCAST_V28.pop(user_id, None)
+        ADMIN_PROXY_PRICE_WAIT.pop(user_id, None)
+        ADMIN_PROXY_MARKUP_WAIT.pop(user_id, None)
+        ADMIN_PROXY_TEXT_WAIT.pop(user_id, None)
+        SUPPLIER_PRICE_WAIT.pop(user_id, None)
+        WALLET_TOPUP_WAIT.discard(user_id)
+        BUYER_FEEDBACK_WAIT.discard(user_id)
         if await process_main_reply_button(bot, message, business_connection_id):
             return
 
     if await is_admin_user(user_id) and not text.startswith("/"):
-        # Сначала обрабатываем ввод, который ожидает админка:
-        # ID нового администратора, цену, название товара и т.д.
+        # Сначала обрабатываем конкретные ожидающие вводы админки.
+        # Это исправляет ситуацию, когда старое состояние рассылки перехватывало
+        # фото товара, текст FAQ/прокси или действия поставщика.
+        if user_id in CATALOG_V25_STATE:
+            if await process_catalog_v25_input(bot, message, business_connection_id):
+                return
+        if user_id in SHOP_ADMIN_WAIT:
+            if await process_shop_admin_pending_input(bot, message, business_connection_id):
+                return
+        if user_id in ADMIN_TEXT_EDIT_WAIT or user_id in ADMIN_ADD_ADMIN_WAIT or user_id in ADMIN_SUPPLIER_WAIT:
+            if await process_admin_pending_input(bot, message, business_connection_id):
+                return
+        # Рассылка обрабатывается только если нет других активных мастеров.
         if await process_broadcast_v28_input(bot, message, business_connection_id):
             return
+
         if await process_catalog_v25_input(bot, message, business_connection_id):
             return
         if await process_shop_admin_pending_input(bot, message, business_connection_id):
@@ -5665,6 +5685,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data.startswith("v25:edit_content:"):
+        ADMIN_BROADCAST_V28.pop(callback.from_user.id, None)
         product_id = int(data.rsplit(":", 1)[1])
         CATALOG_V25_STATE[callback.from_user.id] = {
             "action": "edit_product_content",
@@ -5679,6 +5700,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data.startswith("v25:edit_name:"):
+        ADMIN_BROADCAST_V28.pop(callback.from_user.id, None)
         product_id = int(data.rsplit(":", 1)[1])
         CATALOG_V25_STATE[callback.from_user.id] = {
             "action": "edit_product_name",
@@ -5693,6 +5715,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data.startswith("v25:edit_price:"):
+        ADMIN_BROADCAST_V28.pop(callback.from_user.id, None)
         product_id = int(data.rsplit(":", 1)[1])
         CATALOG_V25_STATE[callback.from_user.id] = {
             "action": "edit_product_price",
@@ -5705,6 +5728,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data.startswith("v25:edit_description:"):
+        ADMIN_BROADCAST_V28.pop(callback.from_user.id, None)
         product_id = int(data.rsplit(":", 1)[1])
         CATALOG_V25_STATE[callback.from_user.id] = {
             "action": "edit_product_description",
@@ -5731,6 +5755,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data.startswith("v25:edit_photo:"):
+        ADMIN_BROADCAST_V28.pop(callback.from_user.id, None)
         product_id = int(data.rsplit(":", 1)[1])
         CATALOG_V25_STATE[callback.from_user.id] = {
             "action": "edit_product_photo",
@@ -5743,6 +5768,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data.startswith("v25:edit_video:"):
+        ADMIN_BROADCAST_V28.pop(callback.from_user.id, None)
         product_id = int(data.rsplit(":", 1)[1])
         CATALOG_V25_STATE[callback.from_user.id] = {
             "action": "edit_product_video",
@@ -6680,6 +6706,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data.startswith("admin:proxy:price:"):
+        ADMIN_BROADCAST_V28.pop(callback.from_user.id, None)
         kind = data.rsplit(":", 1)[1]
         ADMIN_PROXY_PRICE_WAIT[callback.from_user.id] = kind
         await update_or_send(callback, "💰 Цена прокси\n\nВведите новую базовую цену и валюту.\nПример: 120 RUB\n\nДля отмены: отмена", reply_markup=simple_back_keyboard(f"admin:proxy:kind:{kind}"))
@@ -6687,6 +6714,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data.startswith("admin:proxy:markup:"):
+        ADMIN_BROADCAST_V28.pop(callback.from_user.id, None)
         kind = data.rsplit(":", 1)[1]
         ADMIN_PROXY_MARKUP_WAIT[callback.from_user.id] = kind
         await update_or_send(callback, "📈 Наценка прокси\n\nВведите коэффициент.\nПример: 1.77\n\nДля отмены: отмена", reply_markup=simple_back_keyboard(f"admin:proxy:kind:{kind}"))
@@ -6694,6 +6722,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data.startswith("admin:proxy:text:"):
+        ADMIN_BROADCAST_V28.pop(callback.from_user.id, None)
         kind = data.rsplit(":", 1)[1]
         ADMIN_PROXY_TEXT_WAIT[callback.from_user.id] = kind
         await update_or_send(callback, "📝 Текст прокси\n\nОтправьте новый текст/описание для этого прокси. Он будет сохранён в карточке товара и описании платежа.\n\nДля отмены: отмена", reply_markup=simple_back_keyboard(f"admin:proxy:kind:{kind}"))
@@ -9430,11 +9459,11 @@ def format_buyer_active_order_text(order) -> str:
 
 # ---------------- V53 clean role panel text overrides ----------------
 def admin_panel_text() -> str:
-    return "⚙️ Админ меню\n\nВыберите раздел кнопкой ниже."
+    return "⚙️ Админ меню"
 
 
 def supplier_main_panel_text() -> str:
-    return "🚚 Панель поставщика\n\nВыберите нужный раздел кнопкой ниже."
+    return "🚚 Панель поставщика"
 
 
 def supplier_commands_text() -> str:

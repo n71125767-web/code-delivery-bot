@@ -11,6 +11,18 @@ from app.models import (
     CatalogDisplaySettings,
 )
 
+from decimal import Decimal
+
+
+def _fmt_price_plain(value) -> str:
+    try:
+        q = Decimal(str(value)).quantize(Decimal("0.01"))
+        out = format(q, "f")
+        return out.rstrip("0").rstrip(".") if "." in out else out
+    except Exception:
+        return str(value or 0)
+
+
 CURRENCIES = (
     "USDT",
     "TON",
@@ -72,22 +84,18 @@ async def admin_catalog_overview(session):
 
 
 def admin_catalog_text(categories, products) -> str:
-    lines = ["💰 Управление товарами", "", "Список ваших категорий и товаров:"]
+    total = len(products or [])
+    cats = len(categories or [])
+    lines = [
+        "💰 Управление товарами",
+        "",
+        f"Категорий: {cats}",
+        f"Товаров: {total}",
+        "",
+        "Выберите категорию или товар кнопкой ниже."
+    ]
     if not categories and not products:
-        lines.extend(["", "Категорий и товаров пока нет."])
-        return "\n".join(lines)
-
-    for category in categories:
-        hidden = " (скрыто)" if not category.is_active else ""
-        cat_products = [p for p in products if p.category_id == category.id]
-        lines.append(f"\n{category.name} ({len(cat_products)}){hidden}")
-        for product in cat_products[:8]:
-            price = f"{product.price} {product.currency}" if getattr(product, "price", None) is not None else "без цены"
-            lines.append(f"  • #{product.id} — {product.name} — {price}")
-
-    uncategorized = [p for p in products if not p.category_id]
-    if uncategorized:
-        lines.append(f"\n📁 Без категории ({len(uncategorized)})")
+        lines.append("Категорий и товаров пока нет.")
     return "\n".join(lines)
 
 
@@ -95,186 +103,16 @@ def admin_catalog_keyboard(categories, products) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for category in categories:
         count = len([p for p in products if p.category_id == category.id])
-        prefix = "🙈" if not category.is_active else "▫️"
-        kb.button(
-            text=f"{prefix} {category.name} ({count})",
-            callback_data=f"v25:category:{category.id}",
-        )
-
+        icon = "📁" if category.is_active else "🙈"
+        kb.button(text=f"{icon} {category.name} · {count}", callback_data=f"v25:category:{category.id}")
     uncategorized = [p for p in products if not p.category_id]
     if uncategorized:
-        kb.button(
-            text=f"📁 Без категории ({len(uncategorized)})",
-            callback_data="v28:uncategorized",
-        )
-
+        kb.button(text=f"📂 Без категории · {len(uncategorized)}", callback_data="v28:uncategorized")
     kb.button(text="➕ Товар", callback_data="v25:add_product")
     kb.button(text="➕ Категория", callback_data="v25:add_category")
-    kb.button(text="⚙️ Вид товаров", callback_data="v25:view_settings")
-    kb.button(text="⬅️ Назад", callback_data="admin:panel")
-    kb.adjust(*([1] * (len(categories) + (1 if uncategorized else 0))), 2, 1, 1)
-    return kb.as_markup()
-
-
-def product_type_keyboard() -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    kb.button(text="♾️ Статический товар", callback_data="v25:type:static")
-    kb.button(text="📦 Количественный товар", callback_data="v25:type:quantity")
-    kb.button(text="⬅️ Назад", callback_data="v25:wizard:back_name")
-    kb.adjust(2)
-    return kb.as_markup()
-
-
-def currency_keyboard() -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    for code in CURRENCIES:
-        kb.button(text=code, callback_data=f"v25:currency:{code}")
-    kb.button(text="⬅️ Назад", callback_data="v25:wizard:back_type")
-    kb.adjust(3)
-    return kb.as_markup()
-
-
-def price_back_keyboard() -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ Назад", callback_data="v25:wizard:back_currency")
-    return kb.as_markup()
-
-
-def content_back_keyboard() -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ Назад", callback_data="v25:wizard:back_price")
-    kb.button(text="❌ Отмена", callback_data="v25:wizard:cancel")
-    kb.button(text="🏠 Главное меню", callback_data="buyer:panel")
-    kb.adjust(2)
-    return kb.as_markup()
-
-
-def product_card_text(product: ShopProduct, stock_count: int = 0) -> str:
-    type_label = "Статический" if product.product_type == "static" else "Количественный"
-    payment = (
-        "🟢 Покупка включена"
-        if product.payment_enabled
-        else "🔴 Покупка приостановлена"
-    )
-    visibility = "показывается" if product.is_active else "скрыт"
-
-    lines = [
-        f"📦 КАРТОЧКА ТОВАРА #{product.id}",
-        "",
-        "➖➖➖➖➖➖➖➖➖➖",
-        "",
-        f"📝 Название: {product.name}",
-        f"{'♾️' if product.product_type == 'static' else '📦'} Тип: {type_label}",
-        payment,
-        f"👁 Товар: {visibility}",
-        "",
-        f"💰 Цена: {product.price or 0} {product.currency}",
-        f"⚙️ Выдача: {product.fulfillment_type}",
-    ]
-
-    if product.old_price is not None:
-        lines.append(f"🏷 Старая цена: {product.old_price} {product.currency}")
-    if product.category_id:
-        lines.append(f"📁 Категория ID: {product.category_id}")
-    if product.description:
-        lines.extend(["", f"📄 Описание: {product.description}"])
-    if product.note:
-        lines.append(f"🗒 Примечание: {product.note}")
-    if product.product_type == "quantity":
-        lines.append(f"📚 Доступно позиций: {stock_count}")
-
-    lines.extend(
-        [
-            "",
-            "➖➖➖➖➖➖➖➖➖➖",
-            "",
-            "🔗 Прямая ссылка:",
-            f"/start product_{product.id}",
-        ]
-    )
-    return "\n".join(lines)
-
-
-def product_card_keyboard(product: ShopProduct) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🎁 Выдать товар", callback_data=f"v25:give:{product.id}")
-    kb.button(
-        text="📦 Изменить контент", callback_data=f"v25:edit_content:{product.id}"
-    )
-
-    kb.button(text="📝 Название", callback_data=f"v25:edit_name:{product.id}")
-    kb.button(text="💰 Цена", callback_data=f"v25:edit_price:{product.id}")
-    kb.button(text="📄 Описание", callback_data=f"v25:edit_description:{product.id}")
-    kb.button(text="📁 Категория", callback_data=f"v25:edit_category:{product.id}")
-    kb.button(text="💱 Валюта", callback_data=f"v25:edit_currency:{product.id}")
-    kb.button(text="🗒 Примечание", callback_data=f"v25:edit_note:{product.id}")
-
-    kb.button(text="🖼 Фото товара", callback_data=f"v25:edit_photo:{product.id}")
-    kb.button(text="🎬 Видео товара", callback_data=f"v25:edit_video:{product.id}")
-
-    if product.product_type == "quantity":
-        kb.button(text="📦 Позиции товара", callback_data=f"v25:stock:{product.id}")
-
-    kb.button(
-        text=(
-            "⏸ Приостановить оплату"
-            if product.payment_enabled
-            else "▶️ Включить оплату"
-        ),
-        callback_data=f"v25:toggle_payment:{product.id}",
-    )
-    kb.button(
-        text="🙈 Скрыть товар" if product.is_active else "👁 Показать товар",
-        callback_data=f"v25:toggle_visible:{product.id}",
-    )
-
-    kb.button(
-        text="⚙️ Расширенные настройки", callback_data=f"v25:advanced:{product.id}"
-    )
-    kb.button(text="📊 Статистика товара", callback_data=f"v25:stats:{product.id}")
-    kb.button(text="🗑 Удалить товар", callback_data=f"v25:delete_prompt:{product.id}")
-    kb.button(text="⬅️ Назад", callback_data="v25:catalog")
-    kb.adjust(2, 2, 2, 2, 2, 1, 1, 1, 1)
-    return kb.as_markup()
-
-
-def fulfillment_keyboard(product_id: int) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    kb.button(text="📄 Статический контент", callback_data=f"v34:fulfillment:{product_id}:digital")
-    kb.button(text="📦 Склад позиций", callback_data=f"v34:fulfillment:{product_id}:stock")
-    kb.button(text="🌐 Proxyline", callback_data=f"v34:fulfillment:{product_id}:proxyline")
-    kb.button(text="🚚 Поставщик", callback_data=f"v34:fulfillment:{product_id}:supplier")
-    kb.button(text="📱 Номер", callback_data=f"v34:fulfillment:{product_id}:number")
-    kb.button(text="⬅️ Назад", callback_data=f"v25:advanced:{product_id}")
-    kb.adjust(2)
-    return kb.as_markup()
-
-
-def advanced_keyboard(product_id: int) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🎁 Выдать товар", callback_data=f"v25:give:{product_id}")
-    kb.button(text="👁 Показать покупателю", callback_data=f"v25:preview:{product_id}")
-    kb.button(text="📝 Платёжные системы", callback_data=f"v25:payment_systems:{product_id}")
-    kb.button(text="📝 Описание платежа", callback_data=f"v25:payment_description:{product_id}")
-    kb.button(text="🏷 Старая цена", callback_data=f"v25:old_price:{product_id}")
-    kb.button(text="↕️ Позиция в списке", callback_data=f"v25:position:{product_id}")
-    kb.button(text="📊 Статистика товара", callback_data=f"v25:stats:{product_id}")
-    kb.button(text="⚙️ Способ выдачи", callback_data=f"v34:fulfillment_menu:{product_id}")
-    kb.button(text="⬆️ Свернуть", callback_data=f"v25:product:{product_id}")
-    kb.button(text="🔙 Назад", callback_data="v25:catalog")
-    kb.adjust(2, 1, 2, 2, 1, 1)
-    return kb.as_markup()
-
-
-def delete_confirm_keyboard(product_id: int) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    kb.button(
-        text="✅ Удалить",
-        callback_data=f"v25:delete_confirm:{product_id}",
-    )
-    kb.button(
-        text="⬅️ Отмена", callback_data=f"v25:product:{product_id}"
-    )
+    kb.button(text="⚙️ Настройки прокси", callback_data="admin:proxy")
+    kb.button(text="⚙️ Вид", callback_data="v25:view_settings")
+    kb.button(text="🔙 Назад", callback_data="admin:panel")
     kb.adjust(2)
     return kb.as_markup()
 
@@ -424,7 +262,7 @@ def admin_catalog_keyboard(categories, products) -> InlineKeyboardMarkup:
         kb.button(text=f"📂 Без категории · {len(uncategorized)}", callback_data="v28:uncategorized")
     for product in [p for p in products if not p.category_id][:20]:
         icon = "✅" if product.is_active else "🙈"
-        kb.button(text=f"{icon} #{product.id} {product.name} · {_fmt_money_v53(product.price, product.currency)}", callback_data=f"v25:product:{product.id}")
+        kb.button(text=f"{icon} {product.id} {product.name} · {_fmt_money_v53(product.price, product.currency)}", callback_data=f"v25:product:{product.id}")
     kb.button(text="➕ Товар", callback_data="v25:add_product")
     kb.button(text="➕ Категория", callback_data="v25:add_category")
     kb.button(text="⚙️ Вид", callback_data="v25:view_settings")
@@ -448,7 +286,7 @@ def category_card_keyboard(category_id: int, active: bool, products=None) -> Inl
     kb = InlineKeyboardBuilder()
     for product in list(products or [])[:30]:
         icon = "✅" if product.is_active else "🙈"
-        kb.button(text=f"{icon} #{product.id} {product.name} · {_fmt_money_v53(product.price, product.currency)}", callback_data=f"v25:product:{product.id}")
+        kb.button(text=f"{icon} {product.id} {product.name} · {_fmt_money_v53(product.price, product.currency)}", callback_data=f"v25:product:{product.id}")
     kb.button(text="➕ Товар", callback_data=f"v25:category_add_product:{category_id}")
     kb.button(text="📝 Название", callback_data=f"v25:category_name:{category_id}")
     kb.button(text="📄 Описание", callback_data=f"v25:category_description:{category_id}")
@@ -463,7 +301,7 @@ def category_card_keyboard(category_id: int, active: bool, products=None) -> Inl
 def product_card_text(product: ShopProduct, stock_count: int = 0) -> str:
     type_label = "Статический" if product.product_type == "static" else "Количественный"
     lines = [
-        f"📦 ТОВАР #{product.id}",
+        f"📦 ТОВАР {product.id}",
         "",
         f"Название: {product.name}",
         f"Тип: {type_label}",
@@ -514,7 +352,7 @@ def admin_catalog_keyboard(categories, products) -> InlineKeyboardMarkup:
         kb.button(text=f"📂 Без категории · {len(uncategorized)}", callback_data="v28:uncategorized")
     for product in uncategorized[:20]:
         icon = "🟢" if product.is_active else "🙈"
-        kb.button(text=f"{icon} #{product.id} {product.name} · {_fmt_money_v54(product.price, product.currency)}", callback_data=f"v25:product:{product.id}")
+        kb.button(text=f"{icon} {product.name} · {_fmt_money_v54(product.price, product.currency)}", callback_data=f"v25:product:{product.id}")
     kb.button(text="➕ Товар", callback_data="v25:add_product")
     kb.button(text="➕ Категория", callback_data="v25:add_category")
     kb.button(text="⚙️ Вид", callback_data="v25:view_settings")
@@ -538,7 +376,7 @@ def category_card_keyboard(category_id: int, active: bool, products=None) -> Inl
     kb = InlineKeyboardBuilder()
     for product in list(products or [])[:30]:
         icon = "🟢" if product.is_active else "🙈"
-        kb.button(text=f"{icon} #{product.id} {product.name} · {_fmt_money_v54(product.price, product.currency)}", callback_data=f"v25:product:{product.id}")
+        kb.button(text=f"{icon} {product.name} · {_fmt_money_v54(product.price, product.currency)}", callback_data=f"v25:product:{product.id}")
     kb.button(text="➕ Товар", callback_data=f"v25:category_add_product:{category_id}")
     kb.button(text="📝 Название", callback_data=f"v25:category_name:{category_id}")
     kb.button(text="📝 Описание", callback_data=f"v25:category_description:{category_id}")
@@ -559,7 +397,7 @@ def product_card_text(product: ShopProduct, stock_count: int = 0) -> str:
     bot_username = __import__('os').getenv('BOT_USERNAME', '').strip().lstrip('@')
     direct = f"https://t.me/{bot_username}?start=admproduct_{product.internal_key}" if bot_username else f"/start admproduct_{product.internal_key}"
     lines = [
-        f"📦 КАРТОЧКА ТОВАРА #{product.id}",
+        "📦 КАРТОЧКА ТОВАРА",
         "",
         "➖➖➖➖➖➖➖➖➖➖",
         "",
@@ -633,5 +471,47 @@ def delete_confirm_keyboard(product_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Да, удалить", callback_data=f"v25:delete_confirm:{product_id}")
     kb.button(text="🔙 Отмена", callback_data=f"v25:product:{product_id}")
+    kb.adjust(2)
+    return kb.as_markup()
+
+# ---------------- V63 final clean catalog overrides ----------------
+def admin_catalog_text(categories, products) -> str:
+    total = len(products or [])
+    cats = len(categories or [])
+    if not categories and not products:
+        return "💰 Управление товарами\n\nКатегорий и товаров пока нет."
+    return f"💰 Управление товарами\n\nКатегорий: {cats}\nТоваров: {total}\n\nВыберите раздел кнопкой ниже."
+
+
+def admin_catalog_keyboard(categories, products) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for category in categories:
+        count = len([p for p in products if p.category_id == category.id])
+        icon = "📁" if category.is_active else "🙈"
+        kb.button(text=f"{icon} {category.name} · {count}", callback_data=f"v25:category:{category.id}")
+    uncategorized = [p for p in products if not p.category_id]
+    if uncategorized:
+        kb.button(text=f"📂 Без категории · {len(uncategorized)}", callback_data="v28:uncategorized")
+    kb.button(text="➕ Товар", callback_data="v25:add_product")
+    kb.button(text="➕ Категория", callback_data="v25:add_category")
+    kb.button(text="⚙️ Настройки прокси", callback_data="admin:proxy")
+    kb.button(text="⚙️ Вид", callback_data="v25:view_settings")
+    kb.button(text="🔙 Назад", callback_data="admin:panel")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+def category_card_keyboard(category_id: int, active: bool, products=None) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for product in list(products or [])[:30]:
+        icon = "🟢" if product.is_active else "🙈"
+        kb.button(text=f"{icon} {product.name} · {_fmt_money_v54(product.price, product.currency)}", callback_data=f"v25:product:{product.id}")
+    kb.button(text="➕ Товар", callback_data=f"v25:category_add_product:{category_id}")
+    kb.button(text="📝 Название", callback_data=f"v25:category_name:{category_id}")
+    kb.button(text="📝 Описание", callback_data=f"v25:category_description:{category_id}")
+    kb.button(text="🖼 Фото", callback_data=f"v25:category_photo:{category_id}")
+    kb.button(text="🙈 Скрыть" if active else "👁 Показать", callback_data=f"v25:category_toggle:{category_id}")
+    kb.button(text="🗑 Удалить", callback_data=f"v25:category_delete_prompt:{category_id}")
+    kb.button(text="🔙 Назад", callback_data="v25:catalog")
     kb.adjust(2)
     return kb.as_markup()

@@ -426,7 +426,7 @@ def admin_products_keyboard(rows) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for row in rows:
         icon = "🟢" if row.is_active else "🙈"
-        kb.button(text=f"{icon} #{row.id} {row.name} · {_fmt_money_v54(row.price, row.currency)}", callback_data=f"admin:shop:product:{row.id}")
+        kb.button(text=f"{icon} {row.id} {row.name} · {_fmt_money_v54(row.price, row.currency)}", callback_data=f"admin:shop:product:{row.id}")
     kb.button(text="➕ Товар", callback_data="admin:shop:add_product")
     kb.button(text="🔙 Назад", callback_data="admin:shop")
     kb.adjust(2)
@@ -448,7 +448,7 @@ def admin_category_keyboard(category, products) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for row in products:
         icon = "🟢" if row.is_active else "🙈"
-        kb.button(text=f"{icon} #{row.id} {row.name} · {_fmt_money_v54(row.price, row.currency)}", callback_data=f"admin:shop:product:{row.id}")
+        kb.button(text=f"{icon} {row.id} {row.name} · {_fmt_money_v54(row.price, row.currency)}", callback_data=f"admin:shop:product:{row.id}")
     kb.button(text="➕ Товар", callback_data=f"admin:shop:add_product_to:{category.id}")
     kb.button(text="📝 Название", callback_data=f"admin:shop:category_name:{category.id}")
     kb.button(text="📝 Описание", callback_data=f"admin:shop:category_desc:{category.id}")
@@ -472,7 +472,7 @@ async def product_admin_text(session, product) -> str:
     bot_username = __import__('os').getenv('BOT_USERNAME', '').strip().lstrip('@')
     direct = f"https://t.me/{bot_username}?start=admproduct_{product.internal_key}" if bot_username else f"/start admproduct_{product.internal_key}"
     lines = [
-        f"📦 КАРТОЧКА ТОВАРА #{product.id}", "", "➖➖➖➖➖➖➖➖➖➖", "",
+        f"📦 КАРТОЧКА ТОВАРА {product.id}", "", "➖➖➖➖➖➖➖➖➖➖", "",
         f"📝 Название: {product.name}",
         f"{'♾️' if product.product_type == 'static' else '📦'} Тип: {type_label}",
         "🟢 Покупка включена" if product.payment_enabled else "🔴 Покупка приостановлена",

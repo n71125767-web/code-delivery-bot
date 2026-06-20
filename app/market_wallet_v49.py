@@ -149,22 +149,18 @@ async def notify_purchase_and_credit_supplier(bot: Bot, purchase_id: int) -> Non
         product_name = product.name if product else f"Товар #{purchase.product_id}"
         bot_username = (await bot.me()).username or ""
         product_link = f"https://t.me/{bot_username}?start=admproduct_{product.internal_key}" if bot_username and product else ""
+        tech = (
+            f"операция {purchase.id} · invoice {payment.invoice_id if payment else '—'} · "
+            f"payment {payment.id if payment else '—'} · product {purchase.product_id} · "
+            f"status {purchase.status}"
+        )
         text = (
             "💰 Новая покупка через CryptoBot!\n\n"
             f"👤 Пользователь: {user_label(purchase.buyer_id, username)}\n"
             f"🆔 ID: {purchase.buyer_id}\n"
-            f"📦 Купил: {product_name}" + (f"\n{product_link}" if product_link else "") + "\n"
-            f"💵 Сумма: {money(purchase.amount)} {purchase.currency}\n"
-            "➖➖➖➖➖➖➖➖➖➖\n"
-            "📋 ТЕХНИЧЕСКАЯ ИНФОРМАЦИЯ\n\n"
-            f"🔢 ID операции: {purchase.id}\n"
-            f"🆔 Внешний ID: {payment.invoice_id if payment else '—'}\n"
-            f"👤 ID пользователя: {purchase.buyer_id}\n"
-            f"💳 ID платёжной системы: {payment.id if payment else '—'}\n"
-            f"📦 ID товара: {purchase.product_id}\n\n"
-            f"📊 Статус: {purchase.status}\n"
-            f"🕐 Создан: {purchase.created_at}\n"
-            f"✅ Оплачен: {purchase.paid_at or '—'}"
+            f"📦 Купил: {product_name}" + (f"\n🔗 {product_link}" if product_link else "") + "\n"
+            f"💵 Сумма: {money(purchase.amount)} {purchase.currency}\n\n"
+            f"📋 Техника: {tech}"
         )
     for admin_id in admin_recipients():
         await safe_send_message(bot, admin_id, text)
