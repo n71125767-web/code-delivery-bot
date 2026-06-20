@@ -567,8 +567,10 @@ def fulfillment_keyboard(product_id: int) -> InlineKeyboardMarkup:
     kb.button(text="🌐 Прокси", callback_data=f"v34:fulfillment:{product_id}:proxyline")
     kb.button(text="🚚 Поставщик", callback_data=f"v34:fulfillment:{product_id}:supplier")
     kb.button(text="📱 Номер", callback_data=f"v34:fulfillment:{product_id}:number")
+    kb.button(text="👤 Аккаунт", callback_data=f"v34:fulfillment:{product_id}:account")
+    kb.button(text="🧩 Другое", callback_data=f"v34:fulfillment:{product_id}:manual")
     kb.button(text="🔙 Назад", callback_data=f"v25:product:{product_id}")
-    kb.adjust(2, 2, 2)
+    kb.adjust(2, 2, 2, 1)
     return kb.as_markup()
 
 
@@ -706,6 +708,7 @@ def product_card_keyboard(product: ShopProduct) -> InlineKeyboardMarkup:
     kb.button(text="🎁 Выдать товар", callback_data=f"v25:give:{product.id}")
     kb.button(text="🚚 Поставщик", callback_data=f"admin:shop:product_supplier:{product.id}")
     kb.button(text="📱 Номер", callback_data=f"v34:fulfillment:{product.id}:number")
+    kb.button(text="👤 Аккаунт", callback_data=f"v34:fulfillment:{product.id}:account")
     kb.button(text="⚙️ Выдача", callback_data=f"v34:fulfillment_menu:{product.id}")
     kb.button(text="📝 Название", callback_data=f"v25:edit_name:{product.id}")
     kb.button(text="📝 Цена", callback_data=f"v25:edit_price:{product.id}")
@@ -730,6 +733,7 @@ def advanced_keyboard(product_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="🎁 Выдать товар", callback_data=f"v25:give:{product_id}")
     kb.button(text="📱 Номер", callback_data=f"v34:fulfillment:{product_id}:number")
+    kb.button(text="👤 Аккаунт", callback_data=f"v34:fulfillment:{product_id}:account")
     kb.button(text="⚙️ Способ выдачи", callback_data=f"v34:fulfillment_menu:{product_id}")
     kb.button(text="📝 Платёжные системы", callback_data=f"v25:payment_systems:{product_id}")
     kb.button(text="📝 Описание платежа", callback_data=f"v25:payment_description:{product_id}")

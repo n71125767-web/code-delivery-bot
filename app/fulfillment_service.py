@@ -310,11 +310,25 @@ async def fulfill_proxyline(
 async def fulfill_supplier(
     bot: Bot, purchase: DigitalPurchase, product: ShopProduct
 ) -> bool:
+    """Create a supplier order after a paid CryptoBot purchase.
+
+    provider_key stores the supplier Telegram ID, not suppliers.id. Telegram IDs can
+    be larger than PostgreSQL int32 primary keys, so we never call session.get(Supplier, telegram_id).
+    """
+    operation_id = 9_000_000_000 + purchase.id
+    supplier = None
+    instant_request = False
+    order_id_for_ui = None
+
     async with SessionLocal() as session:
         current = await session.get(DigitalPurchase, purchase.id)
         if current.legacy_order_id:
             return True
-        operation_id = 9_000_000_000 + purchase.id
+
+        content_type = (getattr(product, "content_type", None) or "number").lower()
+        instant_request = content_type in {"account", "manual", "other"}
+        order_status = "waiting_supplier_account" if instant_request else "waiting_service"
+
         order = Order(
             operation_id=operation_id,
             external_id=f"digital:{purchase.id}",
@@ -325,19 +339,19 @@ async def fulfill_supplier(
             product_name=product.name,
             amount=purchase.amount,
             currency=purchase.currency,
-            status="waiting_service",
+            status=order_status,
+            service_name=("Готовая выдача" if instant_request else None),
             paid_at=purchase.paid_at or datetime.utcnow(),
             raw_message=f"Crypto Pay purchase #{purchase.id}",
         )
         session.add(order)
         await session.flush()
-        if purchase.provider_key and purchase.provider_key.isdigit():
-            supplier_id = int(purchase.provider_key)
-            supplier = await session.get(Supplier, supplier_id)
-            if supplier is None:
-                supplier = await session.scalar(
-                    select(Supplier).where(Supplier.telegram_id == supplier_id)
-                )
+
+        if purchase.provider_key and str(purchase.provider_key).isdigit():
+            supplier_telegram_id = int(purchase.provider_key)
+            supplier = await session.scalar(
+                select(Supplier).where(Supplier.telegram_id == supplier_telegram_id)
+            )
             if supplier is not None:
                 mapping = await session.scalar(
                     select(SupplierProduct).where(
@@ -352,22 +366,71 @@ async def fulfill_supplier(
                             product_key=str(product.internal_key),
                         )
                     )
+
         current.legacy_order_id = order.id
         current.status = "awaiting_supplier"
         current.active_key = None
         current.updated_at = datetime.utcnow()
         await session.commit()
         await session.refresh(order)
+        order_id_for_ui = order.id
+
+    if instant_request and supplier is not None:
+        try:
+            from app.services import create_supplier_request
+            from app.keyboards import supplier_new_order_keyboard
+            async with SessionLocal() as session:
+                request = await create_supplier_request(session, order_id_for_ui, supplier.telegram_id, "account")
+            sent = await bot.send_message(
+                supplier.telegram_id,
+                "🧾 Новый заказ на выдачу\n\n"
+                f"Товар: {product.name}\n"
+                "Пришлите данные аккаунта/товара одним сообщением. Покупатель не увидит ваши контакты.",
+                reply_markup=supplier_new_order_keyboard(request.id, "account"),
+            )
+            async with SessionLocal() as session:
+                req = await session.get(type(request), request.id)
+                if req:
+                    req.supplier_message_id = getattr(sent, "message_id", None)
+                    await session.commit()
+            await bot.send_message(
+                purchase.buyer_id,
+                "✅ Оплата подтверждена. Поставщик получил заявку на выдачу товара.",
+            )
+        except Exception as exc:
+            logger.exception("SUPPLIER_INSTANT_REQUEST_FAILED purchase_id=%s", purchase.id)
+            async with SessionLocal() as session:
+                row = await session.get(DigitalPurchase, purchase.id)
+                if row:
+                    row.delivery_error = f"Supplier request failed: {exc}"[:500]
+                    await session.commit()
+        await notify_admins_simple(bot, f"🧾 Paid supplier account order #{operation_id} created for purchase #{purchase.id}")
+        return True
+
     try:
         await bot.send_message(
             purchase.buyer_id,
-            "✅ Оплата подтверждена.\n\nНажмите /start и выберите сервис для получения номера.",
+            "✅ Оплата подтверждена.\n\nВыберите сервис, под который нужен номер.",
+        )
+        from app.handlers_main import send_service_keyboard
+
+        class _FakeMessage:
+            def __init__(self, chat_id, user_id):
+                self.chat = type("Chat", (), {"id": chat_id})()
+                self.from_user = type("User", (), {"id": user_id, "username": None})()
+
+            async def answer(self, *args, **kwargs):
+                return await bot.send_message(self.chat.id, *args, **kwargs)
+
+        await send_service_keyboard(
+            bot, _FakeMessage(purchase.buyer_id, purchase.buyer_id), order_id_for_ui, None, page=0
         )
     except Exception as exc:
         async with SessionLocal() as session:
             row = await session.get(DigitalPurchase, purchase.id)
-            row.delivery_error = f"Buyer notification failed: {exc}"[:500]
-            await session.commit()
+            if row:
+                row.delivery_error = f"Buyer notification failed: {exc}"[:500]
+                await session.commit()
     await notify_admins_simple(
         bot,
         f"📱 Paid supplier order #{operation_id} created for purchase #{purchase.id}",

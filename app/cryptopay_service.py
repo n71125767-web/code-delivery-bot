@@ -81,6 +81,15 @@ class PaymentValidationError(RuntimeError):
     pass
 
 
+def _money_text(value: Any, currency: str | None = None) -> str:
+    try:
+        amount = Decimal(str(value or "0")).quantize(Decimal("0.01"))
+        text = f"{amount:.2f}"
+    except Exception:
+        text = str(value or "0")
+    return f"{text} {currency}" if currency else text
+
+
 def crypto_client() -> AioCryptoPay:
     global _client
     if not CRYPTO_PAY_ENABLED:
@@ -234,7 +243,7 @@ async def _safe_notify_admins_fulfillment_problem(
             f"Заказ: #{purchase.id}\n"
             f"Покупатель: <code>{purchase.buyer_id}</code> @{purchase.buyer_username or '-'}\n"
             f"Товар: {product_title}\n"
-            f"Сумма: {purchase.amount} {purchase.currency}\n\n"
+            f"Сумма: {_money_text(purchase.amount, purchase.currency)}\n\n"
             f"Ошибка поставщика: <code>{error_text[:900]}</code>\n\n"
             "Если это Proxyline `Not enough money on balance`, пополните баланс Proxyline и выполните:\n"
             f"<code>/retry_purchase {purchase.id}</code>",

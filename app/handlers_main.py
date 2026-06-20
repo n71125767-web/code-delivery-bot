@@ -150,6 +150,7 @@ from app.shop_admin_v20 import (
     delete_product,
 )
 from app.shop import (
+    money as shop_money,
     list_categories,
     get_product as get_shop_product,
     category_text,
@@ -497,6 +498,7 @@ WALLET_TOPUP_WAIT: set[int] = set()
 ADMIN_TEXT_EDIT_WAIT: dict[int, str] = {}
 ADMIN_KEYBOARD_SENT: set[int] = set()
 SUPPLIER_PRICE_WAIT: dict[int, bool] = {}
+SUPPLIER_WITHDRAW_WAIT: set[int] = set()
 ADMIN_ADD_ADMIN_WAIT: set[int] = set()
 ADMIN_SUPPLIER_WAIT: dict[int, dict] = {}
 ADMIN_PROXY_PRICE_WAIT: dict[int, str] = {}
@@ -4818,6 +4820,19 @@ async def handle_supplier_message(
         await send_supplier_unknown_command(bot, message, business_connection_id, text)
         return
 
+    if supplier_id in SUPPLIER_WITHDRAW_WAIT:
+        SUPPLIER_WITHDRAW_WAIT.discard(supplier_id)
+        result = await create_withdrawal_request(supplier_id, text)
+        await answer_message(bot, message, result, business_connection_id, reply_markup=wallet_keyboard(is_supplier=True))
+        if "Автовыплата не прошла" in result or "Заявка на вывод" in result:
+            await notify_admins(
+                bot,
+                "↗️ Запрос поставщика на вывод\n\n"
+                f"Поставщик: {supplier_id}\n"
+                f"Результат: {result}",
+            )
+        return
+
     async with SessionLocal() as session:
         # ВАЖНО: active_request всегда создаётся до использования.
         # Это полностью убирает UnboundLocalError.
@@ -5082,6 +5097,61 @@ async def handle_supplier_message(
                 pass
             return
 
+        active_request = await find_active_supplier_request(session, supplier_id)
+        account_request = (
+            active_request
+            if active_request and active_request.request_type in {"account", "manual", "other"}
+            else None
+        )
+        if account_request:
+            order = await get_order_by_id(session, account_request.order_id)
+            if not order:
+                await answer_message(bot, message, "Заказ не найден.", business_connection_id)
+                return
+            payload = text.strip()
+            if not payload:
+                await answer_message(bot, message, "Пришлите данные товара одним сообщением.", business_connection_id)
+                return
+            order.raw_message = (order.raw_message or "") + "\n\nSUPPLIER_DELIVERY:\n" + payload
+            order.status = "code_sent_to_customer"
+            order.updated_at = datetime.utcnow()
+            account_request.status = "waiting_buyer_confirm"
+            account_request.answered_at = datetime.utcnow()
+            await session.commit()
+            await session.refresh(order)
+            target_chat_id = order.buyer_chat_id or order.customer_telegram_id
+            delivery_text = (
+                f"🎁 Данные по заказу №{order.operation_id}:\n\n"
+                f"{payload}\n\n"
+                "Проверьте товар и подтвердите получение кнопкой ниже."
+            )
+            ok = False
+            if target_chat_id and order.business_connection_id:
+                ok = bool(await send_buyer_role_panel(
+                    bot, target_chat_id, delivery_text,
+                    business_connection_id=order.business_connection_id,
+                    reply_markup=confirm_keyboard(order.id),
+                ))
+            if not ok and order.customer_telegram_id:
+                ok = bool(await safe_send_message(
+                    bot, order.customer_telegram_id, delivery_text,
+                    reply_markup=confirm_keyboard(order.id),
+                    allow_normal_fallback=True,
+                ))
+            if not ok:
+                order.status = "waiting_supplier_account"
+                account_request.status = "sent"
+                await session.commit()
+                await answer_message(bot, message, "Данные сохранены, но не доставлены покупателю. Попробуйте ещё раз позже.", business_connection_id)
+                return
+            await answer_message(
+                bot, message,
+                "OK. Данные отправлены покупателю и ожидают подтверждения.",
+                business_connection_id,
+                reply_markup=supplier_wait_confirm_keyboard("account", 0),
+            )
+            return
+
     # Сюда попадаем только если у поставщика нет активной заявки.
     try:
         await answer_message(
@@ -5161,7 +5231,7 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
             await answer_message(
                 bot,
                 message,
-                f"💼 Пополнение баланса\n\nСумма: {amount} {currency}\nПосле оплаты нажмите «Проверить пополнение».",
+                f"💼 Пополнение баланса\n\nСумма: {shop_money(amount, currency)}\nПосле оплаты нажмите «Проверить пополнение».",
                 business_connection_id,
                 reply_markup=wallet_topup_invoice_keyboard(topup.invoice_url, topup.id),
             )
@@ -5183,7 +5253,7 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
             await answer_message(
                 bot,
                 message,
-                f"💼 Пополнение баланса\n\nСумма: {amount} {currency}\nПосле оплаты нажмите «Проверить пополнение».",
+                f"💼 Пополнение баланса\n\nСумма: {shop_money(amount, currency)}\nПосле оплаты нажмите «Проверить пополнение».",
                 business_connection_id,
                 reply_markup=wallet_topup_invoice_keyboard(topup.invoice_url, topup.id),
             )
@@ -5305,6 +5375,9 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         if user_id in SUPPLIER_PRICE_WAIT:
             SUPPLIER_PRICE_WAIT.pop(user_id, None)
             had_state = True
+        if user_id in SUPPLIER_WITHDRAW_WAIT:
+            SUPPLIER_WITHDRAW_WAIT.discard(user_id)
+            had_state = True
         if had_state:
             target_markup = supplier_reply_keyboard() if await is_supplier_user(user_id) else (admin_main_reply_keyboard() if await is_admin_user(user_id) else await buyer_reply_keyboard_for_user(user_id))
             await answer_message(bot, message, "✅ Действие отменено.", business_connection_id, reply_markup=target_markup)
@@ -5379,6 +5452,7 @@ async def route_message(bot: Bot, message: Message, is_business: bool) -> None:
         ADMIN_PROXY_MARKUP_WAIT.pop(user_id, None)
         ADMIN_PROXY_TEXT_WAIT.pop(user_id, None)
         SUPPLIER_PRICE_WAIT.pop(user_id, None)
+        SUPPLIER_WITHDRAW_WAIT.discard(user_id)
         WALLET_TOPUP_WAIT.discard(user_id)
         BUYER_FEEDBACK_WAIT.discard(user_id)
         if await process_main_reply_button(bot, message, business_connection_id):
@@ -6149,7 +6223,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
     if data.startswith("v34:fulfillment:"):
         _, _, product_id_raw, fulfillment_type = data.split(":")
         product_id = int(product_id_raw)
-        if fulfillment_type not in {"digital", "stock", "proxyline", "supplier", "number"}:
+        if fulfillment_type not in {"digital", "stock", "proxyline", "supplier", "number", "account", "manual"}:
             await callback.answer("Неизвестный способ выдачи.", show_alert=True)
             return True
         async with SessionLocal() as session:
@@ -6157,8 +6231,25 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
             if not product:
                 await callback.answer("Товар не найден.", show_alert=True)
                 return True
-            product.fulfillment_type = fulfillment_type
-            product.product_type = "quantity" if fulfillment_type in {"stock", "number"} else "static"
+            if fulfillment_type == "number":
+                # Номера идут через поставщика: покупатель после оплаты выбирает сервис,
+                # затем поставщик получает запрос на номер и после этого на код.
+                product.fulfillment_type = "supplier"
+                product.content_type = "number"
+                product.product_type = "static"
+            elif fulfillment_type == "account":
+                # Готовые аккаунты: после оплаты поставщику сразу уходит запрос на выдачу данных.
+                product.fulfillment_type = "supplier"
+                product.content_type = "account"
+                product.product_type = "static"
+            elif fulfillment_type == "manual":
+                product.fulfillment_type = "supplier"
+                product.content_type = "manual"
+                product.product_type = "static"
+            else:
+                product.fulfillment_type = fulfillment_type
+                product.content_type = product.content_type or None
+                product.product_type = "quantity" if fulfillment_type == "stock" else "static"
             product.updated_at = datetime.utcnow()
             await session.commit()
             await session.refresh(product)
@@ -6172,7 +6263,7 @@ async def handle_admin_callback(bot: Bot, callback: CallbackQuery) -> bool:
         async with SessionLocal() as session:
             product = await session.get(ShopProduct, product_id)
             count = await v25_stock_count(session, product_id) if product else 0
-        hint = "\n\nДля номера добавьте позиции в склад товара: каждый номер/строка отдельной строкой." if fulfillment_type == "number" else ""
+        hint = "\n\nДля номера назначьте поставщика товару. После оплаты покупатель выберет сервис, а поставщик получит запрос на номер и код." if fulfillment_type == "number" else ("\n\nДля аккаунта назначьте поставщика. После оплаты поставщик получит запрос на выдачу данных аккаунта." if fulfillment_type == "account" else "")
         await update_or_send(
             callback,
             (v25_product_card_text(product, count) if product else "✅ Способ выдачи сохранён.") + hint,
@@ -7865,15 +7956,17 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
         return True
 
     if data == "supplier:withdraw_help":
+        SUPPLIER_WITHDRAW_WAIT.add(callback.from_user.id)
+        ADMIN_BROADCAST_V28.pop(callback.from_user.id, None)
         withdraw_text = (
             "↗️ Вывод средств\n\n"
             "Комиссия вывода: 2.5 USDT.\n"
-            "Нажмите «Вывод» и отправьте сумму + адрес одним сообщением.\n\n"
+            "Отправьте сумму и адрес одним сообщением.\n\n"
             "Пример: 10 UQ...\n\n"
-            "Если автовыплата CryptoBot включена, бот создаст чек автоматически."
+            "Если авточек CryptoBot создать не получится, заявка уйдёт администратору на ручную модерацию."
         )
         await update_or_send(callback, withdraw_text, reply_markup=supplier_inline_menu_keyboard())
-        await callback.answer()
+        await callback.answer("Жду сумму и адрес")
         return True
 
     if data == "supplier:requests":
@@ -7940,20 +8033,28 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
             buyer_text = "Номер уже в обработке. Ожидайте выдачи."
             supplier_text = (
                 "📞 Заявка взята в работу.\n\n"
-                f"Заказ: #{order.operation_id}\n"
+                f"Заказ: №{order.operation_id}\n"
                 f"Товар: {order.product_name}\n"
                 f"Сервис: {order.service_name}\n\n"
                 "Теперь отправьте номер сообщением."
             )
-        else:
+        elif request.request_type == "code":
             buyer_text = "Код уже в обработке. Ожидайте выдачи."
             supplier_text = (
                 "🔑 Заявка взята в работу.\n\n"
-                f"Заказ: #{order.operation_id}\n"
+                f"Заказ: №{order.operation_id}\n"
                 f"Товар: {order.product_name}\n"
                 f"Сервис: {order.service_name}\n"
                 f"Номер: {order.phone_number or 'нет'}\n\n"
                 "Теперь отправьте код сообщением."
+            )
+        else:
+            buyer_text = "Поставщик взял заказ в работу. Ожидайте выдачи."
+            supplier_text = (
+                "🎁 Заявка взята в работу.\n\n"
+                f"Заказ: №{order.operation_id}\n"
+                f"Товар: {order.product_name}\n\n"
+                "Теперь отправьте данные товара одним сообщением."
             )
 
         target_chat_id = order.buyer_chat_id or order.customer_telegram_id
@@ -7999,17 +8100,23 @@ async def handle_supplier_callback(bot: Bot, callback: CallbackQuery) -> bool:
         if request.request_type == "number":
             text = (
                 "✍️ Отправьте номер сообщением.\n\n"
-                f"Заказ: #{order.operation_id}\n"
+                f"Заказ: №{order.operation_id}\n"
                 f"Товар: {order.product_name}\n"
                 f"Сервис: {order.service_name}"
             )
-        else:
+        elif request.request_type == "code":
             text = (
                 "✍️ Отправьте код сообщением.\n\n"
-                f"Заказ: #{order.operation_id}\n"
+                f"Заказ: №{order.operation_id}\n"
                 f"Товар: {order.product_name}\n"
                 f"Сервис: {order.service_name}\n"
                 f"Номер: {order.phone_number or 'нет'}"
+            )
+        else:
+            text = (
+                "✍️ Отправьте данные товара одним сообщением.\n\n"
+                f"Заказ: №{order.operation_id}\n"
+                f"Товар: {order.product_name}"
             )
 
         await update_or_send(
@@ -8559,7 +8666,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             topup = await create_wallet_topup_invoice(callback.from_user.id, callback.from_user.username, amount, currency)
             await update_or_send(
                 callback,
-                f"💼 Пополнение баланса\n\nСумма: {amount} {currency}\nПосле оплаты нажмите «Проверить пополнение».",
+                f"💼 Пополнение баланса\n\nСумма: {shop_money(amount, currency)}\nПосле оплаты нажмите «Проверить пополнение».",
                 reply_markup=wallet_topup_invoice_keyboard(topup.invoice_url, topup.id),
             )
         except Exception as exc:
@@ -8771,7 +8878,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             f"Тип: {proxy_category_title(category_key)}\n"
             f"Страна: {country_name}\n"
             f"Срок: {months} мес.\n"
-            f"Сумма: <b>{amount} {product.currency}</b>\n\n"
+            f"Сумма: <b>{shop_money(amount, product.currency)}</b>\n\n"
             "🪙 Оплатите счёт через CryptoBot. После оплаты прокси будет выдан автоматически.",
             reply_markup=invoice_keyboard(
                 payment.invoice_url,
@@ -8878,7 +8985,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             product, qty, purchase, payment = created[0]
             await update_or_send(
                 callback,
-                f"✅ <b>Счёт создан</b>\n\n{product.name} × {qty}\nСумма: <b>{purchase.amount} {purchase.currency}</b>",
+                f"✅ <b>Счёт создан</b>\n\n{product.name} × {qty}\nСумма: <b>{shop_money(purchase.amount, purchase.currency)}</b>",
                 reply_markup=invoice_keyboard(payment.invoice_url, purchase.id, product.id),
             )
         else:
@@ -8889,7 +8996,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             )
             for product, qty, purchase, payment in created:
                 await callback.message.answer(
-                    f"💳 {product.name} × {qty}\nСумма: {purchase.amount} {purchase.currency}",
+                    f"💳 {product.name} × {qty}\nСумма: {shop_money(purchase.amount, purchase.currency)}",
                     reply_markup=invoice_keyboard(payment.invoice_url, purchase.id, product.id),
                 )
         await callback.answer("Счёт создан")
@@ -9037,7 +9144,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             (
                 "💼 Оплата на кошелёк\n\n"
                 f"Заказ: #{purchase.id}\n"
-                f"Сумма: {wallet_payment.amount} {wallet_payment.currency}\n"
+                f"Сумма: {shop_money(wallet_payment.amount, wallet_payment.currency)}\n"
                 f"Адрес: {wallet_payment.address}\n"
                 f"Комментарий/Memo: {wallet_payment.memo}\n\n"
                 "После поступления платежа внешний монитор может подтвердить его через /wallet/webhook. "
@@ -9075,7 +9182,7 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             callback,
             "💳 Счёт создан\n\n"
             f"Заказ: #{purchase.id}\n"
-            f"Сумма: {purchase.amount} {purchase.currency}\n\n"
+            f"Сумма: {shop_money(purchase.amount, purchase.currency)}\n\n"
             "После оплаты нажмите «Проверить оплату». "
             "Webhook также обработает платёж автоматически.",
             reply_markup=invoice_keyboard(payment.invoice_url, purchase.id),
@@ -9102,6 +9209,25 @@ async def handle_callback(bot: Bot, callback: CallbackQuery) -> None:
             reply_markup=wallet_payment_keyboard(payment_id),
         )
         await callback.answer()
+        return True
+
+    if data.startswith("payment:cancel:"):
+        purchase_id = int(data.rsplit(":", 1)[1])
+        async with SessionLocal() as session:
+            from app.models import DigitalPurchase
+            purchase = await session.get(DigitalPurchase, purchase_id)
+            if purchase and purchase.buyer_id != callback.from_user.id:
+                await callback.answer("Это не ваша покупка.", show_alert=True)
+                return True
+            if purchase and purchase.status in {"creating_invoice", "pending_payment"}:
+                purchase.status = "cancelled"
+                await session.commit()
+        await update_or_send(
+            callback,
+            "❌ Оплата отменена.",
+            reply_markup=payment_result_keyboard(),
+        )
+        await callback.answer("Отменено")
         return True
 
     if data.startswith("payment:check:"):

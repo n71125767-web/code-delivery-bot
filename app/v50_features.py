@@ -182,10 +182,10 @@ def wallet_topup_amounts_keyboard() -> InlineKeyboardMarkup:
 
 def wallet_topup_invoice_keyboard(invoice_url: str, topup_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="💳 Оплатить через CryptoBot", url=invoice_url)
+    kb.button(text="🟢 Оплатить CryptoBot", url=invoice_url)
     kb.button(text="🔄 Проверить пополнение", callback_data=f"wallet_topup:check:{topup_id}")
-    kb.button(text="💼 К кошельку", callback_data="buyer:wallet")
-    kb.adjust(2)
+    kb.button(text="❌ Отмена", callback_data="buyer:wallet")
+    kb.adjust(1, 1, 1)
     return kb.as_markup()
 
 

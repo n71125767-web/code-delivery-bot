@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import time
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from app.config import PROXYLINE_MTPROXY_API_TYPE
@@ -187,7 +187,7 @@ def periods_keyboard(
     for months in PROXY_PERIODS:
         amount = (monthly_price * Decimal(months)).quantize(Decimal("0.01"))
         kb.button(
-            text=f"{months} мес. — {amount} {currency}",
+            text=f"{months} мес. — {_price_text(amount, currency)}",
             callback_data=(
                 f"buyer:pxperiod:{category_key}:{country_code}:"
                 f"{months}:{product_id}"

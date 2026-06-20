@@ -514,10 +514,15 @@ def supplier_request_actions_keyboard(
         kb.button(
             text="✍️ › Отправить номер", callback_data=f"supplier:answer:{request_id}"
         )
-    else:
+    elif request_type == "code":
         kb.button(text="🔑 › Взять код", callback_data=f"supplier:take:{request_id}")
         kb.button(
             text="✍️ › Отправить код", callback_data=f"supplier:answer:{request_id}"
+        )
+    else:
+        kb.button(text="🎁 › Взять выдачу", callback_data=f"supplier:take:{request_id}")
+        kb.button(
+            text="✍️ › Отправить товар", callback_data=f"supplier:answer:{request_id}"
         )
     kb.button(text="📋 › Все заявки", callback_data="supplier:pending:0")
     kb.button(text="🏠 › Главное меню", callback_data="supplier:panel")
