@@ -383,6 +383,7 @@ logger.info("FIX_MARKER_MCS_UI_ROUTING=v31.1 loaded")
 logger.info("FIX_MARKER_MCS_VISUAL=v32 loaded")
 logger.info("FIX_MARKER_V51_UI_PERMS_ORDERS loaded")
 logger.info("FIX_MARKER_V55_UI_SELFCHECK_FEEDBACK_FIX loaded")
+logger.info("FIX_MARKER_V58_OLD_BUTTONS_PROXY_SPLIT loaded")
 
 
 def validate_runtime_ui() -> None:

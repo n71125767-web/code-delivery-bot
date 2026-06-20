@@ -360,6 +360,7 @@ async def _create_stock_items(session: AsyncSession, product_id: int, text: str,
     return len(lines)
 
 
+# FIX_MARKER_V58_OLD_BUTTONS_PROXYS_IO: MTProxy, Premium and Standard are separate buyer categories.
 PROXY_AUTOFIX_PRODUCTS = [
     ("mtproxy", "🔑 MTProxy • [1 мес.]", "Автоматическая выдача Telegram-прокси", "proxyline", PROXYLINE_MTPROXY_API_TYPE),
     ("premium", "🪐 Прокси [1 мес.]", "Премиум-прокси с автовыдачей", "proxyline", "dedicated"),

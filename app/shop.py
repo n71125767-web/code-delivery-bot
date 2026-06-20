@@ -203,37 +203,65 @@ def proxy_category_title(category_key: str) -> str:
 
 async def list_proxy_products_by_category(session, category_key: str):
     """
-    Возвращает только активные прокси-товары нужной категории.
-    Категория определяется по названию товара.
+    Возвращает активные прокси-товары нужной категории.
+
+    Важно: названия товаров могут быть одинаковыми/нейтральными
+    (например, «🪐 Прокси [1 мес.]»), поэтому сначала фильтруем по
+    системной метке proxy_autofix:<category>. Это сохраняет разделение:
+    - mtproxy  -> Proxyline / MTProxy
+    - premium  -> Proxyline / premium
+    - standard -> PROXYS.IO / default
     """
     rows = await list_proxy_products(session)
-    definition = PROXY_CATEGORY_DEFINITIONS.get(category_key)
-    active_proxyline = [
+    active_rows = [
         row for row in rows
-        if getattr(row, "fulfillment_type", None) == "proxyline"
-        and getattr(row, "payment_enabled", False)
+        if getattr(row, "payment_enabled", False)
         and getattr(row, "is_active", False)
+        and not getattr(row, "is_deleted", False)
     ]
-    if not definition:
-        return active_proxyline or rows
+    if not active_rows:
+        return []
 
+    # 1) Надёжная привязка от /proxy_autofix.
+    by_note = [
+        row for row in active_rows
+        if (getattr(row, "note", "") or "") == f"proxy_autofix:{category_key}"
+    ]
+    if by_note:
+        return by_note
+
+    definition = PROXY_CATEGORY_DEFINITIONS.get(category_key)
+    if not definition:
+        return active_rows
+
+    # 2) Fallback по provider_key JSON/строке.
+    provider_hits = []
+    for row in active_rows:
+        raw = (getattr(row, "provider_key", "") or "").lower()
+        if f'"category":"{category_key}"' in raw or f'"proxy_kind":"{category_key}"' in raw:
+            provider_hits.append(row)
+    if provider_hits:
+        return provider_hits
+
+    # 3) Fallback по названию товара.
     keywords = definition["keywords"]
     result = []
-    for row in active_proxyline or rows:
+    for row in active_rows:
         name = (row.name or "").lower()
         if any(keyword in name for keyword in keywords):
             result.append(row)
 
-    # Если админ создал один универсальный Proxyline-товар без слов
-    # «premium/standard/residential», используем его для любого типа.
-    # Это убирает ошибку «администратор ещё не создал активный товар».
-    return result or active_proxyline or rows
+    # 4) Если нет точного совпадения — не смешиваем mtproxy/premium/standard.
+    # Лучше показать понятную ошибку о настройке товара, чем выдать не тот тариф.
+    return result
 
 
 def proxy_categories_keyboard() -> InlineKeyboardMarkup:
+    """Старый понятный стиль прокси-раздела: MTProxy и Premium раздельно."""
     kb = InlineKeyboardBuilder()
-    kb.button(text="🔐 MTProxy Premium", callback_data="buyer:proxycat:mtproxy")
-    kb.button(text="💯 Стандарт", callback_data="buyer:proxycat:standard")
+    kb.button(text="🔐 MTProxy", callback_data="buyer:proxycat:mtproxy")
+    kb.button(text="🏆 PREMIUM", callback_data="buyer:proxycat:premium")
+    kb.button(text="💯 STANDART", callback_data="buyer:proxycat:standard")
     kb.button(text="🏠 Главное меню", callback_data="buyer:panel")
     kb.adjust(1)
     return kb.as_markup()
